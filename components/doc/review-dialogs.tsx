@@ -13,9 +13,9 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { StatusBadge } from "@/components/status-badge"
-import type { DocData } from "@/lib/doc-data"
-import { DOC_STATUS_TONE } from "@/lib/doc-data"
-import { DOC_STATUS_LABELS } from "@/lib/types"
+import type { DocData } from "@/mocks/doc-data"
+import { DOC_STATUS_TONE } from "@/mocks/doc-data"
+import { DOC_STATUS_LABELS } from "@/types/domain"
 import { Send, Undo2, CheckCircle2, Info } from "lucide-react"
 
 // 弹窗内通用：Doc 概要信息行

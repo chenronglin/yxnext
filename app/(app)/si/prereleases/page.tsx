@@ -37,7 +37,7 @@ import {
   BOUND_AUTHORS,
   type PrereleaseStatus,
   type PrereleaseRecord,
-} from "@/lib/si-data"
+} from "@/mocks/si-data"
 import { Search, Eye, Undo2, ArrowRightCircle, ExternalLink, AlertTriangle } from "lucide-react"
 
 export default function PrereleaseRecordsPage() {

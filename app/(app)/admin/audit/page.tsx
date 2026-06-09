@@ -19,8 +19,8 @@ import {
 } from "@/components/ui/dialog"
 import { PageHeader } from "@/components/page-header"
 import { StatusBadge } from "@/components/status-badge"
-import { AUDIT_LOGS, AUDIT_ACTIONS, ROLE_TONE, type AuditLog } from "@/lib/admin-data"
-import { ROLE_LABELS } from "@/lib/types"
+import { AUDIT_LOGS, AUDIT_ACTIONS, ROLE_TONE, type AuditLog } from "@/mocks/admin-data"
+import { ROLE_LABELS } from "@/types/domain"
 import { Search } from "lucide-react"
 
 export default function AuditPage() {

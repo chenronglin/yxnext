@@ -15,7 +15,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { StatusBadge } from "@/components/status-badge"
 import { cn } from "@/lib/utils"
 import { Check, Info } from "lucide-react"
-import { BOUND_AUTHORS, type SiItem } from "@/lib/si-data"
+import { BOUND_AUTHORS, type SiItem } from "@/mocks/si-data"
 
 interface PrereleaseDialogProps {
   open: boolean

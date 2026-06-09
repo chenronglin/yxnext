@@ -16,7 +16,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
-import { SI_VERSIONS, type SiVersion, type SiItem } from "@/lib/si-data"
+import { SI_VERSIONS, type SiVersion, type SiItem } from "@/mocks/si-data"
 import { ChevronLeft, Eye, Undo2, AlertTriangle } from "lucide-react"
 
 function PreviewField({ label, value }: { label: string; value: string }) {

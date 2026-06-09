@@ -4,7 +4,7 @@ import { useState } from "react"
 import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import type { ContentBlock } from "@/lib/doc-data"
+import type { ContentBlock } from "@/mocks/doc-data"
 import { MessageSquare, Plus, GripVertical } from "lucide-react"
 
 interface EditorBodyProps {

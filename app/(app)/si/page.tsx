@@ -15,8 +15,8 @@ import {
 } from "@/components/ui/select"
 import { StatusBadge } from "@/components/status-badge"
 import { PrereleaseDialog } from "@/components/si/prerelease-dialog"
-import { SI_LIST, SI_STATUS_TONE, MAIN_TYPES, type SiItem } from "@/lib/si-data"
-import { SI_STATUS_LABELS, type SiStatus } from "@/lib/types"
+import { SI_LIST, SI_STATUS_TONE, MAIN_TYPES, type SiItem } from "@/mocks/si-data"
+import { SI_STATUS_LABELS, type SiStatus } from "@/types/domain"
 import { Plus, Search, Eye, Pencil, Send, History, Archive, Trash2, Lock } from "lucide-react"
 
 export default function SiLibraryPage() {

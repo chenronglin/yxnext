@@ -14,8 +14,8 @@ import {
   REVISION_ACTION_LABELS,
   REVISION_ACTION_TONE,
   holderTone,
-} from "@/lib/doc-data"
-import { DOC_STATUS_LABELS, HOLDER_ROLE_LABELS, ROLE_LABELS } from "@/lib/types"
+} from "@/mocks/doc-data"
+import { DOC_STATUS_LABELS, HOLDER_ROLE_LABELS, ROLE_LABELS } from "@/types/domain"
 import { FileText, Eye, GitCompare, ArrowLeft } from "lucide-react"
 
 const VALID_TYPES: DocType[] = ["synopsis", "outline", "manuscript", "qc"]

@@ -5,8 +5,8 @@ import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { StatusBadge } from "@/components/status-badge"
-import { STAGE_PLAN_TONE, type ProjectItem } from "@/lib/project-data"
-import { PROJECT_STAGE_LABELS, STAGE_PLAN_STATUS_LABELS } from "@/lib/types"
+import { STAGE_PLAN_TONE, type ProjectItem } from "@/mocks/project-data"
+import { PROJECT_STAGE_LABELS, STAGE_PLAN_STATUS_LABELS } from "@/types/domain"
 import { Pencil, Save, X } from "lucide-react"
 
 interface StagePlanTableProps {

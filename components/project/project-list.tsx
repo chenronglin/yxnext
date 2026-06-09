@@ -21,14 +21,14 @@ import {
   STAGE_PLAN_TONE,
   PROJECT_EDITORS,
   PROJECT_AUTHORS,
-} from "@/lib/project-data"
+} from "@/mocks/project-data"
 import {
   PROJECT_LIFECYCLE_LABELS,
   PROJECT_STAGE_LABELS,
   STAGE_PLAN_STATUS_LABELS,
   type ProjectLifecycle,
   type ProjectStage,
-} from "@/lib/types"
+} from "@/types/domain"
 import { Search, Eye, ArrowRight, Download, Settings2 } from "lucide-react"
 
 interface ProjectListProps {

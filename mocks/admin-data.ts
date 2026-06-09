@@ -1,5 +1,5 @@
 // 阅享平台 - 管理员治理相关 Mock 数据
-import type { Role, UserStatus, BadgeTone } from "./types"
+import type { Role, UserStatus, BadgeTone } from "@/types/domain"
 
 export const USER_STATUS_TONE: Record<UserStatus, BadgeTone> = {
   active: "success",

@@ -5,7 +5,7 @@ import Link from "next/link"
 import { Search, Bell, LogOut, ChevronDown, Menu, Languages } from "lucide-react"
 import { useRole } from "@/components/role-provider"
 import { useSidebar } from "@/components/sidebar-provider"
-import { ROLE_LABELS, type Role } from "@/lib/types"
+import { ROLE_LABELS, type Role } from "@/types/domain"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import {
   DropdownMenu,

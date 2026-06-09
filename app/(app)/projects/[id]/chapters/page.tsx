@@ -8,8 +8,8 @@ import { Button } from "@/components/ui/button"
 import { PageHeader } from "@/components/page-header"
 import { StatusBadge } from "@/components/status-badge"
 import { useRole } from "@/components/role-provider"
-import { getProjectById, DOC_STATUS_TONE } from "@/lib/project-data"
-import { DOC_STATUS_LABELS, HOLDER_ROLE_LABELS, HolderRole } from "@/lib/types"
+import { getProjectById, DOC_STATUS_TONE } from "@/mocks/project-data"
+import { DOC_STATUS_LABELS, HOLDER_ROLE_LABELS, HolderRole } from "@/types/domain"
 import { Plus, FileText, History, BookOpen, Trash2, ArrowUpDown, Lock } from "lucide-react"
 
 export default function ChaptersPage({ params }: { params: Promise<{ id: string }> }) {

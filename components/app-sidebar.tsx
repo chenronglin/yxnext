@@ -6,8 +6,8 @@ import { BookOpenText, ChevronLeft, ChevronRight } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useRole } from "@/components/role-provider"
 import { useSidebar } from "@/components/sidebar-provider"
-import { NAV_BY_ROLE } from "@/lib/navigation"
-import { ROLE_LABELS } from "@/lib/types"
+import { NAV_BY_ROLE } from "@/config/navigation"
+import { ROLE_LABELS } from "@/types/domain"
 
 export function AppSidebar() {
   const pathname = usePathname()

@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button"
 import { StatusBadge } from "@/components/status-badge"
 import { cn } from "@/lib/utils"
 import { CheckCheck, ChevronRight } from "lucide-react"
-import type { BadgeTone } from "@/lib/types"
+import type { BadgeTone } from "@/types/domain"
 
 type TaskType = "si" | "review" | "returned" | "warning" | "overdue" | "approval"
 

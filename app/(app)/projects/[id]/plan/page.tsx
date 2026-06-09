@@ -8,8 +8,8 @@ import { PageHeader } from "@/components/page-header"
 import { StagePlanTable } from "@/components/project/stage-plan-table"
 import { StageProgress } from "@/components/project/stage-progress"
 import { useRole } from "@/components/role-provider"
-import { getProjectById } from "@/lib/project-data"
-import { PROJECT_STAGE_LABELS } from "@/lib/types"
+import { getProjectById } from "@/mocks/project-data"
+import { PROJECT_STAGE_LABELS } from "@/types/domain"
 
 export default function StagePlanPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)

@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils"
-import { STAGE_ORDER, type ProjectItem } from "@/lib/project-data"
-import { PROJECT_STAGE_LABELS } from "@/lib/types"
+import { STAGE_ORDER, type ProjectItem } from "@/mocks/project-data"
+import { PROJECT_STAGE_LABELS } from "@/types/domain"
 import { Check, Lock } from "lucide-react"
 
 interface StageProgressProps {

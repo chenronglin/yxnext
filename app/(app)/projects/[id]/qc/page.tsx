@@ -8,8 +8,8 @@ import { Button } from "@/components/ui/button"
 import { PageHeader } from "@/components/page-header"
 import { StatusBadge } from "@/components/status-badge"
 import { useRole } from "@/components/role-provider"
-import { getProjectById, QC_STATUS_LABELS, QC_STATUS_TONE } from "@/lib/project-data"
-import { DOC_STATUS_LABELS } from "@/lib/types"
+import { getProjectById, QC_STATUS_LABELS, QC_STATUS_TONE } from "@/mocks/project-data"
+import { DOC_STATUS_LABELS } from "@/types/domain"
 import { Unlock, FileText, CheckCircle2, Info, Lock, ArrowRight } from "lucide-react"
 
 export default function QcPage({ params }: { params: Promise<{ id: string }> }) {

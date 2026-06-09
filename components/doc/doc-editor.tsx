@@ -9,7 +9,7 @@ import { EditorToolbar } from "@/components/doc/editor-toolbar"
 import { EditorBody } from "@/components/doc/editor-body"
 import { CollabSidebar } from "@/components/doc/collab-sidebar"
 import { SubmitReviewDialog, ReturnReviewDialog, ApproveDialog } from "@/components/doc/review-dialogs"
-import { getDoc, type DocType, DOC_TYPE_LABELS } from "@/lib/doc-data"
+import { getDoc, type DocType, DOC_TYPE_LABELS } from "@/mocks/doc-data"
 import { Save, Eye, Info } from "lucide-react"
 
 const VALID_TYPES: DocType[] = ["synopsis", "outline", "manuscript", "qc"]

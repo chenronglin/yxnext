@@ -1,4 +1,4 @@
-import type { SiStatus, BadgeTone } from "./types"
+import type { SiStatus, BadgeTone } from "@/types/domain"
 
 export const SI_STATUS_TONE: Record<SiStatus, BadgeTone> = {
   draft: "neutral",

@@ -16,8 +16,8 @@ import {
   PRERELEASE_STATUS_TONE,
   BOUND_AUTHORS,
   type SiItem,
-} from "@/lib/si-data"
-import { SI_STATUS_LABELS } from "@/lib/types"
+} from "@/mocks/si-data"
+import { SI_STATUS_LABELS } from "@/types/domain"
 import {
   Pencil,
   Send,

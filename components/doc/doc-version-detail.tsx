@@ -17,8 +17,8 @@ import {
   DOC_TYPE_LABELS,
   REVISION_ACTION_LABELS,
   REVISION_ACTION_TONE,
-} from "@/lib/doc-data"
-import { ROLE_LABELS } from "@/lib/types"
+} from "@/mocks/doc-data"
+import { ROLE_LABELS } from "@/types/domain"
 import { ArrowLeft, BookOpen, PenLine } from "lucide-react"
 
 const VALID_TYPES: DocType[] = ["synopsis", "outline", "manuscript", "qc"]

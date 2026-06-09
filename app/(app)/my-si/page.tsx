@@ -18,7 +18,7 @@ import {
   MY_SI_VIEWS,
   PRERELEASE_STATUS_LABELS,
   PRERELEASE_STATUS_TONE,
-} from "@/lib/si-data"
+} from "@/mocks/si-data"
 import { Search, Eye, ExternalLink } from "lucide-react"
 
 type AuthorStatus = "active" | "converted"

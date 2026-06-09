@@ -21,8 +21,8 @@ import {
 } from "@/components/ui/select"
 import { PageHeader } from "@/components/page-header"
 import { StatusBadge } from "@/components/status-badge"
-import { BINDINGS, type Binding } from "@/lib/admin-data"
-import { PROJECT_EDITORS, PROJECT_AUTHORS } from "@/lib/project-data"
+import { BINDINGS, type Binding } from "@/mocks/admin-data"
+import { PROJECT_EDITORS, PROJECT_AUTHORS } from "@/mocks/project-data"
 import { Plus, Upload, Link2Off } from "lucide-react"
 
 export default function BindingsPage() {

@@ -33,9 +33,9 @@ import {
   QC_STATUS_TONE,
   PROJECT_EDITORS,
   PROJECT_AUTHORS,
-} from "@/lib/project-data"
-import { AUDIT_LOGS } from "@/lib/admin-data"
-import { PROJECT_LIFECYCLE_LABELS, PROJECT_STAGE_LABELS } from "@/lib/types"
+} from "@/mocks/project-data"
+import { AUDIT_LOGS } from "@/mocks/admin-data"
+import { PROJECT_LIFECYCLE_LABELS, PROJECT_STAGE_LABELS } from "@/types/domain"
 import {
   UserCog,
   CheckCircle2,

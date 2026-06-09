@@ -6,8 +6,8 @@ import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { StatusBadge } from "@/components/status-badge"
-import type { DocData } from "@/lib/doc-data"
-import type { Role } from "@/lib/types"
+import type { DocData } from "@/mocks/doc-data"
+import type { Role } from "@/types/domain"
 import { History, Lightbulb, MessageSquare, ArrowRight } from "lucide-react"
 
 const PRESET_TONE = {

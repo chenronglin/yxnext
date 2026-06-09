@@ -16,8 +16,8 @@ import {
   DOC_STATUS_TONE,
   QC_STATUS_LABELS,
   QC_STATUS_TONE,
-} from "@/lib/project-data"
-import { PROJECT_LIFECYCLE_LABELS, PROJECT_STAGE_LABELS, DOC_STATUS_LABELS } from "@/lib/types"
+} from "@/mocks/project-data"
+import { PROJECT_LIFECYCLE_LABELS, PROJECT_STAGE_LABELS, DOC_STATUS_LABELS } from "@/types/domain"
 import {
   FileText,
   History,

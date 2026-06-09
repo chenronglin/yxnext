@@ -18,8 +18,8 @@ import {
 import { StatusBadge } from "@/components/status-badge"
 import { PrereleaseDialog } from "@/components/si/prerelease-dialog"
 import { cn } from "@/lib/utils"
-import { MAIN_TYPES, BOUND_AUTHORS, SI_STATUS_TONE, type SiItem } from "@/lib/si-data"
-import { SI_STATUS_LABELS } from "@/lib/types"
+import { MAIN_TYPES, BOUND_AUTHORS, SI_STATUS_TONE, type SiItem } from "@/mocks/si-data"
+import { SI_STATUS_LABELS } from "@/types/domain"
 import { Save, SendHorizonal, X, ChevronLeft, Check } from "lucide-react"
 
 interface SiFormProps {

@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils"
-import type { BadgeTone } from "@/lib/types"
+import type { BadgeTone } from "@/types/domain"
 
 const toneStyles: Record<BadgeTone, string> = {
   neutral: "bg-secondary text-secondary-foreground border-transparent",

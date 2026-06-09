@@ -6,7 +6,7 @@ import type {
   DocStatus,
   HolderRole,
   BadgeTone,
-} from "./types"
+} from "@/types/domain"
 
 export const PROJECT_LIFECYCLE_TONE: Record<ProjectLifecycle, BadgeTone> = {
   draft: "neutral",

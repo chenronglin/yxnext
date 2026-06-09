@@ -17,7 +17,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { PageHeader } from "@/components/page-header"
 import { StatusBadge } from "@/components/status-badge"
-import { APPROVAL_REQUESTS, type ApprovalRequest } from "@/lib/admin-data"
+import { APPROVAL_REQUESTS, type ApprovalRequest } from "@/mocks/admin-data"
 import { Search, CheckCircle2, XCircle, Eye } from "lucide-react"
 
 export default function ApprovalsPage() {

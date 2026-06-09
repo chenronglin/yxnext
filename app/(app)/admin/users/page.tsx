@@ -13,8 +13,8 @@ import {
 } from "@/components/ui/select"
 import { PageHeader } from "@/components/page-header"
 import { StatusBadge } from "@/components/status-badge"
-import { MANAGED_USERS, USER_STATUS_TONE, ROLE_TONE } from "@/lib/admin-data"
-import { ROLE_LABELS, USER_STATUS_LABELS, type Role, type UserStatus } from "@/lib/types"
+import { MANAGED_USERS, USER_STATUS_TONE, ROLE_TONE } from "@/mocks/admin-data"
+import { ROLE_LABELS, USER_STATUS_LABELS, type Role, type UserStatus } from "@/types/domain"
 import { Plus, Search, Eye, Pencil, Power, KeyRound } from "lucide-react"
 
 export default function UsersPage() {

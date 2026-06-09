@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import { useRole } from "@/components/role-provider"
-import { ROLE_LABELS } from "@/lib/types"
+import { ROLE_LABELS } from "@/types/domain"
 import { PageHeader } from "@/components/page-header"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"

@@ -10,7 +10,7 @@ import {
 } from "lucide-react"
 import { StatCard } from "@/components/stat-card"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { PROJECT_STAGE_LABELS } from "@/lib/types"
+import { PROJECT_STAGE_LABELS } from "@/types/domain"
 
 const stageCounts: Record<string, number> = {
   synopsis: 6,

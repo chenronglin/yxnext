@@ -6,7 +6,7 @@ import { PageHeader } from "@/components/page-header"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import { ROLE_LABELS } from "@/lib/types"
+import { ROLE_LABELS } from "@/types/domain"
 import { cn } from "@/lib/utils"
 import {
   Sparkles,

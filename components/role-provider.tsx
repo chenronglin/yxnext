@@ -1,7 +1,7 @@
 "use client"
 
 import { createContext, useContext, useState, useCallback, type ReactNode } from "react"
-import type { CurrentUser, Role } from "@/lib/types"
+import type { CurrentUser, Role } from "@/types/domain"
 
 const DEMO_USERS: Record<Role, CurrentUser> = {
   admin: {

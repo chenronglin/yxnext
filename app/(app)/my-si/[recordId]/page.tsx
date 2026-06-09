@@ -9,7 +9,7 @@ import {
   getMySiByRecord,
   PRERELEASE_STATUS_LABELS,
   PRERELEASE_STATUS_TONE,
-} from "@/lib/si-data"
+} from "@/mocks/si-data"
 import { ChevronLeft, ExternalLink, Clock } from "lucide-react"
 
 function Field({ label, value }: { label: string; value: string }) {

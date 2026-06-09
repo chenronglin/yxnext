@@ -1,0 +1,754 @@
+datasource db {
+  provider = "mysql"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  admin
+  editor
+  author
+}
+
+enum UserStatus {
+  active
+  disabled
+  pending
+  rejected
+}
+
+enum BindingStatus {
+  active
+  inactive
+}
+
+enum SiStatus {
+  draft
+  preissued
+  converted
+  archived
+}
+
+enum SiVersionAction {
+  create
+  update
+  rollback
+}
+
+enum SiPreissueStatus {
+  preissued
+  converted
+  recalled
+}
+
+enum ProjectLifecycleStatus {
+  draft
+  active
+  completed
+  archived
+  cancelled
+}
+
+enum ProjectStage {
+  synopsis
+  outline
+  chapter
+  release
+  completed
+}
+
+enum ProjectReleaseStatus {
+  locked
+  unlocked
+  approved
+}
+
+enum StageCode {
+  synopsis
+  outline
+  chapter
+  release
+}
+
+enum GateStatus {
+  locked
+  unlocked
+  completed
+}
+
+enum TimelineStatus {
+  not_started
+  in_progress
+  due_soon
+  overdue
+  completed
+}
+
+enum DocType {
+  synopsis
+  outline
+  chapter
+  release
+}
+
+enum DocStatus {
+  draft
+  submitted
+  rejected
+  approved
+}
+
+enum HolderRole {
+  author
+  editor
+  none
+}
+
+enum DocAction {
+  author_save
+  author_submit
+  editor_save
+  editor_reject
+  editor_approve
+  admin_reopen
+}
+
+enum DraftStatus {
+  active
+  sealed
+  archived
+}
+
+enum UserRole2 {
+  author
+  editor
+}
+
+enum RevisionAction {
+  author_submit
+  editor_reject
+  editor_approve
+}
+
+enum ActorRole {
+  author
+  editor
+  admin
+}
+
+enum TodoStatus {
+  open
+  done
+  cancelled
+}
+
+enum ExportScope {
+  synopsis
+  outline
+  chapters
+  release
+  project
+}
+
+enum ExportFormat {
+  docx
+  markdown
+}
+
+enum ExportStatus {
+  pending
+  running
+  completed
+  failed
+}
+
+model User {
+  userId         BigInt      @id @default(autoincrement()) @map("user_id") @db.UnsignedBigInt
+  username       String      @unique @map("username") @db.VarChar(100)
+  email          String      @unique @map("email") @db.VarChar(255)
+  passwordHash   String      @map("password_hash") @db.VarChar(255)
+  role           Role        @map("role")
+  status         UserStatus  @default(pending) @map("status")
+  displayName    String?     @map("display_name") @db.VarChar(100)
+  phone          String?     @map("phone") @db.VarChar(32)
+  avatarUrl      String?     @map("avatar_url") @db.VarChar(500)
+  approvedBy     BigInt?     @map("approved_by") @db.UnsignedBigInt
+  approvedAt     DateTime?   @map("approved_at") @db.DateTime(3)
+  rejectedReason String?     @map("rejected_reason") @db.Text
+  lastLoginAt    DateTime?   @map("last_login_at") @db.DateTime(3)
+  createdAt      DateTime    @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt      DateTime    @default(now()) @updatedAt @map("updated_at") @db.DateTime(3)
+
+  // Relations
+  approver       User?       @relation("UserApprover", fields: [approvedBy], references: [userId], onDelete: NoAction, onUpdate: NoAction)
+  approvedUsers  User[]      @relation("UserApprover")
+
+  sessions       UserSession[]
+  editorBindings EditorAuthorBinding[] @relation("BindingEditor")
+  authorBindings EditorAuthorBinding[] @relation("BindingAuthor")
+  boundByBindings EditorAuthorBinding[] @relation("BindingBoundBy")
+  unboundByBindings EditorAuthorBinding[] @relation("BindingUnboundBy")
+
+  createdStoryIdeas StoryIdea[] @relation("SiCreator")
+  versions          StoryIdeaVersion[] @relation("SiVersionEditor")
+  fitStoryIdeas     StoryIdeaFitAuthor[]
+  preissuedEditor   SiPreissue[] @relation("PreissueEditor")
+  preissuedAuthor   SiPreissue[] @relation("PreissueAuthor")
+  
+  projectsEditor    Project[] @relation("ProjectEditor")
+  projectsAuthor    Project[] @relation("ProjectAuthor")
+  projectsCreatedBy Project[] @relation("ProjectCreatedBy")
+
+  stagePlansUpdated StagePlanDefault[] @relation("StagePlanDefaultUpdatedBy")
+
+  assignmentLogsOldEditor ProjectAssignmentLog[] @relation("LogOldEditor")
+  assignmentLogsNewEditor ProjectAssignmentLog[] @relation("LogNewEditor")
+  assignmentLogsOldAuthor ProjectAssignmentLog[] @relation("LogOldAuthor")
+  assignmentLogsNewAuthor ProjectAssignmentLog[] @relation("LogNewAuthor")
+  assignmentLogsChangedBy ProjectAssignmentLog[] @relation("LogChangedBy")
+
+  docsLastActor     Doc[] @relation("DocLastActor")
+  currentDraftsOwner DocCurrentDraft[] @relation("DraftOwner")
+  revisionsActor    DocRevision[] @relation("RevisionActor")
+
+  notifications      Notification[]
+  todoItems          TodoItem[]
+  operationLogs      OperationLog[]
+  exportJobs         ExportJob[]
+
+  @@map("users")
+  @@index([role, status], map: "idx_users_role_status")
+}
+
+model UserSession {
+  sessionId String    @id @map("session_id") @db.Char(64)
+  userId    BigInt    @map("user_id") @db.UnsignedBigInt
+  expiresAt DateTime  @map("expires_at") @db.DateTime(3)
+  revokedAt DateTime? @map("revoked_at") @db.DateTime(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+
+  user      User      @relation(fields: [userId], references: [userId], onDelete: Cascade, onUpdate: NoAction)
+
+  @@map("user_sessions")
+  @@index([userId], map: "idx_user_sessions_user")
+  @@index([expiresAt], map: "idx_user_sessions_expires")
+}
+
+model EditorAuthorBinding {
+  bindingId       BigInt        @id @default(autoincrement()) @map("binding_id") @db.UnsignedBigInt
+  editorId        BigInt        @map("editor_id") @db.UnsignedBigInt
+  authorId        BigInt        @map("author_id") @db.UnsignedBigInt
+  status          BindingStatus @default(active) @map("status")
+  boundBy         BigInt        @map("bound_by") @db.UnsignedBigInt
+  boundAt         DateTime      @default(now()) @map("bound_at") @db.DateTime(3)
+  unboundBy       BigInt?       @map("unbound_by") @db.UnsignedBigInt
+  unboundAt       DateTime?     @map("unbound_at") @db.DateTime(3)
+  note            String?       @map("note") @db.Text
+  activePairKey   String?       @unique @map("active_pair_key") @db.VarChar(191)
+
+  editor          User          @relation("BindingEditor", fields: [editorId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
+  author          User          @relation("BindingAuthor", fields: [authorId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
+  boundByUser     User          @relation("BindingBoundBy", fields: [boundBy], references: [userId], onDelete: NoAction, onUpdate: NoAction)
+  unboundByUser   User?         @relation("BindingUnboundBy", fields: [unboundBy], references: [userId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@map("editor_author_bindings")
+  @@index([editorId, status], map: "idx_editor_author_editor")
+  @@index([authorId, status], map: "idx_editor_author_author")
+}
+
+model SiMainType {
+  mainTypeId BigInt   @id @default(autoincrement()) @map("main_type_id") @db.UnsignedBigInt
+  code       String   @unique @map("code") @db.VarChar(64)
+  name       String   @map("name") @db.VarChar(100)
+  sortOrder  Int      @default(0) @map("sort_order") @db.UnsignedInt
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at") @db.DateTime(3)
+
+  storyIdeas StoryIdea[]
+
+  @@map("si_main_types")
+  @@index([isActive, sortOrder], map: "idx_si_main_types_active_sort")
+}
+
+model StoryIdea {
+  siId             BigInt                 @id @default(autoincrement()) @map("si_id") @db.UnsignedBigInt
+  title            String                 @map("title") @db.VarChar(255)
+  mainTypeId       BigInt?                @map("main_type_id") @db.UnsignedBigInt
+  trope            String?                @map("trope") @db.VarChar(255)
+  benchmarkBooks   Json?                  @map("benchmark_books")
+  fitAuthorNote    String?                @map("fit_author_note") @db.Text
+  remarks          String?                @map("remarks") @db.Text
+  freshTwist       String?                @map("fresh_twist") @db.Text
+  coreSynopsis     String?                @map("core_synopsis") @db.MediumText
+  creatorEditorId  BigInt                 @map("creator_editor_id") @db.UnsignedBigInt
+  status           SiStatus               @default(draft) @map("status")
+  currentVersionNo Int                    @default(0) @map("current_version_no") @db.UnsignedInt
+  latestVersionId  BigInt?                @map("latest_version_id") @db.UnsignedBigInt
+  createdAt        DateTime               @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt        DateTime               @default(now()) @updatedAt @map("updated_at") @db.DateTime(3)
+  archivedAt       DateTime?              @map("archived_at") @db.DateTime(3)
+
+  mainType         SiMainType?            @relation(fields: [mainTypeId], references: [mainTypeId], onDelete: SetNull, onUpdate: NoAction)
+  creatorEditor    User                   @relation("SiCreator", fields: [creatorEditorId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
+  latestVersion    StoryIdeaVersion?      @relation("SiLatestVersion", fields: [latestVersionId], references: [siVersionId], onDelete: SetNull, onUpdate: NoAction)
+
+  versions         StoryIdeaVersion[]     @relation("SiVersionHistory")
+  fitAuthors       StoryIdeaFitAuthor[]
+  preissues        SiPreissue[]
+  projects         Project[]
+  notifications    Notification[]
+  todoItems        TodoItem[]
+  operationLogs    OperationLog[]
+
+  @@map("story_ideas")
+  @@index([creatorEditorId, status], map: "idx_story_ideas_editor_status")
+  @@index([mainTypeId], map: "idx_story_ideas_type")
+  @@index([trope], map: "idx_story_ideas_trope")
+}
+
+model StoryIdeaVersion {
+  siVersionId           BigInt           @id @default(autoincrement()) @map("si_version_id") @db.UnsignedBigInt
+  siId                  BigInt           @map("si_id") @db.UnsignedBigInt
+  versionNo             Int              @map("version_no") @db.UnsignedInt
+  action                SiVersionAction  @default(update) @map("action")
+  snapshotJson          Json             @map("snapshot_json")
+  editorId              BigInt           @map("editor_id") @db.UnsignedBigInt
+  rollbackFromVersionId BigInt?          @map("rollback_from_version_id") @db.UnsignedBigInt
+  contentHash           String?          @map("content_hash") @db.Char(64)
+  createdAt             DateTime         @default(now()) @map("created_at") @db.DateTime(3)
+
+  storyIdea             StoryIdea        @relation("SiVersionHistory", fields: [siId], references: [siId], onDelete: Cascade, onUpdate: NoAction)
+  editor                User             @relation("SiVersionEditor", fields: [editorId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
+  rollbackFrom          StoryIdeaVersion? @relation("RollbackFrom", fields: [rollbackFromVersionId], references: [siVersionId], onDelete: NoAction, onUpdate: NoAction)
+
+  rollbackTo            StoryIdeaVersion[] @relation("RollbackFrom")
+  storyIdeasWithLatest  StoryIdea[]      @relation("SiLatestVersion")
+  preissues             SiPreissue[]
+
+  @@unique([siId, versionNo], map: "uk_si_versions_no")
+  @@map("story_idea_versions")
+  @@index([siId, createdAt], map: "idx_si_versions_si_created")
+  @@index([editorId], map: "idx_si_versions_editor")
+}
+
+model StoryIdeaFitAuthor {
+  siId      BigInt   @map("si_id") @db.UnsignedBigInt
+  authorId  BigInt   @map("author_id") @db.UnsignedBigInt
+  note      String?  @map("note") @db.Text
+  createdAt DateTime @default(now()) @map("created_at") @db.DateTime(3)
+
+  storyIdea StoryIdea @relation(fields: [siId], references: [siId], onDelete: Cascade, onUpdate: NoAction)
+  author    User      @relation(fields: [authorId], references: [userId], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([siId, authorId])
+  @@map("story_idea_fit_authors")
+}
+
+model SiPreissue {
+  preissueId       BigInt           @id @default(autoincrement()) @map("preissue_id") @db.UnsignedBigInt
+  siId             BigInt           @map("si_id") @db.UnsignedBigInt
+  siVersionId      BigInt?          @map("si_version_id") @db.UnsignedBigInt
+  editorId         BigInt           @map("editor_id") @db.UnsignedBigInt
+  authorId         BigInt           @map("author_id") @db.UnsignedBigInt
+  preissueNote     String?          @map("preissue_note") @db.Text
+  siSnapshotJson   Json             @map("si_snapshot_json")
+  status           SiPreissueStatus @default(preissued) @map("status")
+  projectId        BigInt?          @map("project_id") @db.UnsignedBigInt
+  preissuedAt      DateTime         @default(now()) @map("preissued_at") @db.DateTime(3)
+  recalledAt       DateTime?        @map("recalled_at") @db.DateTime(3)
+  convertedAt      DateTime?        @map("converted_at") @db.DateTime(3)
+  createdAt        DateTime         @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt        DateTime         @default(now()) @updatedAt @map("updated_at") @db.DateTime(3)
+  effectivePairKey String?          @unique @map("effective_pair_key") @db.VarChar(191)
+
+  storyIdea        StoryIdea        @relation(fields: [siId], references: [siId], onDelete: Cascade, onUpdate: NoAction)
+  siVersion        StoryIdeaVersion? @relation(fields: [siVersionId], references: [siVersionId], onDelete: SetNull, onUpdate: NoAction)
+  editor           User             @relation("PreissueEditor", fields: [editorId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
+  author           User             @relation("PreissueAuthor", fields: [authorId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
+  project          Project?         @relation("PreissueProject", fields: [projectId], references: [projectId], onDelete: SetNull, onUpdate: NoAction)
+
+  projectsCreated  Project[]        @relation("ProjectPreissue")
+  notifications    Notification[]
+  todoItems        TodoItem[]
+  operationLogs    OperationLog[]
+
+  @@map("si_preissues")
+  @@index([authorId, status], map: "idx_si_preissues_author_status")
+  @@index([editorId, status], map: "idx_si_preissues_editor_status")
+  @@index([siId, status], map: "idx_si_preissues_si_status")
+  @@index([projectId], map: "idx_si_preissues_project")
+}
+
+model Project {
+  projectId       BigInt                  @id @default(autoincrement()) @map("project_id") @db.UnsignedBigInt
+  sourceSiId      BigInt                  @map("source_si_id") @db.UnsignedBigInt
+  siPreissueId    BigInt                  @unique @map("si_preissue_id") @db.UnsignedBigInt
+  title           String                  @map("title") @db.VarChar(255)
+  intro           String?                 @map("intro") @db.Text
+  editorId        BigInt                  @map("editor_id") @db.UnsignedBigInt
+  authorId        BigInt                  @map("author_id") @db.UnsignedBigInt
+  lifecycleStatus ProjectLifecycleStatus  @default(active) @map("lifecycle_status")
+  currentStage    ProjectStage            @default(synopsis) @map("current_stage")
+  releaseStatus   ProjectReleaseStatus    @default(locked) @map("release_status")
+  completedAt     DateTime?               @map("completed_at") @db.DateTime(3)
+  archivedAt      DateTime?               @map("archived_at") @db.DateTime(3)
+  cancelledAt     DateTime?               @map("cancelled_at") @db.DateTime(3)
+  restoredAt      DateTime?               @map("restored_at") @db.DateTime(3)
+  createdBy       BigInt                  @map("created_by") @db.UnsignedBigInt
+  createdAt       DateTime                @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt       DateTime                @default(now()) @updatedAt @map("updated_at") @db.DateTime(3)
+
+  sourceSi        StoryIdea               @relation(fields: [sourceSiId], references: [siId], onDelete: NoAction, onUpdate: NoAction)
+  siPreissue      SiPreissue              @relation("ProjectPreissue", fields: [siPreissueId], references: [preissueId], onDelete: NoAction, onUpdate: NoAction)
+  editor          User                    @relation("ProjectEditor", fields: [editorId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
+  author          User                    @relation("ProjectAuthor", fields: [authorId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
+  creator         User                    @relation("ProjectCreatedBy", fields: [createdBy], references: [userId], onDelete: NoAction, onUpdate: NoAction)
+
+  preissuesCreated SiPreissue[]           @relation("PreissueProject")
+  stagePlans      ProjectStagePlan[]
+  assignmentLogs  ProjectAssignmentLog[]
+  docs            Doc[]
+  releaseSources  ReleaseSourceRevision[]
+  notifications   Notification[]
+  todoItems       TodoItem[]
+  operationLogs   OperationLog[]
+  exportJobs      ExportJob[]
+
+  @@map("projects")
+  @@index([editorId, lifecycleStatus, currentStage], map: "idx_projects_editor_status")
+  @@index([authorId, lifecycleStatus, currentStage], map: "idx_projects_author_status")
+  @@index([sourceSiId], map: "idx_projects_source_si")
+}
+
+model StagePlanDefault {
+  stageCode             StageCode @id @map("stage_code")
+  defaultPlanDays       Int       @map("default_plan_days") @db.UnsignedInt
+  warningDaysBeforeDue  Int       @default(1) @map("warning_days_before_due") @db.UnsignedInt
+  updatedBy             BigInt?   @map("updated_by") @db.UnsignedBigInt
+  updatedAt             DateTime  @default(now()) @updatedAt @map("updated_at") @db.DateTime(3)
+
+  updater               User?     @relation("StagePlanDefaultUpdatedBy", fields: [updatedBy], references: [userId], onDelete: SetNull, onUpdate: NoAction)
+
+  @@map("stage_plan_defaults")
+}
+
+model ProjectStagePlan {
+  stagePlanId    BigInt          @id @default(autoincrement()) @map("stage_plan_id") @db.UnsignedBigInt
+  projectId      BigInt          @map("project_id") @db.UnsignedBigInt
+  stageCode      StageCode       @map("stage_code")
+  gateStatus     GateStatus      @default(locked) @map("gate_status")
+  timelineStatus TimelineStatus  @default(not_started) @map("timeline_status")
+  planDays       Int             @map("plan_days") @db.UnsignedInt
+  unlockedAt     DateTime?       @map("unlocked_at") @db.DateTime(3)
+  startedAt      DateTime?       @map("started_at") @db.DateTime(3)
+  dueAt          DateTime?       @map("due_at") @db.DateTime(3)
+  completedAt    DateTime?       @map("completed_at") @db.DateTime(3)
+  createdAt      DateTime        @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt      DateTime        @default(now()) @updatedAt @map("updated_at") @db.DateTime(3)
+
+  project        Project         @relation(fields: [projectId], references: [projectId], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([projectId, stageCode], map: "uk_project_stage_plans_project_stage")
+  @@map("project_stage_plans")
+  @@index([stageCode, gateStatus, timelineStatus], map: "idx_project_stage_plans_status")
+  @@index([dueAt, timelineStatus], map: "idx_project_stage_plans_due")
+}
+
+model ProjectAssignmentLog {
+  assignmentLogId BigInt    @id @default(autoincrement()) @map("assignment_log_id") @db.UnsignedBigInt
+  projectId       BigInt    @map("project_id") @db.UnsignedBigInt
+  oldEditorId     BigInt?   @map("old_editor_id") @db.UnsignedBigInt
+  newEditorId     BigInt?   @map("new_editor_id") @db.UnsignedBigInt
+  oldAuthorId     BigInt?   @map("old_author_id") @db.UnsignedBigInt
+  newAuthorId     BigInt?   @map("new_author_id") @db.UnsignedBigInt
+  changedBy       BigInt    @map("changed_by") @db.UnsignedBigInt
+  reason          String?   @map("reason") @db.Text
+  createdAt       DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+
+  project         Project   @relation(fields: [projectId], references: [projectId], onDelete: Cascade, onUpdate: NoAction)
+  oldEditor       User?     @relation("LogOldEditor", fields: [oldEditorId], references: [userId], onDelete: SetNull, onUpdate: NoAction)
+  newEditor       User?     @relation("LogNewEditor", fields: [newEditorId], references: [userId], onDelete: SetNull, onUpdate: NoAction)
+  oldAuthor       User?     @relation("LogOldAuthor", fields: [oldAuthorId], references: [userId], onDelete: SetNull, onUpdate: NoAction)
+  newAuthor       User?     @relation("LogNewAuthor", fields: [newAuthorId], references: [userId], onDelete: SetNull, onUpdate: NoAction)
+  changer         User      @relation("LogChangedBy", fields: [changedBy], references: [userId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@map("project_assignment_logs")
+  @@index([projectId, createdAt], map: "idx_project_assignment_logs_project")
+}
+
+model Doc {
+  docId            BigInt            @id @default(autoincrement()) @map("doc_id") @db.UnsignedBigInt
+  projectId        BigInt            @map("project_id") @db.UnsignedBigInt
+  docType          DocType           @map("doc_type")
+  stageCode        StageCode         @map("stage_code")
+  title            String            @map("title") @db.VarChar(255)
+  chapterNo        Int?              @map("chapter_no") @db.UnsignedInt
+  sortOrder        Int               @default(0) @map("sort_order") @db.UnsignedInt
+  status           DocStatus         @default(draft) @map("status")
+  holderRole       HolderRole        @default(author) @map("holder_role")
+  activeDraftId    BigInt?           @map("active_draft_id") @db.UnsignedBigInt
+  latestRevisionId BigInt?           @map("latest_revision_id") @db.UnsignedBigInt
+  finalRevisionId  BigInt?           @map("final_revision_id") @db.UnsignedBigInt
+  currentWordCount Int               @default(0) @map("current_word_count") @db.UnsignedInt
+  currentPlainText String?           @map("current_plain_text") @db.MediumText
+  currentCleanText String?           @map("current_clean_text") @db.MediumText
+  summary          String?           @map("summary") @db.Text
+  lastAction       DocAction?        @map("last_action")
+  lastActorId      BigInt?           @map("last_actor_id") @db.UnsignedBigInt
+  lastActionAt     DateTime?         @map("last_action_at") @db.DateTime(3)
+  lastHandoffNote  String?           @map("last_handoff_note") @db.Text
+  submittedAt      DateTime?         @map("submitted_at") @db.DateTime(3)
+  reviewedAt       DateTime?         @map("reviewed_at") @db.DateTime(3)
+  approvedAt       DateTime?         @map("approved_at") @db.DateTime(3)
+  isDeleted        Boolean           @default(false) @map("is_deleted")
+  createdAt        DateTime          @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt        DateTime          @default(now()) @updatedAt @map("updated_at") @db.DateTime(3)
+  singleDocKey     String?           @unique @map("single_doc_key") @db.VarChar(191)
+  chapterOrderKey  String?           @unique @map("chapter_order_key") @db.VarChar(191)
+
+  project          Project           @relation(fields: [projectId], references: [projectId], onDelete: Cascade, onUpdate: NoAction)
+  lastActor        User?             @relation("DocLastActor", fields: [lastActorId], references: [userId], onDelete: SetNull, onUpdate: NoAction)
+  activeDraft      DocCurrentDraft?  @relation("DocActiveDraft", fields: [activeDraftId], references: [draftId], onDelete: SetNull, onUpdate: NoAction)
+  latestRevision   DocRevision?      @relation("DocLatestRevision", fields: [latestRevisionId], references: [revisionId], onDelete: SetNull, onUpdate: NoAction)
+  finalRevision    DocRevision?      @relation("DocFinalRevision", fields: [finalRevisionId], references: [revisionId], onDelete: SetNull, onUpdate: NoAction)
+
+  drafts           DocCurrentDraft[] @relation("DraftHistory")
+  revisions        DocRevision[]     @relation("RevisionHistory")
+  releaseDocs      ReleaseSourceRevision[] @relation("ReleaseDocRelation")
+  sourceChapters   ReleaseSourceRevision[] @relation("SourceChapterRelation")
+  notifications    Notification[]
+  todoItems        TodoItem[]
+  operationLogs    OperationLog[]
+  exportJobs       ExportJob[]
+
+  @@map("docs")
+  @@index([projectId, docType, status], map: "idx_docs_project_type_status")
+  @@index([projectId, stageCode], map: "idx_docs_project_stage")
+  @@index([holderRole, status], map: "idx_docs_holder_status")
+  @@index([lastActionAt], map: "idx_docs_last_action_at")
+  @@index([lastActorId], map: "idx_docs_last_actor")
+}
+
+model DocCurrentDraft {
+  draftId              BigInt       @id @default(autoincrement()) @map("draft_id") @db.UnsignedBigInt
+  docId                BigInt       @map("doc_id") @db.UnsignedBigInt
+  ownerRole            UserRole2    @map("owner_role")
+  ownerUserId          BigInt       @map("owner_user_id") @db.UnsignedBigInt
+  baseRevisionId       BigInt?      @map("base_revision_id") @db.UnsignedBigInt
+  contentSchemaVersion Int          @default(1) @map("content_schema_version") @db.UnsignedInt
+  contentJson          Json         @map("content_json")
+  wordCount            Int          @default(0) @map("word_count") @db.UnsignedInt
+  plainText            String?      @map("plain_text") @db.MediumText
+  cleanText            String?      @map("clean_text") @db.MediumText
+  exportText           String?      @map("export_text") @db.MediumText
+  summary              String?      @map("summary") @db.Text
+  commentCount         Int          @default(0) @map("comment_count") @db.UnsignedInt
+  suggestionCount      Int          @default(0) @map("suggestion_count") @db.UnsignedInt
+  revisionMarkCount    Int          @default(0) @map("revision_mark_count") @db.UnsignedInt
+  status               DraftStatus  @default(active) @map("status")
+  lockVersion          Int          @default(0) @map("lock_version") @db.UnsignedInt
+  saveCount            Int          @default(0) @map("save_count") @db.UnsignedInt
+  createdAt            DateTime     @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt            DateTime     @default(now()) @updatedAt @map("updated_at") @db.DateTime(3)
+  sealedAt             DateTime?    @map("sealed_at") @db.DateTime(3)
+  activeDocKey         BigInt?      @unique @map("active_doc_key") @db.UnsignedBigInt
+
+  doc                  Doc          @relation("DraftHistory", fields: [docId], references: [docId], onDelete: Cascade, onUpdate: NoAction)
+  owner                User         @relation("DraftOwner", fields: [ownerUserId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
+  baseRevision         DocRevision? @relation("DraftBaseRevision", fields: [baseRevisionId], references: [revisionId], onDelete: SetNull, onUpdate: NoAction)
+
+  docsWithActiveDraft  Doc[]        @relation("DocActiveDraft")
+  revisionsCreated     DocRevision[] @relation("RevisionFromDraft")
+
+  @@map("doc_current_drafts")
+  @@index([docId, status], map: "idx_doc_current_drafts_doc_status")
+  @@index([ownerUserId, ownerRole], map: "idx_doc_current_drafts_owner")
+  @@index([baseRevisionId], map: "idx_doc_current_drafts_base_revision")
+}
+
+model DocRevision {
+  revisionId           BigInt          @id @default(autoincrement()) @map("revision_id") @db.UnsignedBigInt
+  docId                BigInt          @map("doc_id") @db.UnsignedBigInt
+  revisionNo           Int             @map("revision_no") @db.UnsignedInt
+  baseRevisionId       BigInt?         @map("base_revision_id") @db.UnsignedBigInt
+  fromDraftId          BigInt          @map("from_draft_id") @db.UnsignedBigInt
+  contentSchemaVersion Int             @default(1) @map("content_schema_version") @db.UnsignedInt
+  contentJson          Json            @map("content_json")
+  wordCount            Int             @default(0) @map("word_count") @db.UnsignedInt
+  plainText            String?         @map("plain_text") @db.MediumText
+  cleanText            String?         @map("clean_text") @db.MediumText
+  exportText           String?         @map("export_text") @db.MediumText
+  summary              String?         @map("summary") @db.Text
+  commentCount         Int             @default(0) @map("comment_count") @db.UnsignedInt
+  suggestionCount      Int             @default(0) @map("suggestion_count") @db.UnsignedInt
+  revisionMarkCount    Int             @default(0) @map("revision_mark_count") @db.UnsignedInt
+  action               RevisionAction  @map("action")
+  actorRole            ActorRole       @map("actor_role")
+  actorUserId          BigInt          @map("actor_user_id") @db.UnsignedBigInt
+  handoffNote          String?         @map("handoff_note") @db.Text
+  contentHash          String?         @map("content_hash") @db.Char(64)
+  createdAt            DateTime        @default(now()) @map("created_at") @db.DateTime(3)
+
+  doc                  Doc             @relation("RevisionHistory", fields: [docId], references: [docId], onDelete: Cascade, onUpdate: NoAction)
+  baseRevision         DocRevision?    @relation("RevisionBase", fields: [baseRevisionId], references: [revisionId], onDelete: NoAction, onUpdate: NoAction)
+  fromDraft            DocCurrentDraft @relation("RevisionFromDraft", fields: [fromDraftId], references: [draftId], onDelete: NoAction, onUpdate: NoAction)
+  actor                User            @relation("RevisionActor", fields: [actorUserId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
+
+  childRevisions       DocRevision[]   @relation("RevisionBase")
+  docsWithLatest       Doc[]           @relation("DocLatestRevision")
+  docsWithFinal        Doc[]           @relation("DocFinalRevision")
+  draftsWithBase       DocCurrentDraft[] @relation("DraftBaseRevision")
+  releaseSources       ReleaseSourceRevision[]
+  exportJobs           ExportJob[]
+
+  @@unique([docId, revisionNo], map: "uk_doc_revisions_doc_no")
+  @@map("doc_revisions")
+  @@index([docId, createdAt], map: "idx_doc_revisions_doc_created")
+  @@index([baseRevisionId], map: "idx_doc_revisions_base")
+  @@index([actorUserId, actorRole], map: "idx_doc_revisions_actor")
+  @@index([action, createdAt], map: "idx_doc_revisions_action_created")
+}
+
+model ReleaseSourceRevision {
+  releaseSourceId     BigInt   @id @default(autoincrement()) @map("release_source_id") @db.UnsignedBigInt
+  projectId           BigInt   @map("project_id") @db.UnsignedBigInt
+  releaseDocId        BigInt   @map("release_doc_id") @db.UnsignedBigInt
+  sourceChapterDocId  BigInt   @map("source_chapter_doc_id") @db.UnsignedBigInt
+  sourceRevisionId    BigInt   @map("source_revision_id") @db.UnsignedBigInt
+  sourceOrder         Int      @map("source_order") @db.UnsignedInt
+  createdAt           DateTime @default(now()) @map("created_at") @db.DateTime(3)
+
+  project             Project  @relation(fields: [projectId], references: [projectId], onDelete: Cascade, onUpdate: NoAction)
+  releaseDoc          Doc      @relation("ReleaseDocRelation", fields: [releaseDocId], references: [docId], onDelete: Cascade, onUpdate: NoAction)
+  sourceChapterDoc    Doc      @relation("SourceChapterRelation", fields: [sourceChapterDocId], references: [docId], onDelete: Cascade, onUpdate: NoAction)
+  sourceRevision      DocRevision @relation(fields: [sourceRevisionId], references: [revisionId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([releaseDocId, sourceChapterDocId], map: "uk_release_source_doc")
+  @@map("release_source_revisions")
+  @@index([projectId], map: "idx_release_source_project")
+  @@index([sourceRevisionId], map: "idx_release_source_revision")
+}
+
+model Notification {
+  notificationId  BigInt    @id @default(autoincrement()) @map("notification_id") @db.UnsignedBigInt
+  recipientUserId BigInt    @map("recipient_user_id") @db.UnsignedBigInt
+  type            String    @map("type") @db.VarChar(64)
+  title           String    @map("title") @db.VarChar(255)
+  body            String?   @map("body") @db.Text
+  projectId       BigInt?   @map("project_id") @db.UnsignedBigInt
+  docId           BigInt?   @map("doc_id") @db.UnsignedBigInt
+  siId            BigInt?   @map("si_id") @db.UnsignedBigInt
+  preissueId      BigInt?   @map("preissue_id") @db.UnsignedBigInt
+  entityType      String?   @map("entity_type") @db.VarChar(64)
+  entityId        BigInt?   @map("entity_id") @db.UnsignedBigInt
+  isRead          Boolean   @default(false) @map("is_read")
+  readAt          DateTime? @map("read_at") @db.DateTime(3)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+
+  recipient       User      @relation(fields: [recipientUserId], references: [userId], onDelete: Cascade, onUpdate: NoAction)
+  project         Project?  @relation(fields: [projectId], references: [projectId], onDelete: SetNull, onUpdate: NoAction)
+  doc             Doc?      @relation(fields: [docId], references: [docId], onDelete: SetNull, onUpdate: NoAction)
+  storyIdea       StoryIdea? @relation(fields: [siId], references: [siId], onDelete: SetNull, onUpdate: NoAction)
+  preissue        SiPreissue? @relation(fields: [preissueId], references: [preissueId], onDelete: SetNull, onUpdate: NoAction)
+
+  @@map("notifications")
+  @@index([recipientUserId, isRead, createdAt], map: "idx_notifications_user_read_created")
+  @@index([projectId], map: "idx_notifications_project")
+  @@index([docId], map: "idx_notifications_doc")
+  @@index([siId], map: "idx_notifications_si")
+}
+
+model TodoItem {
+  todoId          BigInt      @id @default(autoincrement()) @map("todo_id") @db.UnsignedBigInt
+  recipientUserId BigInt      @map("recipient_user_id") @db.UnsignedBigInt
+  todoType        String      @map("todo_type") @db.VarChar(64)
+  title           String      @map("title") @db.VarChar(255)
+  description     String?     @map("description") @db.Text
+  projectId       BigInt?     @map("project_id") @db.UnsignedBigInt
+  docId           BigInt?     @map("doc_id") @db.UnsignedBigInt
+  siId            BigInt?     @map("si_id") @db.UnsignedBigInt
+  preissueId      BigInt?     @map("preissue_id") @db.UnsignedBigInt
+  entityType      String?     @map("entity_type") @db.VarChar(64)
+  entityId        BigInt?     @map("entity_id") @db.UnsignedBigInt
+  status          TodoStatus  @default(open) @map("status")
+  dueAt           DateTime?   @map("due_at") @db.DateTime(3)
+  completedAt     DateTime?   @map("completed_at") @db.DateTime(3)
+  cancelledAt     DateTime?   @map("cancelled_at") @db.DateTime(3)
+  dedupeKey       String?     @map("dedupe_key") @db.VarChar(191)
+  openDedupeKey   String?     @unique @map("open_dedupe_key") @db.VarChar(191)
+  createdAt       DateTime    @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt       DateTime    @default(now()) @updatedAt @map("updated_at") @db.DateTime(3)
+
+  recipient       User        @relation(fields: [recipientUserId], references: [userId], onDelete: Cascade, onUpdate: NoAction)
+  project         Project?    @relation(fields: [projectId], references: [projectId], onDelete: SetNull, onUpdate: NoAction)
+  doc             Doc?        @relation(fields: [docId], references: [docId], onDelete: SetNull, onUpdate: NoAction)
+  storyIdea       StoryIdea?  @relation(fields: [siId], references: [siId], onDelete: SetNull, onUpdate: NoAction)
+  preissue        SiPreissue? @relation(fields: [preissueId], references: [preissueId], onDelete: SetNull, onUpdate: NoAction)
+
+  @@map("todo_items")
+  @@index([recipientUserId, status, dueAt], map: "idx_todo_items_user_status_due")
+  @@index([projectId], map: "idx_todo_items_project")
+  @@index([docId], map: "idx_todo_items_doc")
+}
+
+model OperationLog {
+  logId        BigInt     @id @default(autoincrement()) @map("log_id") @db.UnsignedBigInt
+  actorUserId  BigInt?    @map("actor_user_id") @db.UnsignedBigInt
+  actorRole    String?    @map("actor_role") @db.VarChar(32)
+  action       String     @map("action") @db.VarChar(128)
+  entityType   String     @map("entity_type") @db.VarChar(64)
+  entityId     BigInt     @map("entity_id") @db.UnsignedBigInt
+  projectId    BigInt?    @map("project_id") @db.UnsignedBigInt
+  docId        BigInt?    @map("doc_id") @db.UnsignedBigInt
+  siId         BigInt?    @map("si_id") @db.UnsignedBigInt
+  preissueId   BigInt?    @map("preissue_id") @db.UnsignedBigInt
+  requestId    String?    @map("request_id") @db.VarChar(128)
+  ipAddress    String?    @map("ip_address") @db.VarChar(64)
+  userAgent    String?    @map("user_agent") @db.VarChar(500)
+  beforeJson   Json?      @map("before_json")
+  afterJson    Json?      @map("after_json")
+  metadataJson Json?      @map("metadata_json")
+  createdAt    DateTime   @default(now()) @map("created_at") @db.DateTime(3)
+
+  actor        User?      @relation(fields: [actorUserId], references: [userId], onDelete: SetNull, onUpdate: NoAction)
+  project      Project?   @relation(fields: [projectId], references: [projectId], onDelete: SetNull, onUpdate: NoAction)
+  doc          Doc?       @relation(fields: [docId], references: [docId], onDelete: SetNull, onUpdate: NoAction)
+  storyIdea    StoryIdea? @relation(fields: [siId], references: [siId], onDelete: SetNull, onUpdate: NoAction)
+  preissue     SiPreissue? @relation(fields: [preissueId], references: [preissueId], onDelete: SetNull, onUpdate: NoAction)
+
+  @@map("operation_logs")
+  @@index([actorUserId, createdAt], map: "idx_operation_logs_actor_created")
+  @@index([entityType, entityId], map: "idx_operation_logs_entity")
+  @@index([projectId, createdAt], map: "idx_operation_logs_project_created")
+  @@index([docId, createdAt], map: "idx_operation_logs_doc_created")
+  @@index([action, createdAt], map: "idx_operation_logs_action_created")
+}
+
+model ExportJob {
+  exportJobId      BigInt        @id @default(autoincrement()) @map("export_job_id") @db.UnsignedBigInt
+  projectId        BigInt        @map("project_id") @db.UnsignedBigInt
+  scope            ExportScope   @map("scope")
+  format           ExportFormat  @default(docx) @map("format")
+  sourceDocId      BigInt?       @map("source_doc_id") @db.UnsignedBigInt
+  sourceRevisionId BigInt?       @map("source_revision_id") @db.UnsignedBigInt
+  status           ExportStatus  @default(pending) @map("status")
+  filePath         String?       @map("file_path") @db.VarChar(1000)
+  errorMessage     String?       @map("error_message") @db.Text
+  requestedBy      BigInt        @map("requested_by") @db.UnsignedBigInt
+  createdAt        DateTime      @default(now()) @map("created_at") @db.DateTime(3)
+  startedAt        DateTime?     @map("started_at") @db.DateTime(3)
+  completedAt      DateTime?     @map("completed_at") @db.DateTime(3)
+
+  project          Project       @relation(fields: [projectId], references: [projectId], onDelete: Cascade, onUpdate: NoAction)
+  sourceDoc        Doc?          @relation(fields: [sourceDocId], references: [docId], onDelete: SetNull, onUpdate: NoAction)
+  sourceRevision   DocRevision?  @relation(fields: [sourceRevisionId], references: [revisionId], onDelete: SetNull, onUpdate: NoAction)
+  requester        User          @relation(fields: [requestedBy], references: [userId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@map("export_jobs")
+  @@index([projectId, createdAt], map: "idx_export_jobs_project_created")
+  @@index([requestedBy, createdAt], map: "idx_export_jobs_requested_by")
+  @@index([status], map: "idx_export_jobs_status")
+}

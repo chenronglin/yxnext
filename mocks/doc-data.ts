@@ -1,6 +1,6 @@
 // 阅享平台 - Doc 编辑器共享 Mock 数据与辅助函数
-import type { DocStatus, HolderRole, BadgeTone, Role } from "./types"
-import { DOC_STATUS_LABELS } from "./types"
+import type { DocStatus, HolderRole, BadgeTone, Role } from "@/types/domain"
+import { DOC_STATUS_LABELS } from "@/types/domain"
 
 // Doc 类型
 export type DocType = "synopsis" | "outline" | "manuscript" | "qc"

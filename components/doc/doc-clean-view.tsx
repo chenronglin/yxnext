@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { PageHeader } from "@/components/page-header"
 import { StatusBadge } from "@/components/status-badge"
 import { useRole } from "@/components/role-provider"
-import { getDoc, getRevision, type DocType, DOC_TYPE_LABELS } from "@/lib/doc-data"
+import { getDoc, getRevision, type DocType, DOC_TYPE_LABELS } from "@/mocks/doc-data"
 import { PenLine, History, Download } from "lucide-react"
 
 const VALID_TYPES: DocType[] = ["synopsis", "outline", "manuscript", "qc"]

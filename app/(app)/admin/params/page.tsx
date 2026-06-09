@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { PageHeader } from "@/components/page-header"
 import { StatusBadge } from "@/components/status-badge"
-import { SI_MAIN_TYPE_PARAMS } from "@/lib/admin-data"
+import { SI_MAIN_TYPE_PARAMS } from "@/mocks/admin-data"
 import { Plus, Pencil, Power, Info } from "lucide-react"
 
 export default function ParamsPage() {

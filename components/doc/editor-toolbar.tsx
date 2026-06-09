@@ -2,7 +2,7 @@
 
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
-import type { Role } from "@/lib/types"
+import type { Role } from "@/types/domain"
 import {
   Upload,
   ClipboardPaste,
