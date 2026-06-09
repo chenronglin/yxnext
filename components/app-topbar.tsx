@@ -1,8 +1,9 @@
 "use client"
 
 import Link from "next/link"
-import { Search, Bell, LogOut, ChevronDown } from "lucide-react"
+import { Search, Bell, LogOut, ChevronDown, Menu } from "lucide-react"
 import { useRole } from "@/components/role-provider"
+import { useSidebar } from "@/components/sidebar-provider"
 import { ROLE_LABELS, type Role } from "@/lib/types"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import {
@@ -19,10 +20,19 @@ import {
 
 export function AppTopbar() {
   const { user, role, setRole } = useRole()
+  const { collapsed, toggle } = useSidebar()
 
   return (
     <header className="flex h-16 shrink-0 items-center gap-4 border-b border-border bg-background px-4 md:px-6">
-      <div className="flex flex-1 items-center">
+      <div className="flex flex-1 items-center gap-3">
+        <button
+          onClick={toggle}
+          className="inline-flex size-9 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary transition-colors"
+          title={collapsed ? "展开侧栏" : "收起侧栏"}
+          aria-label={collapsed ? "展开侧栏" : "收起侧栏"}
+        >
+          <Menu className="size-5" />
+        </button>
         <div className="relative w-full max-w-sm">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <input
