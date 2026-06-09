@@ -18,7 +18,6 @@ import {
   ChevronRight,
   ThumbsUp,
   RotateCcw,
-  Sparkles,
   Info,
   CheckCircle,
   Undo2
@@ -35,7 +34,6 @@ interface ReviewItem {
   submittedAt: string
   submitNote: string
   previewText: string
-  oldPreviewText?: string
 }
 
 const INITIAL_REVIEWS: ReviewItem[] = [
@@ -49,21 +47,19 @@ const INITIAL_REVIEWS: ReviewItem[] = [
     words: 3680,
     submittedAt: "2026-06-08 09:30",
     submitNote: "第四章写完啦，加入了男主在暗巷利用破自行车阵法击退低阶散修的情节，求林大大审核批注！",
-    previewText: "清冷的月光洒在石板路上，陈默推着链条断裂的飞鸽自行车走在狭窄的胡同里。突然，空气骤冷，四周泛起淡淡的灰色大雾。‘道友请留步。’一个沙哑的声音从雾气深处飘出，伴随着不怀好意的灵压压迫感。",
-    oldPreviewText: "陈默走在没有路灯的巷子里，车子坏了。前面起雾了，走出来一个怪人，让他站住。陈默觉得很奇怪，戒备着看着那个人。"
+    previewText: "清冷的月光洒在石板路上，陈默推着链条断裂的飞鸽自行车走在狭窄的胡同里。突然，空气骤冷，四周泛起淡淡的灰色大雾。‘道友请留步。’一个沙哑的声音从雾气深处飘出，伴随着不怀好意的灵压压迫感。"
   },
   {
     id: "rev-2",
     projectId: "p2",
     docType: "outline",
-    title: "《锦衣探案录》大纲修改稿",
+    title: "《锦衣探案录》细纲修订版",
     projectName: "锦衣探案录",
     authorName: "墨清欢",
     words: 5200,
     submittedAt: "2026-06-07 11:20",
     submitNote: "按照之前的沟通，丰富了前五章银库案的冲突反转，加入了次辅别苑夜探被围的伏笔，请查看。",
-    previewText: "故事围绕锦衣卫百户沈炼展开。沈炼受命调查大明朝银库十万两雪花银离奇失踪案。在夜探别苑过程中，主角撞见次辅别苑的阴谋，并被陷害成为弑臣凶手，踏上流亡路。",
-    oldPreviewText: "故事讲一个锦衣卫调查朝廷银库案。别苑里的人不让他查，他在现场发现了线索，但也惊动了反派，只能连夜跑路。"
+    previewText: "故事围绕锦衣卫百户沈炼展开。沈炼受命调查大明朝银库十万两雪花银离奇失踪案。在夜探别苑过程中，主角撞见次辅别苑的阴谋，并被陷害成为弑臣凶手，踏上流亡路。"
   },
   {
     id: "rev-3",
@@ -75,8 +71,7 @@ const INITIAL_REVIEWS: ReviewItem[] = [
     words: 28500,
     submittedAt: "2026-06-05 15:40",
     submitNote: "已完成所有章节的校对及精细修改，申请质检核验并正式标记项目完结交付。",
-    previewText: "山海食肆座落于人妖两界交汇的忘川渡口。守店人陆羽擅长以山海异兽为食材，烹饪调理人妖执念。第一章：清炖讹兽与谎言的滋味；第二章：爆炒毕方与心火的释怀……",
-    oldPreviewText: "故事说一个在渡口开小吃店的人，用妖怪做菜。每一章解决一个故事，最终项目交稿完结。"
+    previewText: "山海食肆座落于人妖两界交汇的忘川渡口。守店人陆羽擅长以山海异兽为食材，烹饪调理人妖执念。第一章：清炖讹兽与谎言的滋味；第二章：爆炒毕方与心火的释怀……"
   }
 ]
 
@@ -135,7 +130,7 @@ export default function ReviewWorkbenchPage() {
       <PageHeader
         breadcrumb={["审稿工作台"]}
         title="审稿工作台"
-        description="聚合编辑辖下所有项目中，作者最新提交审核的各阶段大纲与正文稿件"
+        description="聚合编辑辖下所有项目中，作者最新提交审核的梗概、细纲、正文与质检 Doc"
       />
 
       {/* Toast Alert */}
@@ -164,7 +159,7 @@ export default function ReviewWorkbenchPage() {
           </div>
           <div className="space-y-1">
             <h3 className="text-base font-medium text-foreground">所有待审稿件已处理完毕</h3>
-            <p className="text-sm text-muted-foreground">干得漂亮！当前没有任何待审核的章节、大纲或质检文档。</p>
+            <p className="text-sm text-muted-foreground">干得漂亮！当前没有任何待审核的梗概、细纲、正文或质检 Doc。</p>
           </div>
         </Card>
       ) : (
@@ -261,29 +256,18 @@ export default function ReviewWorkbenchPage() {
 
               <Separator />
 
-              {/* 稿件内容对比 */}
+              {/* 审稿工作台只展示当前提交内容预览；历史版本改为只读回看，不再提供差异对比。 */}
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-semibold text-foreground">内容预览与历史修改对比</h3>
-                  <span className="inline-flex items-center gap-1 rounded bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
-                    <Sparkles className="size-3" />
-                    对比前次草稿
-                  </span>
+                  <h3 className="text-sm font-semibold text-foreground">当前提交内容预览</h3>
+                  <span className="text-[11px] text-muted-foreground">历史版本仅支持只读回看</span>
                 </div>
-                
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-2">
-                    <span className="text-[11px] font-medium text-muted-foreground block border-b border-border pb-1.5">上个版本</span>
-                    <p className="text-xs text-muted-foreground/80 leading-relaxed line-through">
-                      {selectedItem.oldPreviewText || "暂无前次修改对比"}
-                    </p>
-                  </div>
-                  <div className="rounded-lg border border-border bg-background p-3 space-y-2">
-                    <span className="text-[11px] font-medium text-primary block border-b border-primary/20 pb-1.5">新提交待审版</span>
-                    <p className="text-xs text-foreground leading-relaxed">
-                      {selectedItem.previewText}
-                    </p>
-                  </div>
+
+                <div className="rounded-lg border border-border bg-background p-3 space-y-2">
+                  <span className="text-[11px] font-medium text-primary block border-b border-primary/20 pb-1.5">最新待审版本</span>
+                  <p className="text-xs text-foreground leading-relaxed">
+                    {selectedItem.previewText}
+                  </p>
                 </div>
               </div>
 
