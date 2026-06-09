@@ -6,6 +6,7 @@ import { Prisma } from "@prisma/client"
 import { prisma } from "@/server/db/prisma"
 import { ApiError } from "@/server/shared/api-response"
 import type { ApiCurrentUser } from "@/server/shared/current-user"
+import type { PrereleaseRecord, PrereleaseStatus, SiItem, SiVersion } from "@/types/si"
 
 type StageCodeValue = "synopsis" | "outline" | "chapter" | "release"
 
@@ -30,6 +31,12 @@ type SiListFilters = {
   keyword?: string | null
   status?: string | null
   mainType?: string | null
+}
+
+type PreissueListFilters = {
+  keyword?: string | null
+  status?: string | null
+  authorId?: string | null
 }
 
 type PrepublishInput = {
@@ -104,6 +111,19 @@ const storyIdeaInclude = {
     },
     orderBy: {
       preissuedAt: "desc",
+    },
+  },
+  versions: {
+    include: {
+      editor: {
+        select: {
+          username: true,
+          displayName: true,
+        },
+      },
+    },
+    orderBy: {
+      versionNo: "desc",
     },
   },
 } satisfies Prisma.StoryIdeaInclude
@@ -210,7 +230,7 @@ function userName(user: { username: string; displayName: string | null }) {
   return user.displayName ?? user.username
 }
 
-function toApiSiStatus(status: StoryIdeaRecord["status"]) {
+function toApiSiStatus(status: StoryIdeaRecord["status"]): SiItem["status"] {
   return status === "preissued" ? "prereleased" : status
 }
 
@@ -226,10 +246,23 @@ function toDbSiStatus(status: string | null | undefined) {
   })
 }
 
-function toApiPreissueStatus(status: PreissueRecord["status"]) {
+function toApiPreissueStatus(status: PreissueRecord["status"]): PrereleaseStatus {
   if (status === "preissued") return "active"
   if (status === "recalled") return "withdrawn"
   return "converted"
+}
+
+function toDbPreissueStatus(status: string | null | undefined) {
+  if (!status || status === "all") return null
+  if (status === "active") return "preissued"
+  if (status === "withdrawn") return "recalled"
+  if (["preissued", "recalled", "converted"].includes(status)) return status
+
+  throw new ApiError({
+    status: 400,
+    code: "INVALID_STATUS",
+    message: "预发记录状态参数不正确",
+  })
 }
 
 function benchmarkToLabel(value: Prisma.JsonValue | null) {
@@ -255,6 +288,48 @@ function benchmarkToLabel(value: Prisma.JsonValue | null) {
   }
 
   return ""
+}
+
+function snapshotValue(snapshot: Prisma.JsonValue, key: string) {
+  if (snapshot && typeof snapshot === "object" && !Array.isArray(snapshot) && key in snapshot) {
+    return snapshot[key]
+  }
+
+  return undefined
+}
+
+function snapshotString(snapshot: Prisma.JsonValue, key: string, fallback = "") {
+  const value = snapshotValue(snapshot, key)
+  return typeof value === "string" ? value : fallback
+}
+
+function snapshotBenchmarkToLabel(snapshot: Prisma.JsonValue, fallback: Prisma.JsonValue | null) {
+  const value = snapshotValue(snapshot, "benchmarkBooks")
+  return benchmarkToLabel(value === undefined ? fallback : (value as Prisma.JsonValue | null))
+}
+
+function serializeSiVersion(
+  version: StoryIdeaRecord["versions"][number],
+  currentVersionNo: number,
+): SiVersion {
+  return {
+    id: version.siVersionId.toString(),
+    version: version.versionNo,
+    savedBy: userName(version.editor),
+    savedAt: version.createdAt.toISOString(),
+    note:
+      version.action === "create"
+        ? "初始草稿"
+        : version.action === "rollback"
+          ? "版本回退"
+          : "内容更新",
+    current: version.versionNo === currentVersionNo,
+    title: snapshotString(version.snapshotJson, "title"),
+    mainType: snapshotString(version.snapshotJson, "mainType"),
+    trope: snapshotString(version.snapshotJson, "trope"),
+    freshTwist: snapshotString(version.snapshotJson, "freshTwist"),
+    synopsis: snapshotString(version.snapshotJson, "coreSynopsis"),
+  }
 }
 
 type NormalizedBenchmark = {
@@ -312,12 +387,21 @@ function ensureEditorActor(actor: ApiCurrentUser) {
   }
 }
 
-function serializePreissue(record: PreissueRecord) {
+function serializePreissue(record: PreissueRecord): PrereleaseRecord {
+  const snapshot = record.siSnapshotJson
+
   return {
     id: record.preissueId.toString(),
     recordId: record.preissueId.toString(),
     siId: record.siId.toString(),
     siTitle: record.storyIdea.title,
+    title: snapshotString(snapshot, "title", record.storyIdea.title),
+    mainType: snapshotString(snapshot, "mainType", record.storyIdea.mainType?.name ?? ""),
+    trope: snapshotString(snapshot, "trope", record.storyIdea.trope ?? ""),
+    benchmark: snapshotBenchmarkToLabel(snapshot, record.storyIdea.benchmarkBooks),
+    remark: snapshotString(snapshot, "remarks", record.storyIdea.remarks ?? ""),
+    freshTwist: snapshotString(snapshot, "freshTwist", record.storyIdea.freshTwist ?? ""),
+    synopsis: snapshotString(snapshot, "coreSynopsis", record.storyIdea.coreSynopsis ?? ""),
     authorId: record.authorId.toString(),
     authorName: userName(record.author),
     editorId: record.editorId.toString(),
@@ -333,7 +417,7 @@ function serializePreissue(record: PreissueRecord) {
   }
 }
 
-function serializeStoryIdea(record: StoryIdeaRecord) {
+function serializeStoryIdea(record: StoryIdeaRecord): SiItem {
   const preissues = record.preissues.map((preissue) =>
     serializePreissue({
       ...preissue,
@@ -368,6 +452,7 @@ function serializeStoryIdea(record: StoryIdeaRecord) {
     currentVersionNo: record.currentVersionNo,
     latestVersionId: record.latestVersionId?.toString(),
     preissues,
+    versions: record.versions.map((version) => serializeSiVersion(version, record.currentVersionNo)),
   }
 }
 
@@ -636,6 +721,139 @@ export async function listStoryIdeas(actor: ApiCurrentUser, filters: SiListFilte
   return {
     items: items.map(serializeStoryIdea),
     total: items.length,
+  }
+}
+
+export async function listBoundAuthors(actor: ApiCurrentUser) {
+  if (actor.role !== "editor") {
+    throw new ApiError({
+      status: 403,
+      code: "FORBIDDEN",
+      message: "只有编辑可以查看绑定作者",
+    })
+  }
+
+  const bindings = await prisma.editorAuthorBinding.findMany({
+    where: {
+      editorId: actor.userId,
+      status: "active",
+      author: {
+        role: "author",
+        status: "active",
+      },
+    },
+    include: {
+      author: {
+        select: {
+          userId: true,
+          username: true,
+          displayName: true,
+        },
+      },
+    },
+    orderBy: {
+      boundAt: "desc",
+    },
+  })
+
+  // 预发弹窗只需要稳定的 id/name，避免把绑定关系表结构泄漏给客户端。
+  return {
+    authors: bindings.map((binding) => ({
+      id: binding.authorId.toString(),
+      name: userName(binding.author),
+    })),
+  }
+}
+
+export async function listSiPreissues(actor: ApiCurrentUser, filters: PreissueListFilters = {}) {
+  const dbStatus = toDbPreissueStatus(filters.status)
+  const keyword = trimToNull(filters.keyword)
+  const authorId =
+    filters.authorId && filters.authorId !== "all"
+      ? parseBigIntId(filters.authorId, "作者 ID")
+      : null
+
+  if (actor.role === "author" && dbStatus === "recalled") {
+    return {
+      records: [],
+      total: 0,
+    }
+  }
+
+  const records = await prisma.siPreissue.findMany({
+    where: {
+      ...(actor.role === "author"
+        ? {
+            authorId: actor.userId,
+            // 作者端必须隐藏已收回记录；这是业务要求，不交给前端自行过滤。
+            status: dbStatus ? (dbStatus as PreissueRecord["status"]) : { not: "recalled" },
+          }
+        : actor.role === "editor"
+          ? {
+              editorId: actor.userId,
+              ...(dbStatus ? { status: dbStatus as PreissueRecord["status"] } : {}),
+            }
+          : {
+              ...(dbStatus ? { status: dbStatus as PreissueRecord["status"] } : {}),
+            }),
+      ...(authorId ? { authorId } : {}),
+      ...(keyword
+        ? {
+            storyIdea: {
+              title: {
+                contains: keyword,
+              },
+            },
+          }
+        : {}),
+    },
+    include: preissueInclude,
+    orderBy: {
+      preissuedAt: "desc",
+    },
+  })
+
+  return {
+    records: records.map(serializePreissue),
+    total: records.length,
+  }
+}
+
+export async function getSiPreissue(actor: ApiCurrentUser, recordIdValue: string) {
+  const preissueId = parseBigIntId(recordIdValue, "预发记录 ID")
+  const record = await prisma.siPreissue.findUnique({
+    where: {
+      preissueId,
+    },
+    include: preissueInclude,
+  })
+
+  if (!record) {
+    throw new ApiError({
+      status: 404,
+      code: "PREISSUE_NOT_FOUND",
+      message: "预发记录不存在",
+    })
+  }
+
+  if (actor.role === "author" && (record.authorId !== actor.userId || record.status === "recalled")) {
+    throw new ApiError({
+      status: 404,
+      code: "PREISSUE_NOT_FOUND",
+      message: "预发记录不存在",
+    })
+  }
+
+  if (actor.role === "editor" && record.editorId !== actor.userId) {
+    throw new ApiError({
+      status: 403,
+      code: "FORBIDDEN",
+      message: "无权查看该预发记录",
+    })
+  }
+
+  return {
+    record: serializePreissue(record),
   }
 }
 

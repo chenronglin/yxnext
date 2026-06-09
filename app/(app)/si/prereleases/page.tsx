@@ -1,10 +1,21 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
+
 import { PageHeader } from "@/components/page-header"
-import { Card } from "@/components/ui/card"
+import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
+import { Card } from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -21,40 +32,137 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { fetchJson } from "@/lib/api"
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from "@/components/ui/dialog"
-import { StatusBadge } from "@/components/status-badge"
-import {
-  PRERELEASE_RECORDS,
   PRERELEASE_STATUS_LABELS,
   PRERELEASE_STATUS_TONE,
-  BOUND_AUTHORS,
-  type PrereleaseStatus,
+  type BoundAuthor,
   type PrereleaseRecord,
-} from "@/mocks/si-data"
-import { Search, Eye, Undo2, ArrowRightCircle, ExternalLink, AlertTriangle } from "lucide-react"
+  type PrereleaseStatus,
+} from "@/types/si"
+import { AlertTriangle, ArrowRightCircle, ExternalLink, Eye, Search, Undo2 } from "lucide-react"
+
+type BoundAuthorsResponse = {
+  authors: BoundAuthor[]
+}
+
+type PreissueListResponse = {
+  records: PrereleaseRecord[]
+}
+
+type ConvertProjectResponse = {
+  project: {
+    projectId: string
+  }
+}
 
 export default function PrereleaseRecordsPage() {
+  const router = useRouter()
+  const [records, setRecords] = useState<PrereleaseRecord[]>([])
+  const [authors, setAuthors] = useState<BoundAuthor[]>([])
+  const [loading, setLoading] = useState(true)
   const [keyword, setKeyword] = useState("")
   const [author, setAuthor] = useState("all")
   const [status, setStatus] = useState<PrereleaseStatus | "all">("all")
   const [withdrawTarget, setWithdrawTarget] = useState<PrereleaseRecord | null>(null)
   const [convertTarget, setConvertTarget] = useState<PrereleaseRecord | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+  const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null)
+
+  async function loadPageData() {
+    // 预发记录页依赖两份数据：记录列表本身，以及筛选下拉里展示的绑定作者列表。
+    setLoading(true)
+    setMessage(null)
+
+    try {
+      const [recordsResponse, authorsResponse] = await Promise.all([
+        fetchJson<PreissueListResponse>("/api/si-prepublish"),
+        fetchJson<BoundAuthorsResponse>("/api/si/bound-authors"),
+      ])
+
+      setRecords(recordsResponse.records)
+      setAuthors(authorsResponse.authors)
+    } catch (error) {
+      setMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "预发记录读取失败",
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void loadPageData()
+  }, [])
 
   const filtered = useMemo(() => {
-    return PRERELEASE_RECORDS.filter((r) => {
-      if (keyword && !r.siTitle.includes(keyword)) return false
-      if (author !== "all" && r.authorId !== author) return false
-      if (status !== "all" && r.status !== status) return false
+    return records.filter((record) => {
+      if (keyword && !record.siTitle.includes(keyword)) return false
+      if (author !== "all" && record.authorId !== author) return false
+      if (status !== "all" && record.status !== status) return false
       return true
     })
-  }, [keyword, author, status])
+  }, [records, keyword, author, status])
+
+  async function handleWithdraw() {
+    if (!withdrawTarget || submitting) return
+
+    setSubmitting(true)
+    setMessage(null)
+
+    try {
+      // 收回完成后重新取数，确保状态、条数和筛选结果都与数据库保持一致。
+      await fetchJson(`/api/si-prepublish/${withdrawTarget.recordId}/withdraw`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({}),
+      })
+
+      setMessage({
+        type: "success",
+        text: "预发记录已收回",
+      })
+      setWithdrawTarget(null)
+      await loadPageData()
+    } catch (error) {
+      setMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "收回失败，请稍后重试",
+      })
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function handleConvert() {
+    if (!convertTarget || submitting) return
+
+    setSubmitting(true)
+    setMessage(null)
+
+    try {
+      // 转项目成功后直接进入项目页；项目创建细节不在前端拼装。
+      const response = await fetchJson<ConvertProjectResponse>(
+        `/api/si-prepublish/${convertTarget.recordId}/convert-to-project`,
+        {
+          method: "POST",
+        },
+      )
+
+      setConvertTarget(null)
+      router.push(`/projects/${response.project.projectId}`)
+      router.refresh()
+    } catch (error) {
+      setMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "转项目失败，请稍后重试",
+      })
+      setSubmitting(false)
+    }
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -64,13 +172,24 @@ export default function PrereleaseRecordsPage() {
         description="查看你发出的所有 SI 预发记录，并执行收回、确认转项目等操作"
       />
 
-      {/* 筛选 */}
+      {message && (
+        <div
+          className={
+            message.type === "error"
+              ? "rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600"
+              : "rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"
+          }
+        >
+          {message.text}
+        </div>
+      )}
+
       <Card className="flex flex-col gap-3 p-4 lg:flex-row lg:items-center">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={keyword}
-            onChange={(e) => setKeyword(e.target.value)}
+            onChange={(event) => setKeyword(event.target.value)}
             placeholder="搜索 SI 标题"
             className="pl-9"
           />
@@ -78,30 +197,26 @@ export default function PrereleaseRecordsPage() {
         <div className="flex flex-wrap gap-3">
           <Select value={author} onValueChange={setAuthor}>
             <SelectTrigger className="w-36">
-              <SelectValue>
-                {author === "all" ? "全部作者" : BOUND_AUTHORS.find((a) => a.id === author)?.name}
-              </SelectValue>
+              <SelectValue>{author === "all" ? "全部作者" : authors.find((item) => item.id === author)?.name}</SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">全部作者</SelectItem>
-              {BOUND_AUTHORS.map((a) => (
-                <SelectItem key={a.id} value={a.id}>
-                  {a.name}
+              {authors.map((item) => (
+                <SelectItem key={item.id} value={item.id}>
+                  {item.name}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
-          <Select value={status} onValueChange={(v) => setStatus(v as PrereleaseStatus | "all")}>
+          <Select value={status} onValueChange={(value) => setStatus(value as PrereleaseStatus | "all")}>
             <SelectTrigger className="w-36">
-              <SelectValue>
-                {status === "all" ? "全部状态" : PRERELEASE_STATUS_LABELS[status]}
-              </SelectValue>
+              <SelectValue>{status === "all" ? "全部状态" : PRERELEASE_STATUS_LABELS[status]}</SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">全部状态</SelectItem>
-              {(Object.keys(PRERELEASE_STATUS_LABELS) as PrereleaseStatus[]).map((s) => (
-                <SelectItem key={s} value={s}>
-                  {PRERELEASE_STATUS_LABELS[s]}
+              {(Object.keys(PRERELEASE_STATUS_LABELS) as PrereleaseStatus[]).map((item) => (
+                <SelectItem key={item} value={item}>
+                  {PRERELEASE_STATUS_LABELS[item]}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -109,7 +224,6 @@ export default function PrereleaseRecordsPage() {
         </div>
       </Card>
 
-      {/* 记录表格 */}
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
           <Table>
@@ -125,65 +239,75 @@ export default function PrereleaseRecordsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filtered.length === 0 && (
+              {loading && (
+                <TableRow>
+                  <TableCell colSpan={7} className="py-10 text-center text-sm text-muted-foreground">
+                    正在加载预发记录...
+                  </TableCell>
+                </TableRow>
+              )}
+              {!loading && filtered.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={7} className="py-10 text-center text-sm text-muted-foreground">
                     暂无符合条件的预发记录
                   </TableCell>
                 </TableRow>
               )}
-              {filtered.map((r) => (
-                <TableRow key={r.id}>
-                  <TableCell className="font-medium text-foreground">{r.siTitle}</TableCell>
-                  <TableCell>{r.authorName}</TableCell>
-                  <TableCell className="hidden max-w-xs truncate text-muted-foreground md:table-cell">
-                    {r.note}
-                  </TableCell>
-                  <TableCell>
-                    <StatusBadge
-                      label={PRERELEASE_STATUS_LABELS[r.status]}
-                      tone={PRERELEASE_STATUS_TONE[r.status]}
-                    />
-                  </TableCell>
-                  <TableCell className="hidden text-muted-foreground lg:table-cell">{r.prereleasedAt}</TableCell>
-                  <TableCell>{r.projectName ? r.projectName : "—"}</TableCell>
-                  <TableCell>
-                    <div className="flex items-center justify-end gap-1.5">
-                      <Button asChild size="sm" variant="ghost" className="h-8 px-2">
-                        <Link href={`/si/${r.siId}`}>
-                          <Eye className="size-3.5" />
-                          <span className="sr-only">查看</span>
-                        </Link>
-                      </Button>
-                      {r.status === "active" && (
-                        <>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-8 bg-transparent px-2"
-                            onClick={() => setWithdrawTarget(r)}
-                          >
-                            <Undo2 className="mr-1 size-3.5" />
-                            收回
-                          </Button>
-                          <Button size="sm" className="h-8 px-2" onClick={() => setConvertTarget(r)}>
-                            <ArrowRightCircle className="mr-1 size-3.5" />
-                            转项目
-                          </Button>
-                        </>
-                      )}
-                      {r.status === "converted" && (
-                        <Button asChild size="sm" variant="outline" className="h-8 bg-transparent px-2">
-                          <Link href={`/projects/${r.projectId}`}>
-                            <ExternalLink className="mr-1 size-3.5" />
-                            进入项目
+              {!loading &&
+                filtered.map((record) => (
+                  <TableRow key={record.recordId}>
+                    <TableCell className="font-medium text-foreground">{record.siTitle}</TableCell>
+                    <TableCell>{record.authorName}</TableCell>
+                    <TableCell className="hidden max-w-xs truncate text-muted-foreground md:table-cell">
+                      {record.note || "—"}
+                    </TableCell>
+                    <TableCell>
+                      <StatusBadge
+                        label={PRERELEASE_STATUS_LABELS[record.status]}
+                        tone={PRERELEASE_STATUS_TONE[record.status]}
+                      />
+                    </TableCell>
+                    <TableCell className="hidden text-muted-foreground lg:table-cell">
+                      {new Date(record.prereleasedAt).toLocaleString("zh-CN")}
+                    </TableCell>
+                    <TableCell>{record.projectName ?? "—"}</TableCell>
+                    <TableCell>
+                      <div className="flex items-center justify-end gap-1.5">
+                        <Button asChild size="sm" variant="ghost" className="h-8 px-2">
+                          <Link href={`/si/${record.siId}`}>
+                            <Eye className="size-3.5" />
+                            <span className="sr-only">查看</span>
                           </Link>
                         </Button>
-                      )}
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
+                        {record.status === "active" && (
+                          <>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8 bg-transparent px-2"
+                              onClick={() => setWithdrawTarget(record)}
+                            >
+                              <Undo2 className="mr-1 size-3.5" />
+                              收回
+                            </Button>
+                            <Button size="sm" className="h-8 px-2" onClick={() => setConvertTarget(record)}>
+                              <ArrowRightCircle className="mr-1 size-3.5" />
+                              转项目
+                            </Button>
+                          </>
+                        )}
+                        {record.status === "converted" && record.projectId && (
+                          <Button asChild size="sm" variant="outline" className="h-8 bg-transparent px-2">
+                            <Link href={`/projects/${record.projectId}`}>
+                              <ExternalLink className="mr-1 size-3.5" />
+                              进入项目
+                            </Link>
+                          </Button>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
             </TableBody>
           </Table>
         </div>
@@ -193,8 +317,7 @@ export default function PrereleaseRecordsPage() {
         提示：确认转项目必须从某条预发记录发起，系统将自动创建项目并绑定来源 SI、编辑与作者，进入梗概阶段。已确认转项目的记录不可再次转项目，也不可收回。
       </p>
 
-      {/* 收回确认 */}
-      <Dialog open={!!withdrawTarget} onOpenChange={(o) => !o && setWithdrawTarget(null)}>
+      <Dialog open={Boolean(withdrawTarget)} onOpenChange={(open) => !open && setWithdrawTarget(null)}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -209,13 +332,14 @@ export default function PrereleaseRecordsPage() {
             <Button variant="outline" className="bg-transparent" onClick={() => setWithdrawTarget(null)}>
               取消
             </Button>
-            <Button onClick={() => setWithdrawTarget(null)}>确认收回</Button>
+            <Button disabled={submitting} onClick={() => void handleWithdraw()}>
+              {submitting ? "处理中..." : "确认收回"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* 转项目确认 */}
-      <Dialog open={!!convertTarget} onOpenChange={(o) => !o && setConvertTarget(null)}>
+      <Dialog open={Boolean(convertTarget)} onOpenChange={(open) => !open && setConvertTarget(null)}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>确认转项目</DialogTitle>
@@ -227,7 +351,9 @@ export default function PrereleaseRecordsPage() {
             <Button variant="outline" className="bg-transparent" onClick={() => setConvertTarget(null)}>
               取消
             </Button>
-            <Button onClick={() => setConvertTarget(null)}>确认转项目</Button>
+            <Button disabled={submitting} onClick={() => void handleConvert()}>
+              {submitting ? "处理中..." : "确认转项目"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
