@@ -4,7 +4,9 @@ import bcrypt from "bcryptjs"
 
 import { createUserSession, toCurrentUser } from "@/server/auth/session"
 import { prisma } from "@/server/db/prisma"
+import { ApiError } from "@/server/shared/api-response"
 import type { CurrentUser, UserStatus } from "@/types/domain"
+import type { RegisterAccountResult } from "@/types/account"
 
 type LoginInput = {
   account: string
@@ -15,6 +17,15 @@ type LoginResult = {
   currentUser: CurrentUser
   sessionId: string
   expiresAt: Date
+}
+
+type RegisterInput = {
+  username: string
+  name: string
+  role: "author" | "editor"
+  email: string
+  phone?: string | null
+  password: string
 }
 
 // 登录失败原因会映射成稳定的 HTTP 状态码和前端提示，不把数据库异常直接暴露给页面。
@@ -85,5 +96,108 @@ export async function loginWithPassword(input: LoginInput): Promise<LoginResult>
     currentUser: toCurrentUser(user),
     sessionId,
     expiresAt,
+  }
+}
+
+function trimToNull(value: string | null | undefined) {
+  const trimmed = value?.trim()
+  return trimmed ? trimmed : null
+}
+
+// 注册申请遵守当前数据库结构：
+// 1. email 是必填且唯一字段，因此这里只支持“带邮箱”的申请；
+// 2. status 默认写 pending，后续由管理员审批接口推进到 active/rejected。
+export async function registerPendingUser(input: RegisterInput): Promise<RegisterAccountResult> {
+  const username = input.username.trim()
+  const name = input.name.trim()
+  const email = input.email.trim().toLowerCase()
+  const phone = trimToNull(input.phone ?? null)
+
+  if (!username || !name || !email || !input.password) {
+    throw new ApiError({
+      status: 400,
+      code: "REGISTER_FIELDS_REQUIRED",
+      message: "注册信息不完整，请补全账号、笔名、邮箱和密码",
+    })
+  }
+
+  if (input.password.length < 6) {
+    throw new ApiError({
+      status: 400,
+      code: "REGISTER_PASSWORD_TOO_SHORT",
+      message: "密码长度不能少于 6 位",
+    })
+  }
+
+  const [usernameExists, emailExists] = await Promise.all([
+    prisma.user.findFirst({
+      where: {
+        username,
+      },
+      select: {
+        userId: true,
+      },
+    }),
+    prisma.user.findFirst({
+      where: {
+        email,
+      },
+      select: {
+        userId: true,
+      },
+    }),
+  ])
+
+  if (usernameExists) {
+    throw new ApiError({
+      status: 409,
+      code: "REGISTER_USERNAME_CONFLICT",
+      message: "该用户名已被使用",
+    })
+  }
+
+  if (emailExists) {
+    throw new ApiError({
+      status: 409,
+      code: "REGISTER_EMAIL_CONFLICT",
+      message: "该邮箱已被使用",
+    })
+  }
+
+  const passwordHash = await bcrypt.hash(input.password, 10)
+
+  const user = await prisma.user.create({
+    data: {
+      username,
+      displayName: name,
+      role: input.role,
+      email,
+      phone,
+      passwordHash,
+      status: "pending",
+    },
+    select: {
+      userId: true,
+      status: true,
+    },
+  })
+
+  await prisma.operationLog.create({
+    data: {
+      actorUserId: user.userId,
+      actorRole: input.role,
+      action: "auth.register",
+      entityType: "user",
+      entityId: user.userId,
+      afterJson: {
+        role: input.role,
+        status: user.status,
+      },
+    },
+  })
+
+  return {
+    userId: user.userId.toString(),
+    status: user.status,
   }
 }

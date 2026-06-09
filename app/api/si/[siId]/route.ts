@@ -1,7 +1,7 @@
 import { type NextRequest } from "next/server"
 import { z } from "zod"
 
-import { getStoryIdea, updateStoryIdea } from "@/server/modules/si/si.service"
+import { deleteStoryIdea, getStoryIdea, updateStoryIdea } from "@/server/modules/si/si.service"
 import { fail, ok } from "@/server/shared/api-response"
 import { requireApiCurrentUser } from "@/server/shared/current-user"
 
@@ -34,6 +34,18 @@ export async function PATCH(request: NextRequest, context: SiRouteContext) {
     const { siId } = await context.params
     const body = siPatchSchema.parse(await request.json().catch(() => ({})))
     const result = await updateStoryIdea(actor, siId, body)
+
+    return ok(result)
+  } catch (error) {
+    return fail(error)
+  }
+}
+
+export async function DELETE(request: NextRequest, context: SiRouteContext) {
+  try {
+    const actor = await requireApiCurrentUser(request)
+    const { siId } = await context.params
+    const result = await deleteStoryIdea(actor, siId)
 
     return ok(result)
   } catch (error) {

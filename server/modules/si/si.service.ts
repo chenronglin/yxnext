@@ -493,6 +493,28 @@ function readSnapshotString(snapshot: Prisma.JsonValue, key: string, fallback: s
   return fallback
 }
 
+function readSnapshotBigIntArray(snapshot: Prisma.JsonValue, key: string) {
+  const value = snapshotValue(snapshot, key)
+
+  if (!Array.isArray(value)) {
+    return []
+  }
+
+  return value
+    .map((item) => {
+      if (typeof item !== "string" && typeof item !== "number" && typeof item !== "bigint") {
+        return null
+      }
+
+      try {
+        return parseBigIntId(item, `${key} 项`)
+      } catch {
+        return null
+      }
+    })
+    .filter((item): item is bigint => item !== null)
+}
+
 function makeSynopsisDocContent(input: {
   title: string
   freshTwist: string | null
@@ -1640,5 +1662,378 @@ export async function convertSiPreissueToProject(actor: ApiCurrentUser, recordId
       synopsisDocId: result.docId.toString(),
     },
     record: serializePreissue(record),
+  }
+}
+
+export async function rollbackStoryIdeaVersion(
+  actor: ApiCurrentUser,
+  siIdValue: string,
+  versionIdValue: string,
+) {
+  const siId = parseBigIntId(siIdValue, "SI ID")
+  const versionId = parseBigIntId(versionIdValue, "版本 ID")
+
+  const result = await prisma.$transaction(async (tx) => {
+    const existing = await tx.storyIdea.findUnique({
+      where: {
+        siId,
+      },
+      include: {
+        mainType: true,
+        fitAuthors: true,
+      },
+    })
+
+    if (!existing) {
+      throw new ApiError({
+        status: 404,
+        code: "SI_NOT_FOUND",
+        message: "SI 不存在",
+      })
+    }
+
+    ensureCanManageSi(actor, existing)
+
+    if (existing.status === "converted" || existing.status === "archived") {
+      throw new ApiError({
+        status: 409,
+        code: "SI_ROLLBACK_FORBIDDEN",
+        message: "已转项目或已归档的 SI 不可回退版本",
+      })
+    }
+
+    const version = await tx.storyIdeaVersion.findFirst({
+      where: {
+        siVersionId: versionId,
+        siId,
+      },
+      select: {
+        siVersionId: true,
+        versionNo: true,
+        snapshotJson: true,
+      },
+    })
+
+    if (!version) {
+      throw new ApiError({
+        status: 404,
+        code: "SI_VERSION_NOT_FOUND",
+        message: "指定版本不存在",
+      })
+    }
+
+    const snapshot = version.snapshotJson
+    const title = readSnapshotString(snapshot, "title", existing.title)
+    const trope = trimToNull(snapshotString(snapshot, "trope", existing.trope ?? ""))
+    const fitAuthorNote = trimToNull(snapshotString(snapshot, "fitAuthorNote", existing.fitAuthorNote ?? ""))
+    const remarks = trimToNull(snapshotString(snapshot, "remarks", existing.remarks ?? ""))
+    const freshTwist = trimToNull(snapshotString(snapshot, "freshTwist", existing.freshTwist ?? ""))
+    const coreSynopsis = trimToNull(snapshotString(snapshot, "coreSynopsis", existing.coreSynopsis ?? ""))
+
+    if (!title || !coreSynopsis) {
+      throw new ApiError({
+        status: 409,
+        code: "SI_VERSION_SNAPSHOT_INVALID",
+        message: "目标版本快照缺少必要字段，无法回退",
+      })
+    }
+
+    const snapshotMainTypeIdRaw = snapshotValue(snapshot, "mainTypeId")
+    const snapshotMainTypeId =
+      typeof snapshotMainTypeIdRaw === "string" && /^\d+$/.test(snapshotMainTypeIdRaw)
+        ? parseBigIntId(snapshotMainTypeIdRaw, "主类型 ID")
+        : null
+    const snapshotMainTypeName = trimToNull(snapshotString(snapshot, "mainType", existing.mainType?.name ?? ""))
+
+    const mainType = snapshotMainTypeId
+      ? await tx.siMainType.findUnique({
+          where: {
+            mainTypeId: snapshotMainTypeId,
+          },
+        })
+      : await resolveMainType(
+          tx,
+          {
+            mainType: snapshotMainTypeName,
+          },
+          existing.mainTypeId,
+        )
+
+    if (!mainType) {
+      throw new ApiError({
+        status: 409,
+        code: "SI_VERSION_MAIN_TYPE_INVALID",
+        message: "目标版本对应的主类型不存在，无法回退",
+      })
+    }
+
+    const fitAuthorIds = readSnapshotBigIntArray(snapshot, "fitAuthorIds")
+    await validateFitAuthors(tx, fitAuthorIds)
+
+    const benchmarkBooksValue = snapshotValue(snapshot, "benchmarkBooks")
+    const normalizedBenchmark =
+      benchmarkBooksValue === undefined || benchmarkBooksValue === null
+        ? Prisma.DbNull
+        : (benchmarkBooksValue as Prisma.InputJsonValue)
+
+    const beforeSnapshot = makeSnapshot({
+      siId: existing.siId,
+      title: existing.title,
+      mainTypeId: existing.mainTypeId,
+      mainTypeName: existing.mainType?.name ?? null,
+      trope: existing.trope,
+      benchmarkBooks: existing.benchmarkBooks,
+      fitAuthorIds: existing.fitAuthors.map((item) => item.authorId),
+      fitAuthorNote: existing.fitAuthorNote,
+      remarks: existing.remarks,
+      freshTwist: existing.freshTwist,
+      coreSynopsis: existing.coreSynopsis,
+    })
+
+    const updated = await tx.storyIdea.update({
+      where: {
+        siId,
+      },
+      data: {
+        title,
+        mainTypeId: mainType.mainTypeId,
+        trope,
+        benchmarkBooks: normalizedBenchmark,
+        fitAuthorNote,
+        remarks,
+        freshTwist,
+        coreSynopsis,
+      },
+    })
+
+    await replaceFitAuthors(tx, siId, fitAuthorIds)
+
+    const rollbackSnapshot = makeSnapshot({
+      siId: updated.siId,
+      title: updated.title,
+      mainTypeId: updated.mainTypeId,
+      mainTypeName: mainType.name,
+      trope: updated.trope,
+      benchmarkBooks: benchmarkBooksValue === undefined ? null : (benchmarkBooksValue as Prisma.InputJsonValue | null),
+      fitAuthorIds,
+      fitAuthorNote: updated.fitAuthorNote,
+      remarks: updated.remarks,
+      freshTwist: updated.freshTwist,
+      coreSynopsis: updated.coreSynopsis,
+    })
+
+    const nextVersion = await tx.storyIdeaVersion.create({
+      data: {
+        siId,
+        versionNo: existing.currentVersionNo + 1,
+        action: "rollback",
+        snapshotJson: rollbackSnapshot,
+        editorId: actor.userId,
+        rollbackFromVersionId: version.siVersionId,
+        contentHash: hashJson(rollbackSnapshot),
+      },
+    })
+
+    await tx.storyIdea.update({
+      where: {
+        siId,
+      },
+      data: {
+        currentVersionNo: existing.currentVersionNo + 1,
+        latestVersionId: nextVersion.siVersionId,
+      },
+    })
+
+    await writeOperationLog(tx, {
+      actor,
+      action: "si.rollback",
+      entityType: "story_idea",
+      entityId: siId,
+      siId,
+      beforeJson: beforeSnapshot,
+      afterJson: rollbackSnapshot,
+      metadataJson: {
+        rollbackFromVersionId: version.siVersionId.toString(),
+        rollbackFromVersionNo: version.versionNo,
+      },
+    })
+
+    return siId
+  })
+
+  return getStoryIdea(actor, result.toString())
+}
+
+export async function archiveStoryIdea(actor: ApiCurrentUser, siIdValue: string) {
+  const siId = parseBigIntId(siIdValue, "SI ID")
+
+  const result = await prisma.$transaction(async (tx) => {
+    const existing = await tx.storyIdea.findUnique({
+      where: {
+        siId,
+      },
+      include: {
+        mainType: true,
+        fitAuthors: true,
+      },
+    })
+
+    if (!existing) {
+      throw new ApiError({
+        status: 404,
+        code: "SI_NOT_FOUND",
+        message: "SI 不存在",
+      })
+    }
+
+    ensureCanManageSi(actor, existing)
+
+    if (existing.status === "converted") {
+      throw new ApiError({
+        status: 409,
+        code: "SI_ARCHIVE_FORBIDDEN",
+        message: "已转项目的 SI 不可归档",
+      })
+    }
+
+    if (existing.status === "archived") {
+      throw new ApiError({
+        status: 409,
+        code: "SI_ALREADY_ARCHIVED",
+        message: "该 SI 已归档",
+      })
+    }
+
+    const beforeSnapshot = makeSnapshot({
+      siId: existing.siId,
+      title: existing.title,
+      mainTypeId: existing.mainTypeId,
+      mainTypeName: existing.mainType?.name ?? null,
+      trope: existing.trope,
+      benchmarkBooks: existing.benchmarkBooks,
+      fitAuthorIds: existing.fitAuthors.map((item) => item.authorId),
+      fitAuthorNote: existing.fitAuthorNote,
+      remarks: existing.remarks,
+      freshTwist: existing.freshTwist,
+      coreSynopsis: existing.coreSynopsis,
+    })
+
+    await tx.storyIdea.update({
+      where: {
+        siId,
+      },
+      data: {
+        status: "archived",
+        archivedAt: new Date(),
+      },
+    })
+
+    await writeOperationLog(tx, {
+      actor,
+      action: "si.archive",
+      entityType: "story_idea",
+      entityId: siId,
+      siId,
+      beforeJson: {
+        status: existing.status,
+      },
+      afterJson: {
+        status: "archived",
+      },
+      metadataJson: beforeSnapshot,
+    })
+
+    return siId
+  })
+
+  return getStoryIdea(actor, result.toString())
+}
+
+export async function deleteStoryIdea(actor: ApiCurrentUser, siIdValue: string) {
+  const siId = parseBigIntId(siIdValue, "SI ID")
+
+  await prisma.$transaction(async (tx) => {
+    const existing = await tx.storyIdea.findUnique({
+      where: {
+        siId,
+      },
+      include: {
+        mainType: true,
+        fitAuthors: true,
+      },
+    })
+
+    if (!existing) {
+      throw new ApiError({
+        status: 404,
+        code: "SI_NOT_FOUND",
+        message: "SI 不存在",
+      })
+    }
+
+    ensureCanManageSi(actor, existing)
+
+    if (existing.status === "converted") {
+      throw new ApiError({
+        status: 409,
+        code: "SI_DELETE_FORBIDDEN",
+        message: "已转项目的 SI 不可删除",
+      })
+    }
+
+    const relatedProject = await tx.project.findFirst({
+      where: {
+        sourceSiId: siId,
+      },
+      select: {
+        projectId: true,
+      },
+    })
+
+    if (relatedProject) {
+      throw new ApiError({
+        status: 409,
+        code: "SI_DELETE_FORBIDDEN",
+        message: "该 SI 已关联项目，不可删除",
+      })
+    }
+
+    const beforeSnapshot = makeSnapshot({
+      siId: existing.siId,
+      title: existing.title,
+      mainTypeId: existing.mainTypeId,
+      mainTypeName: existing.mainType?.name ?? null,
+      trope: existing.trope,
+      benchmarkBooks: existing.benchmarkBooks,
+      fitAuthorIds: existing.fitAuthors.map((item) => item.authorId),
+      fitAuthorNote: existing.fitAuthorNote,
+      remarks: existing.remarks,
+      freshTwist: existing.freshTwist,
+      coreSynopsis: existing.coreSynopsis,
+    })
+
+    await writeOperationLog(tx, {
+      actor,
+      action: "si.delete",
+      entityType: "story_idea",
+      entityId: siId,
+      siId,
+      beforeJson: beforeSnapshot,
+      afterJson: {
+        deleted: true,
+      },
+    })
+
+    // 删除动作的日志必须先写再删主记录；
+    // 否则 operation_logs.si_id 在插入时会引用一个已不存在的外键。
+    await tx.storyIdea.delete({
+      where: {
+        siId,
+      },
+    })
+  })
+
+  return {
+    ok: true,
   }
 }
