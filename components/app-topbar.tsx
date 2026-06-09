@@ -2,10 +2,11 @@
 
 import { useState } from "react"
 import Link from "next/link"
-import { Search, Bell, LogOut, ChevronDown, Menu, Languages } from "lucide-react"
+import { useRouter } from "next/navigation"
+import { Search, Bell, LogOut, Menu, Languages } from "lucide-react"
 import { useRole } from "@/components/role-provider"
 import { useSidebar } from "@/components/sidebar-provider"
-import { ROLE_LABELS, type Role } from "@/types/domain"
+import { ROLE_LABELS } from "@/types/domain"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import {
   DropdownMenu,
@@ -20,9 +21,27 @@ import {
 } from "@/components/ui/dropdown-menu"
 
 export function AppTopbar() {
-  const { user, role, setRole } = useRole()
+  const router = useRouter()
+  const { user, role } = useRole()
   const { collapsed, toggle } = useSidebar()
   const [lang, setLang] = useState("zh")
+  const [loggingOut, setLoggingOut] = useState(false)
+
+  async function handleLogout() {
+    if (loggingOut) return
+
+    setLoggingOut(true)
+
+    // 退出必须调用后端撤销 user_sessions，不能只做前端跳转。
+    await fetch("/api/auth/logout", {
+      method: "POST",
+    }).catch(() => {
+      // 即使网络异常，也跳回登录页；服务端布局会继续兜底检查 session 是否仍有效。
+    })
+
+    router.replace("/login")
+    router.refresh()
+  }
 
   return (
     <header className="flex h-16 shrink-0 items-center gap-4 border-b border-border bg-background px-4 md:px-6">
@@ -45,21 +64,9 @@ export function AppTopbar() {
         </div>
       </div>
 
-      {/* 演示用：角色切换器 */}
-      <DropdownMenu>
-        <DropdownMenuTrigger className="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:bg-secondary">
-          {ROLE_LABELS[role]}
-          <ChevronDown className="size-3.5" />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuRadioGroup value={role} onValueChange={(v) => setRole(v as Role)}>
-            <DropdownMenuLabel>切换演示角色</DropdownMenuLabel>
-            <DropdownMenuRadioItem value="admin">管理员</DropdownMenuRadioItem>
-            <DropdownMenuRadioItem value="editor">编辑</DropdownMenuRadioItem>
-            <DropdownMenuRadioItem value="author">作者</DropdownMenuRadioItem>
-          </DropdownMenuRadioGroup>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <span className="hidden rounded-md border border-border px-2.5 py-1.5 text-xs text-muted-foreground sm:inline-flex">
+        {ROLE_LABELS[role]}
+      </span>
 
       {/* 演示用：多语言切换器 */}
       <DropdownMenu>
@@ -105,11 +112,9 @@ export function AppTopbar() {
             <Link href="/settings">个人设置</Link>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem asChild>
-            <Link href="/login" className="text-destructive">
-              <LogOut className="mr-2 size-4" />
-              退出登录
-            </Link>
+          <DropdownMenuItem variant="destructive" onClick={() => void handleLogout()}>
+            <LogOut className="mr-2 size-4" />
+            {loggingOut ? "正在退出" : "退出登录"}
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

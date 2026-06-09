@@ -11,31 +11,62 @@ import { Label } from "@/components/ui/label"
 
 export default function LoginPage() {
   const router = useRouter()
-  const [username, setUsername] = useState("")
+  const [account, setAccount] = useState("")
   const [password, setPassword] = useState("")
   const [error, setError] = useState("")
+  const [submitting, setSubmitting] = useState(false)
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setError("")
-    if (!username.trim() || !password.trim()) {
+
+    if (!account.trim() || !password.trim()) {
       setError("请输入账号和密码")
       return
     }
-    // 演示：依据账号前缀模拟不同账号状态跳转
-    if (username.startsWith("pending")) {
-      router.push("/account-status?status=pending")
-      return
+
+    setSubmitting(true)
+
+    try {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        // 前端使用 account 字段，后端统一支持用户名或邮箱登录。
+        body: JSON.stringify({
+          account,
+          password,
+        }),
+      })
+
+      const result = (await response.json().catch(() => null)) as
+        | { message?: string; status?: string }
+        | null
+
+      if (!response.ok) {
+        // 待审批、已驳回、已禁用等状态由账号状态页承接，不留在登录表单里展示。
+        if (
+          response.status === 403 &&
+          result?.status &&
+          ["pending", "rejected", "disabled"].includes(result.status)
+        ) {
+          router.replace(`/account-status?status=${result.status}`)
+          return
+        }
+
+        setError(result?.message ?? "登录失败，请检查账号和密码")
+        return
+      }
+
+      // 登录成功后刷新服务端组件缓存，让 app 布局立刻读到新的 session cookie。
+      router.replace("/dashboard")
+      router.refresh()
+    } catch {
+      setError("网络异常，请稍后重试")
+    } finally {
+      setSubmitting(false)
     }
-    if (username.startsWith("rejected")) {
-      router.push("/account-status?status=rejected")
-      return
-    }
-    if (username.startsWith("disabled")) {
-      router.push("/account-status?status=disabled")
-      return
-    }
-    router.push("/dashboard")
   }
 
   return (
@@ -58,9 +89,10 @@ export default function LoginPage() {
             <Input
               id="username"
               placeholder="请输入登录账号"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
+              value={account}
+              onChange={(e) => setAccount(e.target.value)}
               autoComplete="username"
+              disabled={submitting}
             />
           </div>
 
@@ -78,11 +110,12 @@ export default function LoginPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               autoComplete="current-password"
+              disabled={submitting}
             />
           </div>
 
-          <Button type="submit" className="mt-2 w-full">
-            登录
+          <Button type="submit" className="mt-2 w-full" disabled={submitting}>
+            {submitting ? "登录中..." : "登录"}
           </Button>
 
           <p className="text-center text-sm text-muted-foreground">
@@ -91,12 +124,6 @@ export default function LoginPage() {
               注册申请
             </Link>
           </p>
-
-          <div className="rounded-md bg-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-            演示提示：使用 <code className="font-mono">pending</code> /{" "}
-            <code className="font-mono">rejected</code> / <code className="font-mono">disabled</code>{" "}
-            开头的账号可预览不同账号状态页。
-          </div>
         </form>
       </CardContent>
     </Card>

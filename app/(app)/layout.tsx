@@ -1,12 +1,22 @@
 import type { ReactNode } from "react"
+import { redirect } from "next/navigation"
+
 import { RoleProvider } from "@/components/role-provider"
 import { SidebarProvider } from "@/components/sidebar-provider"
 import { AppSidebar } from "@/components/app-sidebar"
 import { AppTopbar } from "@/components/app-topbar"
+import { getCurrentUser } from "@/server/auth/session"
 
-export default function AppLayout({ children }: { children: ReactNode }) {
+export default async function AppLayout({ children }: { children: ReactNode }) {
+  const currentUser = await getCurrentUser()
+
+  // app 分组内的页面都属于登录后后台；没有有效 session 时在服务端拦截，避免页面闪现。
+  if (!currentUser) {
+    redirect("/login")
+  }
+
   return (
-    <RoleProvider>
+    <RoleProvider initialUser={currentUser}>
       <SidebarProvider>
         <div className="flex h-screen overflow-hidden bg-background">
           <AppSidebar />

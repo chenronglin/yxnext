@@ -6,7 +6,24 @@ import { Select as SelectPrimitive } from "@base-ui/react/select"
 import { cn } from "@/lib/utils"
 import { ChevronDownIcon, CheckIcon, ChevronUpIcon } from "lucide-react"
 
-const Select = SelectPrimitive.Root
+type SelectProps = Omit<SelectPrimitive.Root.Props<string>, "multiple" | "onValueChange"> & {
+  multiple?: false
+  onValueChange?: (value: string) => void
+}
+
+function Select({ onValueChange, ...props }: SelectProps) {
+  return (
+    <SelectPrimitive.Root<string>
+      // Base UI 的 value 允许为 null；当前业务筛选器都是字符串选项，因此在 UI 组件层过滤空值。
+      onValueChange={(value) => {
+        if (value !== null) {
+          onValueChange?.(value)
+        }
+      }}
+      {...props}
+    />
+  )
+}
 
 function SelectGroup({ className, ...props }: SelectPrimitive.Group.Props) {
   return (
