@@ -14,6 +14,7 @@ type UpdateAccountProfileInput = {
   name?: string
   email?: string
   phone?: string | null
+  biography?: string | null
   avatarUrl?: string | null
 }
 
@@ -39,6 +40,7 @@ function toAccountProfile(user: {
   status: "active" | "disabled" | "pending" | "rejected"
   email: string
   phone: string | null
+  biography: string | null
   avatarUrl: string | null
 }): AccountProfile {
   return {
@@ -49,6 +51,7 @@ function toAccountProfile(user: {
     status: user.status,
     email: user.email,
     phone: user.phone,
+    biography: user.biography,
     avatarUrl: user.avatarUrl,
   }
 }
@@ -91,6 +94,7 @@ export async function getAccountProfile(actor: ApiCurrentUser) {
       status: true,
       email: true,
       phone: true,
+      biography: true,
       avatarUrl: true,
     },
   })
@@ -112,6 +116,7 @@ export async function updateAccountProfile(actor: ApiCurrentUser, input: UpdateA
   const nextName = trimToNull(input.name)
   const nextEmail = trimToNull(input.email)
   const nextPhone = trimToNull(input.phone ?? null)
+  const nextBiography = trimToNull(input.biography ?? null)
   const nextAvatarUrl = trimToNull(input.avatarUrl ?? null)
 
   const existing = await prisma.user.findUnique({
@@ -124,6 +129,7 @@ export async function updateAccountProfile(actor: ApiCurrentUser, input: UpdateA
       displayName: true,
       email: true,
       phone: true,
+      biography: true,
       avatarUrl: true,
       role: true,
       status: true,
@@ -169,6 +175,7 @@ export async function updateAccountProfile(actor: ApiCurrentUser, input: UpdateA
         displayName: nextName ?? existing.displayName,
         email: nextEmail ?? existing.email,
         phone: input.phone !== undefined ? nextPhone : existing.phone,
+        biography: input.biography !== undefined ? nextBiography : existing.biography,
         avatarUrl: input.avatarUrl !== undefined ? nextAvatarUrl : existing.avatarUrl,
       },
     })
@@ -181,12 +188,14 @@ export async function updateAccountProfile(actor: ApiCurrentUser, input: UpdateA
         displayName: existing.displayName,
         email: existing.email,
         phone: existing.phone,
+        biography: existing.biography,
         avatarUrl: existing.avatarUrl,
       },
       afterJson: {
         displayName: nextName ?? existing.displayName,
         email: nextEmail ?? existing.email,
         phone: input.phone !== undefined ? nextPhone : existing.phone,
+        biography: input.biography !== undefined ? nextBiography : existing.biography,
         avatarUrl: input.avatarUrl !== undefined ? nextAvatarUrl : existing.avatarUrl,
       },
     })

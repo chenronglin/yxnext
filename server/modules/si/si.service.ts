@@ -15,8 +15,6 @@ type SiInput = {
   mainTypeId?: string | number | bigint | null
   mainType?: string | null
   trope?: string | string[] | null
-  benchmark?: string | null
-  benchmarkBooks?: unknown
   fitAuthorNote?: string | null
   remark?: string | null
   remarks?: string | null
@@ -265,31 +263,6 @@ function toDbPreissueStatus(status: string | null | undefined) {
   })
 }
 
-function benchmarkToLabel(value: Prisma.JsonValue | null) {
-  if (!value) return ""
-
-  if (typeof value === "string") {
-    return value
-  }
-
-  if (Array.isArray(value)) {
-    return value
-      .map((item) => {
-        if (typeof item === "string") return item
-        if (item && typeof item === "object" && "title" in item) return String(item.title ?? "")
-        return ""
-      })
-      .filter(Boolean)
-      .join("、")
-  }
-
-  if (typeof value === "object" && "title" in value) {
-    return String(value.title ?? "")
-  }
-
-  return ""
-}
-
 function snapshotValue(snapshot: Prisma.JsonValue, key: string) {
   if (snapshot && typeof snapshot === "object" && !Array.isArray(snapshot) && key in snapshot) {
     return snapshot[key]
@@ -301,11 +274,6 @@ function snapshotValue(snapshot: Prisma.JsonValue, key: string) {
 function snapshotString(snapshot: Prisma.JsonValue, key: string, fallback = "") {
   const value = snapshotValue(snapshot, key)
   return typeof value === "string" ? value : fallback
-}
-
-function snapshotBenchmarkToLabel(snapshot: Prisma.JsonValue, fallback: Prisma.JsonValue | null) {
-  const value = snapshotValue(snapshot, "benchmarkBooks")
-  return benchmarkToLabel(value === undefined ? fallback : (value as Prisma.JsonValue | null))
 }
 
 function serializeSiVersion(
@@ -330,33 +298,6 @@ function serializeSiVersion(
     freshTwist: snapshotString(version.snapshotJson, "freshTwist"),
     synopsis: snapshotString(version.snapshotJson, "coreSynopsis"),
   }
-}
-
-type NormalizedBenchmark = {
-  dbValue: Prisma.StoryIdeaCreateInput["benchmarkBooks"]
-  snapshotValue: Prisma.InputJsonValue | null
-}
-
-function normalizeBenchmark(input: SiInput, fallback: Prisma.JsonValue | null): NormalizedBenchmark {
-  if (input.benchmarkBooks !== undefined) {
-    return input.benchmarkBooks === null
-      ? { dbValue: Prisma.DbNull, snapshotValue: null }
-      : {
-          dbValue: input.benchmarkBooks as Prisma.InputJsonValue,
-          snapshotValue: input.benchmarkBooks as Prisma.InputJsonValue,
-        }
-  }
-
-  if (input.benchmark !== undefined) {
-    const benchmark = trimToNull(input.benchmark)
-    return benchmark
-      ? { dbValue: benchmark, snapshotValue: benchmark }
-      : { dbValue: Prisma.DbNull, snapshotValue: null }
-  }
-
-  return fallback === null
-    ? { dbValue: Prisma.DbNull, snapshotValue: null }
-    : { dbValue: fallback as Prisma.InputJsonValue, snapshotValue: fallback as Prisma.InputJsonValue }
 }
 
 function addDays(base: Date, days: number) {
@@ -398,7 +339,6 @@ function serializePreissue(record: PreissueRecord): PrereleaseRecord {
     title: snapshotString(snapshot, "title", record.storyIdea.title),
     mainType: snapshotString(snapshot, "mainType", record.storyIdea.mainType?.name ?? ""),
     trope: snapshotString(snapshot, "trope", record.storyIdea.trope ?? ""),
-    benchmark: snapshotBenchmarkToLabel(snapshot, record.storyIdea.benchmarkBooks),
     remark: snapshotString(snapshot, "remarks", record.storyIdea.remarks ?? ""),
     freshTwist: snapshotString(snapshot, "freshTwist", record.storyIdea.freshTwist ?? ""),
     synopsis: snapshotString(snapshot, "coreSynopsis", record.storyIdea.coreSynopsis ?? ""),
@@ -434,8 +374,6 @@ function serializeStoryIdea(record: StoryIdeaRecord): SiItem {
     mainTypeId: record.mainTypeId?.toString(),
     mainType: record.mainType?.name ?? "",
     trope: record.trope ?? "",
-    benchmark: benchmarkToLabel(record.benchmarkBooks),
-    benchmarkBooks: record.benchmarkBooks,
     authors: record.fitAuthors.map((item) => userName(item.author)),
     authorIds: record.fitAuthors.map((item) => item.authorId.toString()),
     remark: record.remarks ?? "",
@@ -462,7 +400,6 @@ function makeSnapshot(input: {
   mainTypeId: bigint | null
   mainTypeName: string | null
   trope: string | null
-  benchmarkBooks: Prisma.JsonValue | Prisma.InputJsonValue | null
   fitAuthorIds: bigint[]
   fitAuthorNote: string | null
   remarks: string | null
@@ -475,7 +412,6 @@ function makeSnapshot(input: {
     mainTypeId: input.mainTypeId?.toString() ?? null,
     mainType: input.mainTypeName,
     trope: input.trope,
-    benchmarkBooks: input.benchmarkBooks ?? null,
     fitAuthorIds: input.fitAuthorIds.map((id) => id.toString()),
     fitAuthorNote: input.fitAuthorNote,
     remarks: input.remarks,
@@ -939,13 +875,11 @@ export async function createStoryIdea(actor: ApiCurrentUser, input: SiInput) {
     const fitAuthorIds = uniqueBigIntIds(input.fitAuthorIds ?? input.authorIds ?? [], "作者 ID")
     await validateFitAuthors(tx, fitAuthorIds)
 
-    const benchmarkBooks = normalizeBenchmark(input, null)
     const storyIdea = await tx.storyIdea.create({
       data: {
         title,
         mainTypeId: mainType.mainTypeId,
         trope: normalizeTrope(input.trope),
-        benchmarkBooks: benchmarkBooks.dbValue,
         fitAuthorNote: trimToNull(input.fitAuthorNote ?? null),
         remarks: trimToNull(input.remarks ?? input.remark ?? null),
         freshTwist: trimToNull(input.freshTwist ?? null),
@@ -962,7 +896,6 @@ export async function createStoryIdea(actor: ApiCurrentUser, input: SiInput) {
       mainTypeId: storyIdea.mainTypeId,
       mainTypeName: mainType.name,
       trope: storyIdea.trope,
-      benchmarkBooks: benchmarkBooks.snapshotValue,
       fitAuthorIds,
       fitAuthorNote: storyIdea.fitAuthorNote,
       remarks: storyIdea.remarks,
@@ -1080,14 +1013,12 @@ export async function updateStoryIdea(actor: ApiCurrentUser, siIdValue: string, 
 
     await validateFitAuthors(tx, fitAuthorIds)
 
-    const benchmarkBooks = normalizeBenchmark(input, existing.benchmarkBooks)
     const beforeSnapshot = makeSnapshot({
       siId: existing.siId,
       title: existing.title,
       mainTypeId: existing.mainTypeId,
       mainTypeName: existing.mainType?.name ?? null,
       trope: existing.trope,
-      benchmarkBooks: existing.benchmarkBooks,
       fitAuthorIds: existing.fitAuthors.map((item) => item.authorId),
       fitAuthorNote: existing.fitAuthorNote,
       remarks: existing.remarks,
@@ -1103,7 +1034,6 @@ export async function updateStoryIdea(actor: ApiCurrentUser, siIdValue: string, 
         title: nextTitle,
         mainTypeId: mainType.mainTypeId,
         trope: input.trope === undefined ? existing.trope : normalizeTrope(input.trope),
-        benchmarkBooks: benchmarkBooks.dbValue,
         fitAuthorNote:
           input.fitAuthorNote === undefined ? existing.fitAuthorNote : trimToNull(input.fitAuthorNote),
         remarks:
@@ -1124,7 +1054,6 @@ export async function updateStoryIdea(actor: ApiCurrentUser, siIdValue: string, 
       mainTypeId: updated.mainTypeId,
       mainTypeName: mainType.name,
       trope: updated.trope,
-      benchmarkBooks: benchmarkBooks.snapshotValue,
       fitAuthorIds,
       fitAuthorNote: updated.fitAuthorNote,
       remarks: updated.remarks,
@@ -1247,7 +1176,6 @@ export async function prepublishStoryIdea(actor: ApiCurrentUser, siIdValue: stri
       mainTypeId: si.mainTypeId,
       mainTypeName: si.mainType?.name ?? null,
       trope: si.trope,
-      benchmarkBooks: si.benchmarkBooks,
       fitAuthorIds: si.fitAuthors.map((item) => item.authorId),
       fitAuthorNote: si.fitAuthorNote,
       remarks: si.remarks,
@@ -1770,19 +1698,12 @@ export async function rollbackStoryIdeaVersion(
     const fitAuthorIds = readSnapshotBigIntArray(snapshot, "fitAuthorIds")
     await validateFitAuthors(tx, fitAuthorIds)
 
-    const benchmarkBooksValue = snapshotValue(snapshot, "benchmarkBooks")
-    const normalizedBenchmark =
-      benchmarkBooksValue === undefined || benchmarkBooksValue === null
-        ? Prisma.DbNull
-        : (benchmarkBooksValue as Prisma.InputJsonValue)
-
     const beforeSnapshot = makeSnapshot({
       siId: existing.siId,
       title: existing.title,
       mainTypeId: existing.mainTypeId,
       mainTypeName: existing.mainType?.name ?? null,
       trope: existing.trope,
-      benchmarkBooks: existing.benchmarkBooks,
       fitAuthorIds: existing.fitAuthors.map((item) => item.authorId),
       fitAuthorNote: existing.fitAuthorNote,
       remarks: existing.remarks,
@@ -1798,7 +1719,6 @@ export async function rollbackStoryIdeaVersion(
         title,
         mainTypeId: mainType.mainTypeId,
         trope,
-        benchmarkBooks: normalizedBenchmark,
         fitAuthorNote,
         remarks,
         freshTwist,
@@ -1814,7 +1734,6 @@ export async function rollbackStoryIdeaVersion(
       mainTypeId: updated.mainTypeId,
       mainTypeName: mainType.name,
       trope: updated.trope,
-      benchmarkBooks: benchmarkBooksValue === undefined ? null : (benchmarkBooksValue as Prisma.InputJsonValue | null),
       fitAuthorIds,
       fitAuthorNote: updated.fitAuthorNote,
       remarks: updated.remarks,
@@ -1910,7 +1829,6 @@ export async function archiveStoryIdea(actor: ApiCurrentUser, siIdValue: string)
       mainTypeId: existing.mainTypeId,
       mainTypeName: existing.mainType?.name ?? null,
       trope: existing.trope,
-      benchmarkBooks: existing.benchmarkBooks,
       fitAuthorIds: existing.fitAuthors.map((item) => item.authorId),
       fitAuthorNote: existing.fitAuthorNote,
       remarks: existing.remarks,
@@ -2004,7 +1922,6 @@ export async function deleteStoryIdea(actor: ApiCurrentUser, siIdValue: string) 
       mainTypeId: existing.mainTypeId,
       mainTypeName: existing.mainType?.name ?? null,
       trope: existing.trope,
-      benchmarkBooks: existing.benchmarkBooks,
       fitAuthorIds: existing.fitAuthors.map((item) => item.authorId),
       fitAuthorNote: existing.fitAuthorNote,
       remarks: existing.remarks,

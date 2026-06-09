@@ -1,6 +1,7 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
+
 import { useRole } from "@/components/role-provider"
 import { ROLE_LABELS } from "@/types/domain"
 import { PageHeader } from "@/components/page-header"
@@ -10,17 +11,153 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { StatusBadge } from "@/components/status-badge"
+import { Textarea } from "@/components/ui/textarea"
+import { fetchJson } from "@/lib/api"
+import type { AccountBindingInfo, AccountProfile } from "@/types/account"
+
+type ProfileResponse = {
+  profile: AccountProfile
+}
+
+type BindingsResponse = {
+  bindings: AccountBindingInfo
+}
 
 export default function SettingsPage() {
   const { user, role } = useRole()
-  const [contact, setContact] = useState({ phone: user.phone ?? "", email: user.email })
+  const [profile, setProfile] = useState<AccountProfile | null>(null)
+  const [bindings, setBindings] = useState<AccountBindingInfo | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [savingProfile, setSavingProfile] = useState(false)
+  const [savingPassword, setSavingPassword] = useState(false)
+  const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null)
+  const [contact, setContact] = useState({ phone: user.phone ?? "", email: user.email, biography: "" })
+  const [passwordForm, setPasswordForm] = useState({
+    oldPassword: "",
+    newPassword: "",
+    confirmPassword: "",
+  })
+
+  useEffect(() => {
+    async function loadData() {
+      setLoading(true)
+      setMessage(null)
+
+      try {
+        // 个人设置页需要同时拿到可编辑资料和绑定摘要，前端不再用假数据拼接。
+        const [profileResponse, bindingsResponse] = await Promise.all([
+          fetchJson<ProfileResponse>("/api/account/profile"),
+          fetchJson<BindingsResponse>("/api/account/bindings"),
+        ])
+
+        setProfile(profileResponse.profile)
+        setBindings(bindingsResponse.bindings)
+        setContact({
+          phone: profileResponse.profile.phone ?? "",
+          email: profileResponse.profile.email,
+          biography: profileResponse.profile.biography ?? "",
+        })
+      } catch (requestError) {
+        setMessage({
+          type: "error",
+          text: requestError instanceof Error ? requestError.message : "个人设置读取失败",
+        })
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    void loadData()
+  }, [])
+
+  async function handleSaveProfile() {
+    setSavingProfile(true)
+    setMessage(null)
+
+    try {
+      const response = await fetchJson<ProfileResponse>("/api/account/profile", {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          email: contact.email,
+          phone: contact.phone || null,
+          biography: contact.biography || null,
+        }),
+      })
+
+      setProfile(response.profile)
+      setContact({
+        phone: response.profile.phone ?? "",
+        email: response.profile.email,
+        biography: response.profile.biography ?? "",
+      })
+      setMessage({
+        type: "success",
+        text: "个人资料已保存",
+      })
+    } catch (requestError) {
+      setMessage({
+        type: "error",
+        text: requestError instanceof Error ? requestError.message : "个人资料保存失败",
+      })
+    } finally {
+      setSavingProfile(false)
+    }
+  }
+
+  async function handleChangePassword() {
+    setSavingPassword(true)
+    setMessage(null)
+
+    try {
+      await fetchJson("/api/account/password", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(passwordForm),
+      })
+
+      setPasswordForm({
+        oldPassword: "",
+        newPassword: "",
+        confirmPassword: "",
+      })
+      setMessage({
+        type: "success",
+        text: "密码已更新",
+      })
+    } catch (requestError) {
+      setMessage({
+        type: "error",
+        text: requestError instanceof Error ? requestError.message : "密码更新失败",
+      })
+    } finally {
+      setSavingPassword(false)
+    }
+  }
+
+  const displayName = profile?.name ?? user.name
 
   return (
     <div className="flex flex-col gap-6">
       <PageHeader breadcrumb={["个人设置"]} title="个人设置" description="维护个人信息、修改密码与查看绑定关系" />
 
+      {message && (
+        <div
+          className={
+            message.type === "error"
+              ? "rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600"
+              : "rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"
+          }
+        >
+          {message.text}
+        </div>
+      )}
+
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        {/* 基础信息 */}
         <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle className="text-base">基础信息</CardTitle>
@@ -30,24 +167,22 @@ export default function SettingsPage() {
             <div className="flex items-center gap-4">
               <Avatar className="size-16">
                 <AvatarFallback className="bg-primary text-lg text-primary-foreground">
-                  {user.name.slice(0, 1)}
+                  {displayName.slice(0, 1)}
                 </AvatarFallback>
               </Avatar>
               <div className="space-y-1.5">
                 <div className="flex items-center gap-2">
-                  <span className="text-base font-semibold text-foreground">{user.name}</span>
+                  <span className="text-base font-semibold text-foreground">{displayName}</span>
                   <StatusBadge label={ROLE_LABELS[role]} tone="info" />
                 </div>
-                <Button variant="outline" size="sm" className="bg-transparent">
-                  更换头像
-                </Button>
+                <p className="text-sm text-muted-foreground">{loading ? "正在加载资料..." : "个人资料已接入真实接口"}</p>
               </div>
             </div>
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="flex flex-col gap-2">
                 <Label>登录账号</Label>
-                <Input value={user.username} disabled />
+                <Input value={profile?.username ?? user.username} disabled />
               </div>
               <div className="flex flex-col gap-2">
                 <Label>角色</Label>
@@ -58,7 +193,8 @@ export default function SettingsPage() {
                 <Input
                   id="phone"
                   value={contact.phone}
-                  onChange={(e) => setContact((c) => ({ ...c, phone: e.target.value }))}
+                  onChange={(event) => setContact((current) => ({ ...current, phone: event.target.value }))}
+                  disabled={loading || savingProfile}
                 />
               </div>
               <div className="flex flex-col gap-2">
@@ -66,65 +202,103 @@ export default function SettingsPage() {
                 <Input
                   id="email"
                   value={contact.email}
-                  onChange={(e) => setContact((c) => ({ ...c, email: e.target.value }))}
+                  onChange={(event) => setContact((current) => ({ ...current, email: event.target.value }))}
+                  disabled={loading || savingProfile}
                 />
               </div>
             </div>
 
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="biography">个人简介</Label>
+              <Textarea
+                id="biography"
+                rows={4}
+                value={contact.biography}
+                onChange={(event) => setContact((current) => ({ ...current, biography: event.target.value }))}
+                disabled={loading || savingProfile}
+                placeholder="可填写擅长题材、个人经历或协作偏好"
+              />
+            </div>
+
             <div className="flex justify-end">
-              <Button>保存修改</Button>
+              <Button disabled={loading || savingProfile} onClick={() => void handleSaveProfile()}>
+                {savingProfile ? "保存中..." : "保存修改"}
+              </Button>
             </div>
           </CardContent>
         </Card>
 
-        {/* 绑定信息 */}
         <Card>
           <CardHeader>
             <CardTitle className="text-base">绑定信息</CardTitle>
             <CardDescription>展示当前协作绑定关系</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4 text-sm">
-            {role === "author" && (
-              <div className="flex items-center justify-between rounded-md border border-border px-3 py-2.5">
-                <span className="text-muted-foreground">负责编辑</span>
-                <span className="font-medium text-foreground">林编辑</span>
-              </div>
+            {loading && <p className="text-muted-foreground">正在加载绑定信息...</p>}
+            {!loading && bindings?.role === "author" && (
+              <>
+                {bindings.editors.length === 0 && <p className="text-muted-foreground">当前没有绑定编辑。</p>}
+                {bindings.editors.map((editor) => (
+                  <div key={editor.id} className="flex items-center justify-between rounded-md border border-border px-3 py-2.5">
+                    <span className="text-muted-foreground">负责编辑</span>
+                    <span className="font-medium text-foreground">{editor.name}</span>
+                  </div>
+                ))}
+              </>
             )}
-            {role === "editor" && (
+            {!loading && bindings?.role === "editor" && (
               <div className="flex items-center justify-between rounded-md border border-border px-3 py-2.5">
                 <span className="text-muted-foreground">绑定作者数量</span>
-                <span className="font-medium text-foreground">8 位</span>
+                <span className="font-medium text-foreground">{bindings.authorCount} 位</span>
               </div>
             )}
-            {role === "admin" && (
+            {!loading && bindings?.role === "admin" && (
               <p className="text-muted-foreground">管理员账号不参与编辑-作者绑定关系。</p>
             )}
           </CardContent>
         </Card>
 
-        {/* 修改密码 */}
         <Card className="lg:col-span-3">
           <CardHeader>
             <CardTitle className="text-base">修改密码</CardTitle>
-            <CardDescription>管理员重置密码在用户管理页面完成，不在此处操作</CardDescription>
+            <CardDescription>管理员重置密码在用户管理页面完成，本页只处理当前登录用户自助修改</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
               <div className="flex flex-col gap-2">
                 <Label htmlFor="old">旧密码</Label>
-                <Input id="old" type="password" />
+                <Input
+                  id="old"
+                  type="password"
+                  value={passwordForm.oldPassword}
+                  onChange={(event) => setPasswordForm((current) => ({ ...current, oldPassword: event.target.value }))}
+                />
               </div>
               <div className="flex flex-col gap-2">
                 <Label htmlFor="new">新密码</Label>
-                <Input id="new" type="password" />
+                <Input
+                  id="new"
+                  type="password"
+                  value={passwordForm.newPassword}
+                  onChange={(event) => setPasswordForm((current) => ({ ...current, newPassword: event.target.value }))}
+                />
               </div>
               <div className="flex flex-col gap-2">
                 <Label htmlFor="confirm">确认新密码</Label>
-                <Input id="confirm" type="password" />
+                <Input
+                  id="confirm"
+                  type="password"
+                  value={passwordForm.confirmPassword}
+                  onChange={(event) =>
+                    setPasswordForm((current) => ({ ...current, confirmPassword: event.target.value }))
+                  }
+                />
               </div>
             </div>
             <div className="mt-5 flex justify-end">
-              <Button>更新密码</Button>
+              <Button disabled={savingPassword} onClick={() => void handleChangePassword()}>
+                {savingPassword ? "更新中..." : "更新密码"}
+              </Button>
             </div>
           </CardContent>
         </Card>

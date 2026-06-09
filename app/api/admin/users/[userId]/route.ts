@@ -14,6 +14,8 @@ const managedUserSchema = z.object({
   role: z.enum(["admin", "editor", "author"]).optional(),
   email: z.string().optional(),
   phone: z.string().optional().nullable(),
+  // 用户治理编辑和创建保持同一字段集，避免 biography 在不同入口缺失。
+  biography: z.string().optional().nullable(),
   password: z.string().optional(),
 })
 

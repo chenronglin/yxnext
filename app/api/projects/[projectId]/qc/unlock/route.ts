@@ -4,7 +4,7 @@ import { unlockProjectQc } from "@/server/modules/project/project.service"
 import { fail, ok } from "@/server/shared/api-response"
 import { requireApiCurrentUser } from "@/server/shared/current-user"
 
-// 全文质检解锁会创建/初始化 Release Doc、写来源快照并推进项目阶段，必须走事务。
+// 质检解锁会创建/初始化 Release Doc、写来源快照并推进项目阶段，必须走事务。
 export const runtime = "nodejs"
 
 type QcUnlockRouteContext = {

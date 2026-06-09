@@ -53,7 +53,6 @@ export interface SiItem {
   title: string
   mainType: string
   trope: string
-  benchmark: string
   authors: string[]
   remark: string
   freshTwist: string
@@ -81,7 +80,6 @@ export const SI_LIST: SiItem[] = [
     title: "都市修真：外卖小哥的逆袭",
     mainType: "玄幻奇幻",
     trope: "马甲爽文 / 扮猪吃虎",
-    benchmark: "《我的微信连三界》",
     authors: ["苏小白", "周野"],
     remark: "节奏要快，前三章必须出爽点。",
     freshTwist: "修真者重生为都市外卖员，靠送餐积累功德值重修仙途。",
@@ -99,7 +97,6 @@ export const SI_LIST: SiItem[] = [
     title: "长夜未央",
     mainType: "悬疑推理",
     trope: "双线叙事 / 暴风雪山庄",
-    benchmark: "《无人生还》",
     authors: ["云深"],
     remark: "强调氛围感与反转密度。",
     freshTwist: "凶手与侦探共享同一段被篡改的记忆。",
@@ -116,7 +113,6 @@ export const SI_LIST: SiItem[] = [
     title: "雾中灯塔",
     mainType: "现实题材",
     trope: "治愈 / 群像",
-    benchmark: "《岛上书店》",
     authors: [],
     remark: "",
     freshTwist: "一座废弃灯塔成为小镇居民的情感中转站。",
@@ -133,7 +129,6 @@ export const SI_LIST: SiItem[] = [
     title: "青衫记",
     mainType: "古代言情",
     trope: "先婚后爱 / 朝堂权谋",
-    benchmark: "《知否知否》",
     authors: ["顾辞"],
     remark: "已完结归档，备查。",
     freshTwist: "联姻新娘其实是敌国安插的细作，却在朝堂博弈中动了真情。",
@@ -214,7 +209,7 @@ export const SI_VERSIONS: SiVersion[] = [
     version: 2,
     savedBy: "林编辑",
     savedAt: "2026-06-03 16:42",
-    note: "调整主类型与对标书目。",
+    note: "调整主类型与核心卖点。",
     current: false,
     title: "都市修真：外卖小哥",
     mainType: "玄幻奇幻",
@@ -247,7 +242,6 @@ export interface AuthorSiView {
   title: string
   mainType: string
   trope: string
-  benchmark: string
   remark: string
   freshTwist: string
   synopsis: string
@@ -270,7 +264,6 @@ export const MY_SI_VIEWS: AuthorSiView[] = [
     title: "都市修真：外卖小哥的逆袭",
     mainType: "玄幻奇幻",
     trope: "马甲爽文 / 扮猪吃虎",
-    benchmark: "《我的微信连三界》",
     remark: "节奏要快，前三章必须出爽点。",
     freshTwist: "修真者重生为都市外卖员，靠送餐积累功德值重修仙途。",
     synopsis:
@@ -286,7 +279,6 @@ export const MY_SI_VIEWS: AuthorSiView[] = [
     title: "星海拾遗",
     mainType: "科幻末世",
     trope: "废土 / 拾荒者",
-    benchmark: "《球状闪电》",
     remark: "世界观需要扎实的科学设定。",
     freshTwist: "末世幸存者靠回收旧时代的记忆芯片维生，却逐渐拼凑出灾难真相。",
     synopsis: "全球数据网络崩溃后的第十年，一名记忆拾荒者在废墟中发现了一枚尚未损毁的核心芯片……",

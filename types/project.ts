@@ -18,9 +18,9 @@ export const PROJECT_LIFECYCLE_TONE: Record<ProjectLifecycle, BadgeTone> = {
 export const PROJECT_STAGE_TONE: Record<ProjectStage, BadgeTone> = {
   synopsis: "neutral",
   outline: "info",
-  manuscript: "info",
-  qc: "warning",
-  done: "success",
+  chapter: "info",
+  release: "warning",
+  completed: "success",
 }
 
 export const STAGE_PLAN_TONE: Record<StagePlanStatus, BadgeTone> = {
@@ -38,9 +38,11 @@ export const DOC_STATUS_TONE: Record<DocStatus, BadgeTone> = {
   approved: "success",
 }
 
-export type QcStatus = "locked" | "unlocked" | "draft" | "submitted" | "returned" | "approved"
+// 质检阶段在系统内部对应 release Doc；
+// 这里的状态既覆盖“未解锁/已解锁”，也覆盖 release Doc 自身的协作状态。
+export type ReleaseDocStatus = "locked" | "unlocked" | "draft" | "submitted" | "returned" | "approved"
 
-export const QC_STATUS_LABELS: Record<QcStatus, string> = {
+export const RELEASE_DOC_STATUS_LABELS: Record<ReleaseDocStatus, string> = {
   locked: "未解锁",
   unlocked: "已解锁",
   draft: "草稿",
@@ -49,7 +51,7 @@ export const QC_STATUS_LABELS: Record<QcStatus, string> = {
   approved: "审核通过",
 }
 
-export const QC_STATUS_TONE: Record<QcStatus, BadgeTone> = {
+export const RELEASE_DOC_STATUS_TONE: Record<ReleaseDocStatus, BadgeTone> = {
   locked: "neutral",
   unlocked: "info",
   draft: "neutral",
@@ -58,7 +60,8 @@ export const QC_STATUS_TONE: Record<QcStatus, BadgeTone> = {
   approved: "success",
 }
 
-export const STAGE_ORDER: ProjectStage[] = ["synopsis", "outline", "manuscript", "qc", "done"]
+// 阶段顺序直接复用数据库编码，页面中文文案由 PROJECT_STAGE_LABELS 负责映射。
+export const STAGE_ORDER: ProjectStage[] = ["synopsis", "outline", "chapter", "release", "completed"]
 
 export interface StagePlan {
   stage: ProjectStage
@@ -100,7 +103,7 @@ export interface ProjectItem {
   createdAt: string
   updatedAt: string
   finishedAt: string | null
-  qcStatus: QcStatus
+  releaseDocStatus: ReleaseDocStatus
   totalChapters: number
   approvedChapters: number
   stagePlans: StagePlan[]
@@ -176,8 +179,8 @@ export interface ReorderChapterInput {
   orderedDocIds: string[]
 }
 
-// 项目导出当前先明确支持的业务范围；格式虽然数据库设计同时支持 docx/markdown，
-// 但接口层会按当前后端实际能力返回可用格式。
-export type ProjectExportScope = "synopsis" | "outline" | "chapters" | "qc" | "project"
+// 项目导出范围统一对齐数据库阶段编码；
+// 其中 release 对应页面上的“质检”导出。
+export type ProjectExportScope = "synopsis" | "outline" | "chapters" | "release" | "project"
 
 export type ProjectExportFormat = "markdown"

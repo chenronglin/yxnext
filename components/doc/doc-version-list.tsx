@@ -16,9 +16,9 @@ import {
   holderTone,
 } from "@/mocks/doc-data"
 import { DOC_STATUS_LABELS, HOLDER_ROLE_LABELS, ROLE_LABELS } from "@/types/domain"
-import { FileText, Eye, GitCompare, ArrowLeft } from "lucide-react"
+import { FileText, Eye, ArrowLeft } from "lucide-react"
 
-const VALID_TYPES: DocType[] = ["synopsis", "outline", "manuscript", "qc"]
+const VALID_TYPES: DocType[] = ["synopsis", "outline", "chapter", "release"]
 
 export function DocVersionList({ projectId, docType }: { projectId: string; docType: string }) {
   if (!VALID_TYPES.includes(docType as DocType)) notFound()
@@ -115,10 +115,6 @@ export function DocVersionList({ projectId, docType }: { projectId: string; docT
                       <Eye className="mr-1.5 size-3.5" />
                       Clean 预览
                     </Link>
-                  </Button>
-                  <Button size="sm" variant="ghost" className="text-muted-foreground" title="与其他版本对比">
-                    <GitCompare className="mr-1.5 size-3.5" />
-                    对比
                   </Button>
                 </div>
               </div>

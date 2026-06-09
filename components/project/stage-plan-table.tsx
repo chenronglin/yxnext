@@ -14,7 +14,7 @@ interface StagePlanTableProps {
   // 管理员可编辑计划天数
   editable?: boolean
   // 治理页保存计划天数时，通过回调把最新值交给上层发起请求。
-  onSave?: (items: Array<{ stage: "synopsis" | "outline" | "manuscript" | "qc"; planDays: number }>) => Promise<void> | void
+  onSave?: (items: Array<{ stage: "synopsis" | "outline" | "chapter" | "release"; planDays: number }>) => Promise<void> | void
   // 上层提交中时，按钮要进入禁用态，避免重复保存。
   saving?: boolean
 }
@@ -34,8 +34,8 @@ export function StagePlanTable({ project, editable = false, onSave, saving = fal
   const editablePlans = useMemo(
     () =>
       project.stagePlans.filter(
-        (plan): plan is typeof plan & { stage: "synopsis" | "outline" | "manuscript" | "qc" } =>
-          plan.stage !== "done",
+        (plan): plan is typeof plan & { stage: "synopsis" | "outline" | "chapter" | "release" } =>
+          plan.stage !== "completed",
       ),
     [project.stagePlans],
   )
@@ -106,7 +106,7 @@ export function StagePlanTable({ project, editable = false, onSave, saving = fal
               <tr key={plan.stage} className="border-b border-border last:border-0 hover:bg-muted/30">
                 <td className="px-4 py-3 font-medium text-foreground">{PROJECT_STAGE_LABELS[plan.stage]}</td>
                 <td className="px-4 py-3">
-                  {editing && plan.stage !== "done" ? (
+                  {editing && plan.stage !== "completed" ? (
                     <Input
                       type="number"
                       value={days[plan.stage]}

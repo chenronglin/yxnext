@@ -66,8 +66,7 @@ function dbDocStatusToUiStatus(status: "draft" | "submitted" | "rejected" | "app
 }
 
 function dbDocTypeToUiType(docType: "synopsis" | "outline" | "chapter" | "release") {
-  if (docType === "chapter") return "manuscript"
-  if (docType === "release") return "qc"
+  // 前端和接口层已经统一切回数据库真实编码，这里不再做 manuscript / qc 的别名映射。
   return docType
 }
 
@@ -107,6 +106,8 @@ function notificationCategory(rawType: string): NotificationCategory {
   if (rawType === "doc_submitted_for_review") return "doc_submit"
   if (rawType === "doc_approved") return "doc_approve"
   if (rawType === "doc_returned") return "doc_return"
+  if (rawType === "register_pending_approval") return "approval_request"
+  if (rawType === "forgot_password_requested") return "forgot_password_request"
   if (rawType === "project_enter_qc") return "enter_qc"
   if (rawType === "project_completed") return "project_done"
   if (rawType === "binding_created" || rawType === "binding_removed" || rawType === "project_assignment_changed") {
@@ -162,6 +163,14 @@ function notificationHref(input: {
 
   if (input.category === "approval_result") {
     return "/login"
+  }
+
+  if (input.category === "approval_request") {
+    return "/admin/approvals"
+  }
+
+  if (input.category === "forgot_password_request") {
+    return "/admin/users"
   }
 
   return "/dashboard"
@@ -244,116 +253,38 @@ export async function listReviewQueue(actor: ApiCurrentUser) {
 }
 
 export async function listTodos(actor: ApiCurrentUser) {
-  const [openTodos, stagePlans, authorPreissues, editorPreissues, pendingApprovals] = await Promise.all([
-    prisma.todoItem.findMany({
-      where: {
-        recipientUserId: actor.userId,
-        status: "open",
-      },
-      include: {
-        project: {
-          select: {
-            projectId: true,
-            title: true,
-            author: {
-              select: userSummarySelect,
-            },
-            editor: {
-              select: userSummarySelect,
-            },
+  // 待办页现在只展示“有持久化真相源”的任务：
+  // 也就是直接来自 todo_items 的记录，不再额外拼接 SI 预发、阶段预警等临时列表项。
+  const openTodos = await prisma.todoItem.findMany({
+    where: {
+      recipientUserId: actor.userId,
+      status: "open",
+    },
+    include: {
+      project: {
+        select: {
+          projectId: true,
+          title: true,
+          author: {
+            select: userSummarySelect,
           },
-        },
-        doc: {
-          select: {
-            docId: true,
-            docType: true,
-            title: true,
+          editor: {
+            select: userSummarySelect,
           },
         },
       },
-      orderBy: {
-        createdAt: "desc",
-      },
-    }),
-    prisma.projectStagePlan.findMany({
-      where: {
-        timelineStatus: {
-          in: ["due_soon", "overdue"],
-        },
-        project: makeProjectVisibilityWhere(actor),
-      },
-      include: {
-        project: {
-          select: {
-            projectId: true,
-            title: true,
-          },
+      doc: {
+        select: {
+          docId: true,
+          docType: true,
+          title: true,
         },
       },
-      orderBy: {
-        dueAt: "asc",
-      },
-      take: 50,
-    }),
-    actor.role === "author"
-      ? prisma.siPreissue.findMany({
-          where: {
-            authorId: actor.userId,
-            status: "preissued",
-          },
-          include: {
-            storyIdea: {
-              select: {
-                title: true,
-              },
-            },
-            editor: {
-              select: userSummarySelect,
-            },
-          },
-          orderBy: {
-            preissuedAt: "desc",
-          },
-        })
-      : Promise.resolve([]),
-    actor.role === "editor"
-      ? prisma.siPreissue.findMany({
-          where: {
-            editorId: actor.userId,
-            status: "preissued",
-          },
-          include: {
-            storyIdea: {
-              select: {
-                title: true,
-              },
-            },
-            author: {
-              select: userSummarySelect,
-            },
-          },
-          orderBy: {
-            preissuedAt: "desc",
-          },
-        })
-      : Promise.resolve([]),
-    actor.role === "admin"
-      ? prisma.user.findMany({
-          where: {
-            status: "pending",
-          },
-          select: {
-            userId: true,
-            username: true,
-            displayName: true,
-            createdAt: true,
-          },
-          orderBy: {
-            createdAt: "desc",
-          },
-        })
-      : Promise.resolve([]),
-  ])
+    },
+    orderBy: {
+      createdAt: "desc",
+    },
+  })
 
   const items: TodoItemView[] = []
 
@@ -370,6 +301,8 @@ export async function listTodos(actor: ApiCurrentUser) {
         due: toIsoString(todo.dueAt) ?? "—",
         from: userName(todo.project.author),
         createdAt: todo.createdAt.toISOString(),
+        read: todo.isRead,
+        readAt: toIsoString(todo.readAt),
         href: `/review?docId=${todo.doc.docId.toString()}`,
       })
     }
@@ -386,80 +319,53 @@ export async function listTodos(actor: ApiCurrentUser) {
         due: toIsoString(todo.dueAt) ?? "—",
         from: userName(todo.project.editor),
         createdAt: todo.createdAt.toISOString(),
+        read: todo.isRead,
+        readAt: toIsoString(todo.readAt),
         href: `/projects/${todo.project.projectId.toString()}`,
       })
     }
-  }
 
-  for (const record of authorPreissues) {
-    items.push({
-      id: `preissue:${record.preissueId.toString()}`,
-      type: "si",
-      title: `SI《${record.storyIdea.title}》待查看`,
-      relatedType: "SI",
-      relatedName: record.storyIdea.title,
-      status: "预发中",
-      statusTone: "info",
-      due: "—",
-      from: userName(record.editor),
-      createdAt: record.preissuedAt.toISOString(),
-      href: `/my-si/${record.preissueId.toString()}`,
-    })
-  }
-
-  for (const record of editorPreissues) {
-    items.push({
-      id: `editor-preissue:${record.preissueId.toString()}`,
-      type: "si",
-      title: `SI《${record.storyIdea.title}》待确认转项目`,
-      relatedType: "SI",
-      relatedName: `${record.storyIdea.title} / ${userName(record.author)}`,
-      status: "预发中",
-      statusTone: "info",
-      due: "—",
-      from: userName(record.author),
-      createdAt: record.preissuedAt.toISOString(),
-      href: "/si/prereleases",
-    })
-  }
-
-  for (const plan of stagePlans) {
-    const isOverdue = plan.timelineStatus === "overdue"
-    items.push({
-      id: `stage:${plan.stagePlanId.toString()}`,
-      type: isOverdue ? "overdue" : "warning",
-      title: `《${plan.project.title}》${isOverdue ? "阶段已逾期" : "阶段即将到期"}`,
-      relatedType: "项目",
-      relatedName: plan.project.title,
-      status: isOverdue ? "已逾期" : "即将到期",
-      statusTone: isOverdue ? "danger" : "warning",
-      due: toIsoString(plan.dueAt) ?? "—",
-      from: "系统",
-      createdAt: plan.updatedAt.toISOString(),
-      href: `/projects/${plan.project.projectId.toString()}`,
-    })
-  }
-
-  for (const user of pendingApprovals) {
-    items.push({
-      id: `approval:${user.userId.toString()}`,
-      type: "approval",
-      title: `新作者「${user.displayName ?? user.username}」注册待审批`,
-      relatedType: "用户",
-      relatedName: user.displayName ?? user.username,
-      status: "待审批",
-      statusTone: "warning",
-      due: "—",
-      from: user.displayName ?? user.username,
-      createdAt: user.createdAt.toISOString(),
-      href: "/admin/approvals",
-    })
+    if (todo.todoType === "register_approval") {
+      items.push({
+        id: `todo:${todo.todoId.toString()}`,
+        type: "approval",
+        title: todo.title,
+        relatedType: "用户",
+        relatedName: todo.title.replace(/^注册申请待审批：/, ""),
+        status: "待审批",
+        statusTone: "warning",
+        due: "—",
+        from: "系统",
+        createdAt: todo.createdAt.toISOString(),
+        read: todo.isRead,
+        readAt: toIsoString(todo.readAt),
+        href: "/admin/approvals",
+      })
+    }
   }
 
   items.sort((left, right) => right.createdAt.localeCompare(left.createdAt))
 
   return {
     items,
+  }
+}
+
+export async function markAllTodosRead(actor: ApiCurrentUser) {
+  await prisma.todoItem.updateMany({
+    where: {
+      recipientUserId: actor.userId,
+      status: "open",
+      isRead: false,
+    },
+    data: {
+      isRead: true,
+      readAt: new Date(),
+    },
+  })
+
+  return {
+    ok: true,
   }
 }
 
@@ -612,7 +518,7 @@ async function listEditorRecentActivities(actor: ApiCurrentUser, limit: number) 
     if (log.action === "project.qc.unlock") {
       return {
         title: log.project?.title ?? "项目",
-        action: "全文质检已解锁",
+        action: "质检已解锁",
         tone: "info" as const,
         time: log.createdAt.toISOString(),
       }

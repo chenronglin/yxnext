@@ -14,6 +14,8 @@ const managedUserSchema = z.object({
   role: z.enum(["admin", "editor", "author"]).optional(),
   email: z.string().optional(),
   phone: z.string().optional().nullable(),
+  // 管理员可直接维护用户简介，和注册申请、个人资料字段保持同一模型。
+  biography: z.string().optional().nullable(),
   password: z.string().optional(),
 })
 

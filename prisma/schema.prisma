@@ -112,7 +112,6 @@ enum DocAction {
   editor_save
   editor_reject
   editor_approve
-  admin_reopen
 }
 
 enum DraftStatus {
@@ -173,6 +172,7 @@ model User {
   status         UserStatus  @default(pending) @map("status")
   displayName    String?     @map("display_name") @db.VarChar(100)
   phone          String?     @map("phone") @db.VarChar(32)
+  biography      String?     @map("biography") @db.Text
   avatarUrl      String?     @map("avatar_url") @db.VarChar(500)
   approvedBy     BigInt?     @map("approved_by") @db.UnsignedBigInt
   approvedAt     DateTime?   @map("approved_at") @db.DateTime(3)
@@ -278,7 +278,6 @@ model StoryIdea {
   title            String                 @map("title") @db.VarChar(255)
   mainTypeId       BigInt?                @map("main_type_id") @db.UnsignedBigInt
   trope            String?                @map("trope") @db.VarChar(255)
-  benchmarkBooks   Json?                  @map("benchmark_books")
   fitAuthorNote    String?                @map("fit_author_note") @db.Text
   remarks          String?                @map("remarks") @db.Text
   freshTwist       String?                @map("fresh_twist") @db.Text
@@ -674,6 +673,8 @@ model TodoItem {
   entityType      String?     @map("entity_type") @db.VarChar(64)
   entityId        BigInt?     @map("entity_id") @db.UnsignedBigInt
   status          TodoStatus  @default(open) @map("status")
+  isRead          Boolean     @default(false) @map("is_read")
+  readAt          DateTime?   @map("read_at") @db.DateTime(3)
   dueAt           DateTime?   @map("due_at") @db.DateTime(3)
   completedAt     DateTime?   @map("completed_at") @db.DateTime(3)
   cancelledAt     DateTime?   @map("cancelled_at") @db.DateTime(3)
@@ -689,7 +690,7 @@ model TodoItem {
   preissue        SiPreissue? @relation(fields: [preissueId], references: [preissueId], onDelete: SetNull, onUpdate: NoAction)
 
   @@map("todo_items")
-  @@index([recipientUserId, status, dueAt], map: "idx_todo_items_user_status_due")
+  @@index([recipientUserId, isRead, status, dueAt], map: "idx_todo_items_user_read_status_due")
   @@index([projectId], map: "idx_todo_items_project")
   @@index([docId], map: "idx_todo_items_doc")
 }

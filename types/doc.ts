@@ -3,20 +3,20 @@
 // 后端对外仍然使用数据库阶段编码，避免在接口层再引入一套 chapter/manuscript、release/qc 的映射。
 export type ApiDocType = "synopsis" | "outline" | "chapter" | "release"
 
-// 项目阶段接口返回数据库固定值；前端接入时再按页面文案做展示映射。
+// 项目阶段接口返回数据库固定值；页面层只做中文显示，不再保留 qc / manuscript 别名。
 export type ApiProjectStage = "synopsis" | "outline" | "chapter" | "release" | "completed"
 
 // Doc 状态对外统一暴露 returned，内部 rejected 只保留在数据库和 Prisma 层。
 export type ApiDocStatus = "draft" | "submitted" | "returned" | "approved"
 
-// Doc 动作里只有退回动作需要做 reject -> return 的对外映射。
+// Doc 动作只保留当前仍然生效的业务动作；
+// 旧设计里的“审核通过后重开作者编辑”已经取消，因此不再暴露 reopen 动作。
 export type ApiDocAction =
   | "author_save"
   | "editor_save"
   | "author_submit"
   | "editor_return"
   | "editor_approve"
-  | "admin_reopen"
 
 // Revision 历史动作与 Doc 动作类似，继续保持“退回”语义。
 export type ApiRevisionAction = "author_submit" | "editor_return" | "editor_approve"

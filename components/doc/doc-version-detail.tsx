@@ -21,7 +21,7 @@ import {
 import { ROLE_LABELS } from "@/types/domain"
 import { ArrowLeft, BookOpen, PenLine } from "lucide-react"
 
-const VALID_TYPES: DocType[] = ["synopsis", "outline", "manuscript", "qc"]
+const VALID_TYPES: DocType[] = ["synopsis", "outline", "chapter", "release"]
 
 export function DocVersionDetail({
   projectId,

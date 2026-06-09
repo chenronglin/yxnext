@@ -10,12 +10,13 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { fetchJson } from "@/lib/api"
 
 export default function RegisterPage() {
   const router = useRouter()
   const [form, setForm] = useState({
     username: "",
-    contact: "",
+    email: "",
     password: "",
     confirm: "",
     role: "author",
@@ -23,15 +24,16 @@ export default function RegisterPage() {
     bio: "",
   })
   const [error, setError] = useState("")
+  const [submitting, setSubmitting] = useState(false)
 
   function update(key: string, value: string) {
     setForm((f) => ({ ...f, [key]: value }))
   }
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setError("")
-    if (!form.username.trim() || !form.contact.trim() || !form.password || !form.penName.trim()) {
+    if (!form.username.trim() || !form.email.trim() || !form.password || !form.penName.trim()) {
       setError("请完整填写必填项")
       return
     }
@@ -39,7 +41,33 @@ export default function RegisterPage() {
       setError("两次输入的密码不一致")
       return
     }
-    router.push("/account-status?status=pending&from=register")
+
+    setSubmitting(true)
+
+    try {
+      // 注册页现在直接提交真实注册申请，后端会同步创建管理员通知和待审批待办。
+      await fetchJson("/api/auth/register", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          username: form.username,
+          email: form.email,
+          password: form.password,
+          confirmPassword: form.confirm,
+          role: form.role,
+          penName: form.penName,
+          bio: form.bio,
+        }),
+      })
+
+      router.push("/account-status?status=pending&from=register")
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "注册申请提交失败，请稍后重试")
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -65,10 +93,16 @@ export default function RegisterPage() {
           </div>
 
           <div className="flex flex-col gap-2">
-            <Label htmlFor="contact">
-              手机号或邮箱 <span className="text-destructive">*</span>
+            <Label htmlFor="email">
+              邮箱 <span className="text-destructive">*</span>
             </Label>
-            <Input id="contact" value={form.contact} onChange={(e) => update("contact", e.target.value)} />
+            <Input
+              id="email"
+              type="email"
+              value={form.email}
+              onChange={(e) => update("email", e.target.value)}
+              autoComplete="email"
+            />
           </div>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -118,7 +152,7 @@ export default function RegisterPage() {
           </div>
 
           <div className="flex flex-col gap-2">
-            <Label htmlFor="bio">简介或备注</Label>
+            <Label htmlFor="bio">个人简介</Label>
             <Textarea
               id="bio"
               rows={3}
@@ -128,8 +162,8 @@ export default function RegisterPage() {
             />
           </div>
 
-          <Button type="submit" className="mt-2 w-full">
-            提交注册申请
+          <Button type="submit" className="mt-2 w-full" disabled={submitting}>
+            {submitting ? "提交中..." : "提交注册申请"}
           </Button>
 
           <p className="text-center text-sm text-muted-foreground">

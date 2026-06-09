@@ -196,7 +196,7 @@ function EditorReport() {
         rows={[
           { name: "审核通过 · 第三章", value: "06-09 10:20" },
           { name: "退回 · 第五章", value: "06-08 18:45" },
-          { name: "解锁全文质检 · 山海食肆", value: "05-30 09:00" },
+          { name: "解锁质检 · 山海食肆", value: "05-30 09:00" },
         ]}
       />
     </div>

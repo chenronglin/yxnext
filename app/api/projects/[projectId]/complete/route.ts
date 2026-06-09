@@ -4,7 +4,7 @@ import { completeProject } from "@/server/modules/project/project.service"
 import { fail, ok } from "@/server/shared/api-response"
 import { requireApiCurrentUser } from "@/server/shared/current-user"
 
-// 编辑侧项目完成动作需要校验全文质检通过状态，并同步推进生命周期，因此固定走 Node.js runtime。
+// 编辑侧项目完成动作需要校验质检通过状态，并同步推进生命周期，因此固定走 Node.js runtime。
 export const runtime = "nodejs"
 
 type ProjectCompleteRouteContext = {

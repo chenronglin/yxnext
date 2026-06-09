@@ -42,7 +42,7 @@ const INITIAL_REVIEWS: ReviewItem[] = [
   {
     id: "rev-1",
     projectId: "p1",
-    docType: "manuscript",
+    docType: "chapter",
     title: "第四章 暗巷的修士",
     projectName: "都市修真：外卖小哥的逆袭",
     authorName: "苏小白",
@@ -68,13 +68,13 @@ const INITIAL_REVIEWS: ReviewItem[] = [
   {
     id: "rev-3",
     projectId: "p4",
-    docType: "qc",
-    title: "《山海食肆》全文质检 Doc",
+    docType: "release",
+    title: "《山海食肆》质检 Doc",
     projectName: "山海食肆",
     authorName: "江临",
     words: 28500,
     submittedAt: "2026-06-05 15:40",
-    submitNote: "已完成所有章节的校对及精细修改，申请全文质检核验并正式标记项目完结交付。",
+    submitNote: "已完成所有章节的校对及精细修改，申请质检核验并正式标记项目完结交付。",
     previewText: "山海食肆座落于人妖两界交汇的忘川渡口。守店人陆羽擅长以山海异兽为食材，烹饪调理人妖执念。第一章：清炖讹兽与谎言的滋味；第二章：爆炒毕方与心火的释怀……",
     oldPreviewText: "故事说一个在渡口开小吃店的人，用妖怪做菜。每一章解决一个故事，最终项目交稿完结。"
   }

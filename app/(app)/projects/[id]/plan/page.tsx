@@ -42,10 +42,10 @@ export default function StagePlanPage({ params }: { params: Promise<{ id: string
             <span className="font-medium text-foreground">{PROJECT_STAGE_LABELS.outline}：</span>梗概通过后开始
           </li>
           <li className="flex gap-2">
-            <span className="font-medium text-foreground">{PROJECT_STAGE_LABELS.manuscript}：</span>细纲通过后开始
+            <span className="font-medium text-foreground">{PROJECT_STAGE_LABELS.chapter}：</span>细纲通过后开始
           </li>
           <li className="flex gap-2">
-            <span className="font-medium text-foreground">{PROJECT_STAGE_LABELS.qc}：</span>手动解锁后开始
+            <span className="font-medium text-foreground">{PROJECT_STAGE_LABELS.release}：</span>手动解锁后开始
           </li>
         </ul>
         {role !== "admin" && (

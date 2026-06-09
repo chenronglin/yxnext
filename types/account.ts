@@ -10,6 +10,7 @@ export interface AccountProfile {
   status: UserStatus
   email: string
   phone: string | null
+  biography: string | null
   avatarUrl: string | null
 }
 

@@ -43,8 +43,8 @@ import {
 import {
   PROJECT_LIFECYCLE_TONE,
   PROJECT_STAGE_TONE,
-  QC_STATUS_LABELS,
-  QC_STATUS_TONE,
+  RELEASE_DOC_STATUS_LABELS,
+  RELEASE_DOC_STATUS_TONE,
   type GovernanceProjectDetail,
   type ProjectPersonOption,
 } from "@/types/project"
@@ -180,7 +180,7 @@ export default function GovernanceDetailPage({ params }: { params: Promise<{ id:
     }
   }
 
-  async function handleSaveStagePlans(items: Array<{ stage: "synopsis" | "outline" | "manuscript" | "qc"; planDays: number }>) {
+  async function handleSaveStagePlans(items: Array<{ stage: "synopsis" | "outline" | "chapter" | "release"; planDays: number }>) {
     if (!project) return
 
     setSavingStagePlans(true)
@@ -255,13 +255,13 @@ export default function GovernanceDetailPage({ params }: { params: Promise<{ id:
   const confirmTexts: Record<Exclude<GovAction, null>, { title: string; desc: string }> = {
     editor: { title: "调整负责编辑", desc: "调整后项目可见性将立即变化。" },
     author: { title: "调整负责作者", desc: "调整后项目可见性将立即变化。" },
-    complete: { title: "标记项目完成", desc: "只有全文质检通过的项目才能标记完成。" },
+    complete: { title: "标记项目完成", desc: "只有质检通过的项目才能标记完成。" },
     archive: { title: "归档项目", desc: "归档后项目默认只读，可在治理列表恢复。" },
     cancel: { title: "取消项目", desc: "取消后项目默认不可继续协作，可恢复。" },
     restore: { title: "恢复项目", desc: "恢复后项目回到治理前可协作状态。" },
   }
 
-  const canComplete = project?.qcStatus === "approved"
+  const canComplete = project?.releaseDocStatus === "approved"
 
   return (
     <div className="flex flex-col gap-6">
@@ -303,8 +303,11 @@ export default function GovernanceDetailPage({ params }: { params: Promise<{ id:
             <Field label="当前阶段">
               <StatusBadge label={PROJECT_STAGE_LABELS[project.stage]} tone={PROJECT_STAGE_TONE[project.stage]} />
             </Field>
-            <Field label="全文质检">
-              <StatusBadge label={QC_STATUS_LABELS[project.qcStatus]} tone={QC_STATUS_TONE[project.qcStatus]} />
+            <Field label="质检">
+              <StatusBadge
+                label={RELEASE_DOC_STATUS_LABELS[project.releaseDocStatus]}
+                tone={RELEASE_DOC_STATUS_TONE[project.releaseDocStatus]}
+              />
             </Field>
             <Field label="来源 SI">
               <Link href={`/si/${project.sourceSiId}`} className="text-sm text-primary hover:underline">
@@ -413,7 +416,7 @@ export default function GovernanceDetailPage({ params }: { params: Promise<{ id:
               <Button
                 variant="outline"
                 className="bg-transparent"
-                disabled={project.qcStatus !== "approved" || submitting}
+                disabled={project.releaseDocStatus !== "approved" || submitting}
                 onClick={() => void handleDownloadFinal()}
               >
                 <Download className="mr-1.5 size-4" />

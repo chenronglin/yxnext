@@ -174,7 +174,6 @@ export function SiDetail({ si }: { si: SiItem }) {
             <div className="grid gap-5 sm:grid-cols-2">
               <Field label="主类型" value={si.mainType} />
               <Field label="Trope" value={si.trope} />
-              <Field label="对标书目" value={si.benchmark} />
               <Field label="适配作者" value={si.authors.join("、")} />
             </div>
             <Field label="备注" value={si.remark} />

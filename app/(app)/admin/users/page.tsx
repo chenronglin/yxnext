@@ -24,6 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Textarea } from "@/components/ui/textarea"
 import { fetchJson } from "@/lib/api"
 import { ROLE_LABELS, USER_STATUS_LABELS, type Role, type UserStatus } from "@/types/domain"
 import { ROLE_TONE, USER_STATUS_TONE, type ManagedUser } from "@/types/admin"
@@ -46,6 +47,7 @@ type UserFormState = {
   role: Role
   email: string
   phone: string
+  biography: string
   password: string
 }
 
@@ -55,6 +57,7 @@ const EMPTY_FORM: UserFormState = {
   role: "author",
   email: "",
   phone: "",
+  biography: "",
   password: "",
 }
 
@@ -123,6 +126,7 @@ export default function UsersPage() {
       role: user.role,
       email: user.email,
       phone: user.phone ?? "",
+      biography: user.biography ?? "",
       password: "",
     })
     setFormOpen(true)
@@ -142,6 +146,7 @@ export default function UsersPage() {
             role: form.role,
             email: form.email,
             phone: form.phone || null,
+            biography: form.biography || null,
           }
         : {
             username: form.username,
@@ -149,6 +154,7 @@ export default function UsersPage() {
             role: form.role,
             email: form.email,
             phone: form.phone || null,
+            biography: form.biography || null,
             password: form.password,
           }
 
@@ -473,6 +479,16 @@ export default function UsersPage() {
                 placeholder="请输入手机号，可留空"
               />
             </div>
+            <div className="grid gap-2">
+              <Label htmlFor="biography">个人简介</Label>
+              <Textarea
+                id="biography"
+                rows={4}
+                value={form.biography}
+                onChange={(event) => setForm({ ...form, biography: event.target.value })}
+                placeholder="请输入个人简介，可留空"
+              />
+            </div>
             {!editingUser && (
               <div className="grid gap-2">
                 <Label htmlFor="password">初始密码</Label>
@@ -512,6 +528,7 @@ export default function UsersPage() {
               <DetailRow label="邮箱" value={detailUser.email} />
               <DetailRow label="手机号" value={detailUser.phone ?? "—"} />
               <DetailRow label="联系方式" value={detailUser.contact} />
+              <DetailRow label="个人简介" value={detailUser.biography ?? "—"} />
               <DetailRow label="最近登录" value={formatDateTime(detailUser.lastLogin)} />
               <DetailRow label="创建时间" value={formatDateTime(detailUser.createdAt)} />
             </dl>

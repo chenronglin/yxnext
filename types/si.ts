@@ -62,7 +62,6 @@ export interface PrereleaseRecord {
   title: string
   mainType: string
   trope: string
-  benchmark: string
   remark: string
   freshTwist: string
   synopsis: string
@@ -87,8 +86,6 @@ export interface SiItem {
   mainTypeId?: string
   mainType: string
   trope: string
-  benchmark: string
-  benchmarkBooks?: unknown
   authors: string[]
   authorIds: string[]
   remark: string

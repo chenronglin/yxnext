@@ -14,8 +14,8 @@ import {
   PROJECT_LIFECYCLE_TONE,
   PROJECT_STAGE_TONE,
   DOC_STATUS_TONE,
-  QC_STATUS_LABELS,
-  QC_STATUS_TONE,
+  RELEASE_DOC_STATUS_LABELS,
+  RELEASE_DOC_STATUS_TONE,
 } from "@/mocks/project-data"
 import { PROJECT_LIFECYCLE_LABELS, PROJECT_STAGE_LABELS, DOC_STATUS_LABELS } from "@/types/domain"
 import {
@@ -35,8 +35,10 @@ export function ProjectDetail({ id }: { id: string }) {
   if (!project) notFound()
 
   const readonly = project.lifecycle === "completed" || project.lifecycle === "archived" || project.lifecycle === "cancelled"
-  const canUnlockQc = project.stage === "manuscript" && project.approvedChapters === project.totalChapters && project.totalChapters > 0
-  const canComplete = project.qcStatus === "approved"
+  // 质检阶段只在正文阶段全部通过后才能由编辑手动解锁。
+  const canUnlockRelease =
+    project.stage === "chapter" && project.approvedChapters === project.totalChapters && project.totalChapters > 0
+  const canComplete = project.releaseDocStatus === "approved"
 
   return (
     <div className="flex flex-col gap-6">
@@ -119,12 +121,12 @@ export function ProjectDetail({ id }: { id: string }) {
             actionLabel="管理章节"
           />
           <DocRow
-            title="全文质检 Doc"
-            statusLabel={QC_STATUS_LABELS[project.qcStatus]}
-            tone={QC_STATUS_TONE[project.qcStatus]}
-            unlocked={project.qcStatus !== "locked"}
+            title="质检 Doc"
+            statusLabel={RELEASE_DOC_STATUS_LABELS[project.releaseDocStatus]}
+            tone={RELEASE_DOC_STATUS_TONE[project.releaseDocStatus]}
+            unlocked={project.releaseDocStatus !== "locked"}
             href={`/projects/${project.id}/qc`}
-            actionLabel="全文质检"
+            actionLabel="质检"
           />
         </div>
       </Card>
@@ -133,18 +135,20 @@ export function ProjectDetail({ id }: { id: string }) {
       {!readonly && (
         <Card className="flex flex-wrap items-center gap-2 p-4">
           <Button asChild>
-            <Link href={`/projects/${project.id}/docs/${project.stage === "done" ? "qc" : project.stage}`}>
+            <Link href={`/projects/${project.id}/docs/${project.stage === "completed" ? "release" : project.stage}`}>
               <FileText className="mr-1.5 size-4" />
               进入当前稿件
             </Link>
           </Button>
           <Button asChild variant="outline" className="bg-transparent">
-            <Link href={`/projects/${project.id}/docs/${project.stage === "done" ? "qc" : project.stage}/versions`}>
+            <Link
+              href={`/projects/${project.id}/docs/${project.stage === "completed" ? "release" : project.stage}/versions`}
+            >
               <History className="mr-1.5 size-4" />
               查看历史版本
             </Link>
           </Button>
-          {project.stage === "manuscript" && (role === "admin" || role === "editor" || role === "author") && (
+          {project.stage === "chapter" && (role === "admin" || role === "editor" || role === "author") && (
             <Button asChild variant="outline" className="bg-transparent">
               <Link href={`/projects/${project.id}/chapters`}>
                 <Plus className="mr-1.5 size-4" />
@@ -153,16 +157,16 @@ export function ProjectDetail({ id }: { id: string }) {
             </Button>
           )}
           {role === "editor" && (
-            <Button asChild variant="outline" className="bg-transparent" disabled={!canUnlockQc}>
-              {canUnlockQc ? (
+            <Button asChild variant="outline" className="bg-transparent" disabled={!canUnlockRelease}>
+              {canUnlockRelease ? (
                 <Link href={`/projects/${project.id}/qc`}>
                   <Unlock className="mr-1.5 size-4" />
-                  手动解锁全文质检
+                  手动解锁质检
                 </Link>
               ) : (
                 <span>
                   <Lock className="mr-1.5 size-4" />
-                  手动解锁全文质检
+                  手动解锁质检
                 </span>
               )}
             </Button>

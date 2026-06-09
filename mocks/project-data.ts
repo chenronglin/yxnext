@@ -1,112 +1,26 @@
 // 阅享平台 - 项目相关共享 Mock 数据与辅助函数
-import type {
-  ProjectLifecycle,
-  ProjectStage,
-  StagePlanStatus,
-  DocStatus,
-  HolderRole,
-  BadgeTone,
-} from "@/types/domain"
+// 说明：
+// 1. 这份文件只负责演示页面的假数据，不再重复定义一套旧阶段枚举；
+// 2. 所有状态与标签常量直接复用共享类型，确保前端 mock、真实接口和数据库口径一致；
+// 3. release 是内部阶段编码，页面展示统一翻译为“质检”。
 
-export const PROJECT_LIFECYCLE_TONE: Record<ProjectLifecycle, BadgeTone> = {
-  draft: "neutral",
-  active: "info",
-  completed: "success",
-  archived: "neutral",
-  cancelled: "danger",
-}
+import {
+  DOC_STATUS_TONE,
+  PROJECT_LIFECYCLE_TONE,
+  PROJECT_STAGE_TONE,
+  RELEASE_DOC_STATUS_LABELS,
+  RELEASE_DOC_STATUS_TONE,
+  STAGE_ORDER,
+  type ProjectItem,
+} from "@/types/project"
 
-export const PROJECT_STAGE_TONE: Record<ProjectStage, BadgeTone> = {
-  synopsis: "neutral",
-  outline: "info",
-  manuscript: "info",
-  qc: "warning",
-  done: "success",
-}
-
-export const STAGE_PLAN_TONE: Record<StagePlanStatus, BadgeTone> = {
-  not_started: "neutral",
-  in_progress: "info",
-  due_soon: "warning",
-  overdue: "danger",
-  completed: "success",
-}
-
-export const DOC_STATUS_TONE: Record<DocStatus, BadgeTone> = {
-  draft: "neutral",
-  submitted: "info",
-  returned: "warning",
-  approved: "success",
-}
-
-// 阶段计划项
-export interface StagePlan {
-  stage: ProjectStage
-  planDays: number
-  startAt: string | null
-  dueAt: string | null
-  finishedAt: string | null
-  status: StagePlanStatus
-  timingNote: string
-}
-
-// 章节 Doc
-export interface ChapterDoc {
-  id: string
-  order: number
-  title: string
-  status: DocStatus
-  holder: HolderRole
-  words: number
-  lastNote: string
-  lastOperator: string
-  lastOperatedAt: string
-  approved: boolean
-}
-
-// 全文质检状态
-export type QcStatus = "locked" | "unlocked" | "draft" | "submitted" | "returned" | "approved"
-
-export const QC_STATUS_LABELS: Record<QcStatus, string> = {
-  locked: "未解锁",
-  unlocked: "已解锁",
-  draft: "草稿",
-  submitted: "已提交待审",
-  returned: "退回待改",
-  approved: "审核通过",
-}
-
-export const QC_STATUS_TONE: Record<QcStatus, BadgeTone> = {
-  locked: "neutral",
-  unlocked: "info",
-  draft: "neutral",
-  submitted: "info",
-  returned: "warning",
-  approved: "success",
-}
-
-export interface ProjectItem {
-  id: string
-  title: string
-  sourceSi: string
-  sourceSiId: string
-  editor: string
-  editorId: string
-  author: string
-  authorId: string
-  stage: ProjectStage
-  lifecycle: ProjectLifecycle
-  planStatus: StagePlanStatus
-  pendingDocs: number
-  overdue: boolean
-  createdAt: string
-  updatedAt: string
-  finishedAt: string | null
-  qcStatus: QcStatus
-  totalChapters: number
-  approvedChapters: number
-  stagePlans: StagePlan[]
-  chapters: ChapterDoc[]
+export {
+  DOC_STATUS_TONE,
+  PROJECT_LIFECYCLE_TONE,
+  PROJECT_STAGE_TONE,
+  RELEASE_DOC_STATUS_LABELS,
+  RELEASE_DOC_STATUS_TONE,
+  STAGE_ORDER,
 }
 
 export const PROJECTS: ProjectItem[] = [
@@ -119,7 +33,7 @@ export const PROJECTS: ProjectItem[] = [
     editorId: "e1",
     author: "苏小白",
     authorId: "a1",
-    stage: "manuscript",
+    stage: "chapter",
     lifecycle: "active",
     planStatus: "in_progress",
     pendingDocs: 3,
@@ -127,21 +41,108 @@ export const PROJECTS: ProjectItem[] = [
     createdAt: "2026-05-20 09:00",
     updatedAt: "2026-06-08 14:32",
     finishedAt: null,
-    qcStatus: "locked",
+    releaseDocStatus: "locked",
     totalChapters: 5,
     approvedChapters: 3,
     stagePlans: [
-      { stage: "synopsis", planDays: 5, startAt: "2026-05-20", dueAt: "2026-05-25", finishedAt: "2026-05-24", status: "completed", timingNote: "确认转项目后开始" },
-      { stage: "outline", planDays: 7, startAt: "2026-05-24", dueAt: "2026-05-31", finishedAt: "2026-05-30", status: "completed", timingNote: "梗概通过后开始" },
-      { stage: "manuscript", planDays: 30, startAt: "2026-05-30", dueAt: "2026-06-29", finishedAt: null, status: "in_progress", timingNote: "细纲通过后开始" },
-      { stage: "qc", planDays: 7, startAt: null, dueAt: null, finishedAt: null, status: "not_started", timingNote: "手动解锁后开始" },
+      {
+        stage: "synopsis",
+        planDays: 5,
+        startAt: "2026-05-20",
+        dueAt: "2026-05-25",
+        finishedAt: "2026-05-24",
+        status: "completed",
+        timingNote: "确认转项目后开始",
+      },
+      {
+        stage: "outline",
+        planDays: 7,
+        startAt: "2026-05-24",
+        dueAt: "2026-05-31",
+        finishedAt: "2026-05-30",
+        status: "completed",
+        timingNote: "梗概通过后开始",
+      },
+      {
+        stage: "chapter",
+        planDays: 30,
+        startAt: "2026-05-30",
+        dueAt: "2026-06-29",
+        finishedAt: null,
+        status: "in_progress",
+        timingNote: "细纲通过后开始",
+      },
+      {
+        stage: "release",
+        planDays: 7,
+        startAt: null,
+        dueAt: null,
+        finishedAt: null,
+        status: "not_started",
+        timingNote: "手动解锁后开始",
+      },
     ],
     chapters: [
-      { id: "c1", order: 1, title: "第一章 重生外卖单", status: "approved", holder: "none", words: 3200, lastNote: "节奏不错，通过", lastOperator: "林编辑", lastOperatedAt: "2026-06-01 10:20", approved: true },
-      { id: "c2", order: 2, title: "第二章 功德系统觉醒", status: "approved", holder: "none", words: 3450, lastNote: "通过", lastOperator: "林编辑", lastOperatedAt: "2026-06-03 16:10", approved: true },
-      { id: "c3", order: 3, title: "第三章 第一个客户", status: "approved", holder: "none", words: 3100, lastNote: "通过", lastOperator: "林编辑", lastOperatedAt: "2026-06-05 11:00", approved: true },
-      { id: "c4", order: 4, title: "第四章 暗巷的修士", status: "submitted", holder: "editor", words: 3680, lastNote: "提交审核", lastOperator: "苏小白", lastOperatedAt: "2026-06-08 09:30", approved: false },
-      { id: "c5", order: 5, title: "第五章 功德商城", status: "returned", holder: "author", words: 2900, lastNote: "中段冲突偏弱，请加强", lastOperator: "林编辑", lastOperatedAt: "2026-06-07 18:45", approved: false },
+      {
+        id: "c1",
+        order: 1,
+        title: "第一章 重生外卖单",
+        status: "approved",
+        holder: "none",
+        words: 3200,
+        lastNote: "节奏不错，通过",
+        lastOperator: "林编辑",
+        lastOperatedAt: "2026-06-01 10:20",
+        approved: true,
+      },
+      {
+        id: "c2",
+        order: 2,
+        title: "第二章 功德系统觉醒",
+        status: "approved",
+        holder: "none",
+        words: 3450,
+        lastNote: "通过",
+        lastOperator: "林编辑",
+        lastOperatedAt: "2026-06-03 16:10",
+        approved: true,
+      },
+      {
+        id: "c3",
+        order: 3,
+        title: "第三章 第一个客户",
+        status: "approved",
+        holder: "none",
+        words: 3100,
+        lastNote: "通过",
+        lastOperator: "林编辑",
+        lastOperatedAt: "2026-06-05 11:00",
+        approved: true,
+      },
+      {
+        id: "c4",
+        order: 4,
+        title: "第四章 暗巷的修士",
+        status: "submitted",
+        holder: "editor",
+        words: 3680,
+        lastNote: "提交审核",
+        lastOperator: "苏小白",
+        lastOperatedAt: "2026-06-08 09:30",
+        approved: false,
+      },
+      {
+        id: "c5",
+        order: 5,
+        title: "第五章 功德商城",
+        status: "returned",
+        holder: "author",
+        words: 2900,
+        lastNote: "中段冲突偏弱，请加强",
+        lastOperator: "林编辑",
+        lastOperatedAt: "2026-06-07 18:45",
+        approved: false,
+      },
     ],
   },
   {
@@ -161,14 +162,46 @@ export const PROJECTS: ProjectItem[] = [
     createdAt: "2026-05-28 10:00",
     updatedAt: "2026-06-07 11:20",
     finishedAt: null,
-    qcStatus: "locked",
+    releaseDocStatus: "locked",
     totalChapters: 0,
     approvedChapters: 0,
     stagePlans: [
-      { stage: "synopsis", planDays: 5, startAt: "2026-05-28", dueAt: "2026-06-02", finishedAt: "2026-06-01", status: "completed", timingNote: "确认转项目后开始" },
-      { stage: "outline", planDays: 7, startAt: "2026-06-01", dueAt: "2026-06-08", finishedAt: null, status: "due_soon", timingNote: "梗概通过后开始" },
-      { stage: "manuscript", planDays: 30, startAt: null, dueAt: null, finishedAt: null, status: "not_started", timingNote: "细纲通过后开始" },
-      { stage: "qc", planDays: 7, startAt: null, dueAt: null, finishedAt: null, status: "not_started", timingNote: "手动解锁后开始" },
+      {
+        stage: "synopsis",
+        planDays: 5,
+        startAt: "2026-05-28",
+        dueAt: "2026-06-02",
+        finishedAt: "2026-06-01",
+        status: "completed",
+        timingNote: "确认转项目后开始",
+      },
+      {
+        stage: "outline",
+        planDays: 7,
+        startAt: "2026-06-01",
+        dueAt: "2026-06-08",
+        finishedAt: null,
+        status: "due_soon",
+        timingNote: "梗概通过后开始",
+      },
+      {
+        stage: "chapter",
+        planDays: 30,
+        startAt: null,
+        dueAt: null,
+        finishedAt: null,
+        status: "not_started",
+        timingNote: "细纲通过后开始",
+      },
+      {
+        stage: "release",
+        planDays: 7,
+        startAt: null,
+        dueAt: null,
+        finishedAt: null,
+        status: "not_started",
+        timingNote: "手动解锁后开始",
+      },
     ],
     chapters: [],
   },
@@ -189,14 +222,46 @@ export const PROJECTS: ProjectItem[] = [
     createdAt: "2026-05-15 14:00",
     updatedAt: "2026-06-06 09:10",
     finishedAt: null,
-    qcStatus: "locked",
+    releaseDocStatus: "locked",
     totalChapters: 0,
     approvedChapters: 0,
     stagePlans: [
-      { stage: "synopsis", planDays: 5, startAt: "2026-05-18", dueAt: "2026-05-23", finishedAt: null, status: "overdue", timingNote: "确认转项目后开始" },
-      { stage: "outline", planDays: 7, startAt: null, dueAt: null, finishedAt: null, status: "not_started", timingNote: "梗概通过后开始" },
-      { stage: "manuscript", planDays: 30, startAt: null, dueAt: null, finishedAt: null, status: "not_started", timingNote: "细纲通过后开始" },
-      { stage: "qc", planDays: 7, startAt: null, dueAt: null, finishedAt: null, status: "not_started", timingNote: "手动解锁后开始" },
+      {
+        stage: "synopsis",
+        planDays: 5,
+        startAt: "2026-05-18",
+        dueAt: "2026-05-23",
+        finishedAt: null,
+        status: "overdue",
+        timingNote: "确认转项目后开始",
+      },
+      {
+        stage: "outline",
+        planDays: 7,
+        startAt: null,
+        dueAt: null,
+        finishedAt: null,
+        status: "not_started",
+        timingNote: "梗概通过后开始",
+      },
+      {
+        stage: "chapter",
+        planDays: 30,
+        startAt: null,
+        dueAt: null,
+        finishedAt: null,
+        status: "not_started",
+        timingNote: "细纲通过后开始",
+      },
+      {
+        stage: "release",
+        planDays: 7,
+        startAt: null,
+        dueAt: null,
+        finishedAt: null,
+        status: "not_started",
+        timingNote: "手动解锁后开始",
+      },
     ],
     chapters: [],
   },
@@ -209,7 +274,7 @@ export const PROJECTS: ProjectItem[] = [
     editorId: "e2",
     author: "江临",
     authorId: "a3",
-    stage: "qc",
+    stage: "release",
     lifecycle: "active",
     planStatus: "in_progress",
     pendingDocs: 1,
@@ -217,14 +282,46 @@ export const PROJECTS: ProjectItem[] = [
     createdAt: "2026-03-10 09:00",
     updatedAt: "2026-06-05 15:40",
     finishedAt: null,
-    qcStatus: "submitted",
+    releaseDocStatus: "submitted",
     totalChapters: 8,
     approvedChapters: 8,
     stagePlans: [
-      { stage: "synopsis", planDays: 5, startAt: "2026-03-10", dueAt: "2026-03-15", finishedAt: "2026-03-14", status: "completed", timingNote: "确认转项目后开始" },
-      { stage: "outline", planDays: 7, startAt: "2026-03-14", dueAt: "2026-03-21", finishedAt: "2026-03-20", status: "completed", timingNote: "梗概通过后开始" },
-      { stage: "manuscript", planDays: 45, startAt: "2026-03-20", dueAt: "2026-05-04", finishedAt: "2026-05-02", status: "completed", timingNote: "细纲通过后开始" },
-      { stage: "qc", planDays: 7, startAt: "2026-05-30", dueAt: "2026-06-06", finishedAt: null, status: "in_progress", timingNote: "手动解锁后开始" },
+      {
+        stage: "synopsis",
+        planDays: 5,
+        startAt: "2026-03-10",
+        dueAt: "2026-03-15",
+        finishedAt: "2026-03-14",
+        status: "completed",
+        timingNote: "确认转项目后开始",
+      },
+      {
+        stage: "outline",
+        planDays: 7,
+        startAt: "2026-03-14",
+        dueAt: "2026-03-21",
+        finishedAt: "2026-03-20",
+        status: "completed",
+        timingNote: "梗概通过后开始",
+      },
+      {
+        stage: "chapter",
+        planDays: 45,
+        startAt: "2026-03-20",
+        dueAt: "2026-05-04",
+        finishedAt: "2026-05-02",
+        status: "completed",
+        timingNote: "细纲通过后开始",
+      },
+      {
+        stage: "release",
+        planDays: 7,
+        startAt: "2026-05-30",
+        dueAt: "2026-06-06",
+        finishedAt: null,
+        status: "in_progress",
+        timingNote: "手动解锁后开始",
+      },
     ],
     chapters: [],
   },
@@ -237,7 +334,7 @@ export const PROJECTS: ProjectItem[] = [
     editorId: "e1",
     author: "墨清欢",
     authorId: "a2",
-    stage: "done",
+    stage: "completed",
     lifecycle: "completed",
     planStatus: "completed",
     pendingDocs: 0,
@@ -245,14 +342,46 @@ export const PROJECTS: ProjectItem[] = [
     createdAt: "2026-01-08 09:00",
     updatedAt: "2026-04-20 17:00",
     finishedAt: "2026-04-20 17:00",
-    qcStatus: "approved",
+    releaseDocStatus: "approved",
     totalChapters: 12,
     approvedChapters: 12,
     stagePlans: [
-      { stage: "synopsis", planDays: 5, startAt: "2026-01-08", dueAt: "2026-01-13", finishedAt: "2026-01-12", status: "completed", timingNote: "确认转项目后开始" },
-      { stage: "outline", planDays: 7, startAt: "2026-01-12", dueAt: "2026-01-19", finishedAt: "2026-01-18", status: "completed", timingNote: "梗概通过后开始" },
-      { stage: "manuscript", planDays: 60, startAt: "2026-01-18", dueAt: "2026-03-19", finishedAt: "2026-03-15", status: "completed", timingNote: "细纲通过后开始" },
-      { stage: "qc", planDays: 7, startAt: "2026-04-12", dueAt: "2026-04-19", finishedAt: "2026-04-18", status: "completed", timingNote: "手动解锁后开始" },
+      {
+        stage: "synopsis",
+        planDays: 5,
+        startAt: "2026-01-08",
+        dueAt: "2026-01-13",
+        finishedAt: "2026-01-12",
+        status: "completed",
+        timingNote: "确认转项目后开始",
+      },
+      {
+        stage: "outline",
+        planDays: 7,
+        startAt: "2026-01-12",
+        dueAt: "2026-01-19",
+        finishedAt: "2026-01-18",
+        status: "completed",
+        timingNote: "梗概通过后开始",
+      },
+      {
+        stage: "chapter",
+        planDays: 60,
+        startAt: "2026-01-18",
+        dueAt: "2026-03-19",
+        finishedAt: "2026-03-15",
+        status: "completed",
+        timingNote: "细纲通过后开始",
+      },
+      {
+        stage: "release",
+        planDays: 7,
+        startAt: "2026-04-12",
+        dueAt: "2026-04-19",
+        finishedAt: "2026-04-18",
+        status: "completed",
+        timingNote: "手动解锁后开始",
+      },
     ],
     chapters: [],
   },
@@ -273,23 +402,53 @@ export const PROJECTS: ProjectItem[] = [
     createdAt: "2026-02-01 09:00",
     updatedAt: "2026-02-28 10:00",
     finishedAt: null,
-    qcStatus: "locked",
+    releaseDocStatus: "locked",
     totalChapters: 0,
     approvedChapters: 0,
     stagePlans: [
-      { stage: "synopsis", planDays: 5, startAt: "2026-02-01", dueAt: "2026-02-06", finishedAt: "2026-02-05", status: "completed", timingNote: "确认转项目后开始" },
-      { stage: "outline", planDays: 7, startAt: "2026-02-05", dueAt: "2026-02-12", finishedAt: null, status: "not_started", timingNote: "梗概通过后开始" },
-      { stage: "manuscript", planDays: 30, startAt: null, dueAt: null, finishedAt: null, status: "not_started", timingNote: "细纲通过后开始" },
-      { stage: "qc", planDays: 7, startAt: null, dueAt: null, finishedAt: null, status: "not_started", timingNote: "手动解锁后开始" },
+      {
+        stage: "synopsis",
+        planDays: 5,
+        startAt: "2026-02-01",
+        dueAt: "2026-02-06",
+        finishedAt: "2026-02-05",
+        status: "completed",
+        timingNote: "确认转项目后开始",
+      },
+      {
+        stage: "outline",
+        planDays: 7,
+        startAt: "2026-02-05",
+        dueAt: "2026-02-12",
+        finishedAt: null,
+        status: "not_started",
+        timingNote: "梗概通过后开始",
+      },
+      {
+        stage: "chapter",
+        planDays: 30,
+        startAt: null,
+        dueAt: null,
+        finishedAt: null,
+        status: "not_started",
+        timingNote: "细纲通过后开始",
+      },
+      {
+        stage: "release",
+        planDays: 7,
+        startAt: null,
+        dueAt: null,
+        finishedAt: null,
+        status: "not_started",
+        timingNote: "手动解锁后开始",
+      },
     ],
     chapters: [],
   },
 ]
 
-export const STAGE_ORDER: ProjectStage[] = ["synopsis", "outline", "manuscript", "qc", "done"]
-
 export function getProjectById(id: string): ProjectItem | undefined {
-  return PROJECTS.find((p) => p.id === id)
+  return PROJECTS.find((project) => project.id === id)
 }
 
 export const PROJECT_EDITORS = [

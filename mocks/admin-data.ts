@@ -112,7 +112,7 @@ export const AUDIT_LOGS: AuditLog[] = [
   { id: "log4", time: "2026-06-07 14:00", operator: "平台管理员", role: "admin", action: "归属调整", target: "项目：星海拾遗", before: "负责编辑 林编辑", after: "负责编辑 陈编辑", note: "工作量调整" },
   { id: "log5", time: "2026-06-05 16:10", operator: "平台管理员", role: "admin", action: "用户禁用", target: "用户：江临", before: "正常", after: "已禁用", note: "长期未活跃" },
   { id: "log6", time: "2026-06-02 11:30", operator: "平台管理员", role: "admin", action: "项目取消", target: "项目：雾隐山庄", before: "进行中", after: "已取消", note: "选题方向调整" },
-  { id: "log7", time: "2026-05-30 09:00", operator: "陈编辑", role: "editor", action: "解锁全文质检", target: "项目：山海食肆", before: "未解锁", after: "已解锁", note: "全部章节通过" },
+  { id: "log7", time: "2026-05-30 09:00", operator: "陈编辑", role: "editor", action: "解锁质检", target: "项目：山海食肆", before: "未解锁", after: "已解锁", note: "全部章节通过" },
 ]
 
-export const AUDIT_ACTIONS = ["保存", "提交审核", "退回", "审核通过", "归属调整", "项目归档", "项目取消", "项目恢复", "用户禁用", "用户启用", "解锁全文质检"]
+export const AUDIT_ACTIONS = ["保存", "提交审核", "退回", "审核通过", "归属调整", "项目归档", "项目取消", "项目恢复", "用户禁用", "用户启用", "解锁质检"]

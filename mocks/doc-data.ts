@@ -2,14 +2,14 @@
 import type { DocStatus, HolderRole, BadgeTone, Role } from "@/types/domain"
 import { DOC_STATUS_LABELS } from "@/types/domain"
 
-// Doc 类型
-export type DocType = "synopsis" | "outline" | "manuscript" | "qc"
+// Doc 类型直接对齐真实数据库编码，避免 mock 继续保留 manuscript / qc 别名。
+export type DocType = "synopsis" | "outline" | "chapter" | "release"
 
 export const DOC_TYPE_LABELS: Record<DocType, string> = {
   synopsis: "梗概",
   outline: "细纲",
-  manuscript: "正文",
-  qc: "全文质检",
+  chapter: "正文",
+  release: "质检",
 }
 
 export const DOC_STATUS_TONE: Record<DocStatus, BadgeTone> = {
@@ -245,7 +245,8 @@ export function getDoc(projectId: string, docType: DocType): DocData {
     projectId,
     projectName: projectNames[projectId] ?? "未知项目",
     docType,
-    title: docType === "manuscript" ? "第四章 暗巷的修士" : DOC_TYPE_LABELS[docType],
+    // 正文章节仍然显示具体章节名；其它 Doc 使用阶段标签作为标题。
+    title: docType === "chapter" ? "第四章 暗巷的修士" : DOC_TYPE_LABELS[docType],
     status: "submitted",
     holder: "editor",
     words: 3680,

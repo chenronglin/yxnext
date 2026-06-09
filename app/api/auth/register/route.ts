@@ -14,19 +14,10 @@ const registerSchema = z.object({
   role: z.enum(["author", "editor"]),
   penName: z.string().trim().min(1, "请输入笔名或姓名").optional(),
   name: z.string().trim().min(1, "请输入笔名或姓名").optional(),
-  email: z.string().trim().email("请输入有效的邮箱地址").optional(),
-  phone: z.string().trim().optional(),
-  contact: z.string().trim().optional(),
+  // 注册页现在统一只接受邮箱，手机号不再作为注册入口字段。
+  email: z.string().trim().email("请输入有效的邮箱地址"),
   bio: z.string().trim().optional(),
 })
-
-function isEmail(value: string) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
-}
-
-function isPhone(value: string) {
-  return /^1\d{10}$/.test(value)
-}
 
 export async function POST(request: NextRequest) {
   try {
@@ -41,27 +32,14 @@ export async function POST(request: NextRequest) {
     }
 
     const name = body.name ?? body.penName ?? ""
-    const rawContact = body.contact?.trim() ?? ""
-    const email = body.email ?? (isEmail(rawContact) ? rawContact : "")
-    const phone = body.phone ?? (isPhone(rawContact) ? rawContact : undefined)
-
-    // 当前数据库设计要求 email 非空且唯一，因此这里只实现“带邮箱的注册申请”；
-    // bio 字段当前库表无落点，接口层暂时只接受但不持久化，避免违反现有表结构。
-    if (!email) {
-      throw new ApiError({
-        status: 409,
-        code: "REGISTER_EMAIL_REQUIRED_BY_SCHEMA",
-        message: "当前数据库设计要求注册必须提供邮箱，暂不支持仅手机号申请",
-      })
-    }
 
     const result = await registerPendingUser({
       username: body.username,
       password: body.password,
       role: body.role,
       name,
-      email,
-      phone,
+      email: body.email,
+      biography: body.bio,
     })
 
     return ok(result)

@@ -12,7 +12,7 @@ import { SubmitReviewDialog, ReturnReviewDialog, ApproveDialog } from "@/compone
 import { getDoc, type DocType, DOC_TYPE_LABELS } from "@/mocks/doc-data"
 import { Save, Eye, Info } from "lucide-react"
 
-const VALID_TYPES: DocType[] = ["synopsis", "outline", "manuscript", "qc"]
+const VALID_TYPES: DocType[] = ["synopsis", "outline", "chapter", "release"]
 
 export function DocEditor({ projectId, docType }: { projectId: string; docType: string }) {
   const { role } = useRole()

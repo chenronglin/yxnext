@@ -7,13 +7,15 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { fetchJson } from "@/lib/api"
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("")
   const [error, setError] = useState("")
   const [submitted, setSubmitted] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setError("")
 
@@ -29,8 +31,23 @@ export default function ForgotPasswordPage() {
       return
     }
 
-    // Simulate sending reset link
-    setSubmitted(true)
+    setSubmitting(true)
+
+    try {
+      // 忘记密码现在只做“通知管理员协助重置”，页面不再伪造邮件找回流程。
+      await fetchJson("/api/auth/forgot-password", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ email }),
+      })
+      setSubmitted(true)
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "提交失败，请稍后重试")
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   if (submitted) {
@@ -40,16 +57,16 @@ export default function ForgotPasswordPage() {
           <div className="flex size-12 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
             <CheckCircle2 className="size-6" />
           </div>
-          <CardTitle className="mt-4 text-lg">邮件已发送</CardTitle>
+          <CardTitle className="mt-4 text-lg">请求已提交</CardTitle>
           <CardDescription>
-            密码重置邮件已发送至您的邮箱：
+            如邮箱对应账号存在，系统已通知管理员协助重置密码：
             <br />
             <span className="font-medium text-foreground">{email}</span>
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4 text-center">
           <p className="text-sm text-muted-foreground leading-relaxed">
-            请检查您的收件箱（以及垃圾邮件文件夹）。按照邮件中的提示操作即可重新设置密码。
+            为了避免暴露账号是否存在，系统始终返回统一结果。管理员收到通知后会人工协助处理。
           </p>
           <Button asChild className="mt-2 w-full">
             <Link href="/login">
@@ -64,10 +81,10 @@ export default function ForgotPasswordPage() {
 
   return (
     <Card className="border-border shadow-sm">
-      <CardHeader>
-        <CardTitle className="text-lg">找回密码</CardTitle>
-        <CardDescription>请输入您的账号邮箱，我们将向您发送重置密码的链接。</CardDescription>
-      </CardHeader>
+        <CardHeader>
+          <CardTitle className="text-lg">找回密码</CardTitle>
+          <CardDescription>请输入注册邮箱，系统会通知管理员协助重置密码。</CardDescription>
+        </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           {error && (
@@ -93,8 +110,8 @@ export default function ForgotPasswordPage() {
             </div>
           </div>
 
-          <Button type="submit" className="mt-2 w-full">
-            发送重置链接
+          <Button type="submit" className="mt-2 w-full" disabled={submitting}>
+            {submitting ? "提交中..." : "通知管理员重置"}
           </Button>
 
           <p className="text-center text-sm text-muted-foreground">

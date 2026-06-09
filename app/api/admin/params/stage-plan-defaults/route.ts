@@ -11,7 +11,7 @@ export const runtime = "nodejs"
 const stagePlanDefaultsSchema = z.object({
   items: z.array(
     z.object({
-      stage: z.enum(["synopsis", "outline", "manuscript", "qc"]),
+      stage: z.enum(["synopsis", "outline", "chapter", "release"]),
       days: z.number().int(),
       warningDaysBeforeDue: z.number().int().optional(),
     }),

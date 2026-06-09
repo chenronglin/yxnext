@@ -22,6 +22,7 @@ export interface ManagedUser {
   contact: string
   email: string
   phone?: string
+  biography?: string
   lastLogin: string | null
   createdAt: string
 }
@@ -33,6 +34,7 @@ export interface ApprovalRequest {
   contact: string
   appliedAt: string
   note: string
+  biography: string
   status: "pending" | "rejected"
   rejectReason?: string
 }
@@ -58,7 +60,8 @@ export interface SysParam {
 }
 
 export interface StagePlanDefaultItem {
-  stage: "synopsis" | "outline" | "manuscript" | "qc"
+  // 阶段参数直接复用数据库真实编码，避免继续暴露旧版 manuscript / qc 别名。
+  stage: "synopsis" | "outline" | "chapter" | "release"
   label: string
   days: number
   warningDaysBeforeDue: number
@@ -88,7 +91,8 @@ export interface DashboardStats {
   todayReviewCount: number
   todayReturnCount: number
   stageCounts: Array<{
-    stage: "synopsis" | "outline" | "manuscript" | "qc" | "done"
+    // 管理看板里的阶段统计也统一改成数据库真实编码。
+    stage: "synopsis" | "outline" | "chapter" | "release" | "completed"
     count: number
   }>
   authorRanking: Array<{

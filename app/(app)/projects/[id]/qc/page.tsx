@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button"
 import { PageHeader } from "@/components/page-header"
 import { StatusBadge } from "@/components/status-badge"
 import { useRole } from "@/components/role-provider"
-import { getProjectById, QC_STATUS_LABELS, QC_STATUS_TONE } from "@/mocks/project-data"
+import { getProjectById, RELEASE_DOC_STATUS_LABELS, RELEASE_DOC_STATUS_TONE } from "@/mocks/project-data"
 import { DOC_STATUS_LABELS } from "@/types/domain"
 import { Unlock, FileText, CheckCircle2, Info, Lock, ArrowRight } from "lucide-react"
 
@@ -20,31 +20,34 @@ export default function QcPage({ params }: { params: Promise<{ id: string }> }) 
 
   const unapprovedChapters = project.chapters.filter((c) => !c.approved)
   const allApproved = project.totalChapters > 0 && project.approvedChapters === project.totalChapters
-  const canUnlock = role === "editor" && project.qcStatus === "locked" && allApproved
-  const canComplete = (role === "editor" || role === "admin") && project.qcStatus === "approved"
+  const canUnlock = role === "editor" && project.releaseDocStatus === "locked" && allApproved
+  const canComplete = (role === "editor" || role === "admin") && project.releaseDocStatus === "approved"
 
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        breadcrumb={["我的项目", project.title, "全文质检"]}
-        title="全文质检"
-        description={`${project.title} 的全文质检状态与解锁条件`}
+        breadcrumb={["我的项目", project.title, "质检"]}
+        title="质检"
+        description={`${project.title} 的质检状态与解锁条件`}
       />
 
       {/* 状态卡片 */}
       <Card className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-col gap-1.5">
-          <span className="text-xs text-muted-foreground">全文质检状态</span>
+          <span className="text-xs text-muted-foreground">质检状态</span>
           <div className="flex items-center gap-2">
-            <StatusBadge label={QC_STATUS_LABELS[project.qcStatus]} tone={QC_STATUS_TONE[project.qcStatus]} />
-            {project.qcStatus === "locked" && <span className="text-sm text-muted-foreground">尚未解锁</span>}
+            <StatusBadge
+              label={RELEASE_DOC_STATUS_LABELS[project.releaseDocStatus]}
+              tone={RELEASE_DOC_STATUS_TONE[project.releaseDocStatus]}
+            />
+            {project.releaseDocStatus === "locked" && <span className="text-sm text-muted-foreground">尚未解锁</span>}
           </div>
         </div>
-        {project.qcStatus !== "locked" && (
+        {project.releaseDocStatus !== "locked" && (
           <Button asChild variant="outline" className="bg-transparent">
-            <Link href={`/projects/${project.id}/docs/qc`}>
+            <Link href={`/projects/${project.id}/docs/release`}>
               <FileText className="mr-1.5 size-4" />
-              进入全文质检 Doc
+              进入质检 Doc
               <ArrowRight className="ml-1 size-3.5" />
             </Link>
           </Button>
@@ -79,12 +82,12 @@ export default function QcPage({ params }: { params: Promise<{ id: string }> }) 
             {canUnlock ? (
               <Button>
                 <Unlock className="mr-1.5 size-4" />
-                手动解锁全文质检
+                手动解锁质检
               </Button>
             ) : (
               <Button disabled variant="outline" className="bg-transparent">
                 <Lock className="mr-1.5 size-4" />
-                {project.qcStatus !== "locked" ? "全文质检已解锁" : "全部正文 Doc 通过后可解锁"}
+                {project.releaseDocStatus !== "locked" ? "质检已解锁" : "全部正文 Doc 通过后可解锁"}
               </Button>
             )}
           </div>
@@ -97,14 +100,14 @@ export default function QcPage({ params }: { params: Promise<{ id: string }> }) 
         <ul className="flex flex-col gap-1.5">
           <li>初始内容来自已通过正文 Doc。</li>
           <li>解锁后修改不回写单章。</li>
-          <li>终稿导出优先取全文质检 Doc。</li>
+          <li>终稿导出优先取质检 Doc。</li>
         </ul>
       </Card>
 
       {/* 项目完成 */}
       {canComplete && (
         <Card className="flex items-center justify-between p-4">
-          <span className="text-sm text-foreground">全文质检已通过，可标记项目完成。</span>
+          <span className="text-sm text-foreground">质检已通过，可标记项目完成。</span>
           <Button>
             <CheckCircle2 className="mr-1.5 size-4" />
             标记项目完成

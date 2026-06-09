@@ -7,7 +7,8 @@ export interface ReviewQueueItem {
   docId: string
   projectId: string
   projectTitle: string
-  docType: "synopsis" | "outline" | "manuscript" | "qc"
+  // 审稿队列直接返回数据库真实 Doc 类型，前端只再做中文文案映射。
+  docType: "synopsis" | "outline" | "chapter" | "release"
   title: string
   authorName: string
   words: number
@@ -33,6 +34,9 @@ export interface TodoItemView {
   due: string
   from: string
   createdAt: string
+  // 待办的“已读/未读”与“业务完成状态”彻底解耦，因此单独返回 read/readAt。
+  read: boolean
+  readAt: string | null
   href: string
 }
 
@@ -44,13 +48,14 @@ export type NotificationCategory =
   | "doc_submit"
   | "doc_approve"
   | "doc_return"
-  | "revision"
   | "stage_unlock"
   | "enter_qc"
   | "project_done"
   | "stage_warning"
   | "binding_change"
   | "approval_result"
+  | "approval_request"
+  | "forgot_password_request"
   | "system"
 
 export interface NotificationItemView {

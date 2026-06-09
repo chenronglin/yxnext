@@ -58,7 +58,7 @@ export default function ChaptersPage({ params }: { params: Promise<{ id: string 
           <span className="font-semibold text-emerald-600">{project.approvedChapters}</span>
         </div>
         {project.totalChapters > 0 && project.approvedChapters === project.totalChapters && (
-          <StatusBadge label="可解锁全文质检" tone="success" />
+          <StatusBadge label="可解锁质检" tone="success" />
         )}
       </Card>
 
@@ -110,17 +110,17 @@ export default function ChaptersPage({ params }: { params: Promise<{ id: string 
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-end gap-1">
                       <Button asChild size="sm" variant="ghost" className="h-8 px-2" title="进入当前稿件">
-                        <Link href={`/projects/${project.id}/docs/manuscript`}>
+                        <Link href={`/projects/${project.id}/docs/chapter`}>
                           <FileText className="size-3.5" />
                         </Link>
                       </Button>
                       <Button asChild size="sm" variant="ghost" className="h-8 px-2" title="历史版本">
-                        <Link href={`/projects/${project.id}/docs/manuscript/versions`}>
+                        <Link href={`/projects/${project.id}/docs/chapter/versions`}>
                           <History className="size-3.5" />
                         </Link>
                       </Button>
                       <Button asChild size="sm" variant="ghost" className="h-8 px-2" title="阅读模式">
-                        <Link href={`/projects/${project.id}/docs/manuscript/clean`}>
+                        <Link href={`/projects/${project.id}/docs/chapter/clean`}>
                           <BookOpen className="size-3.5" />
                         </Link>
                       </Button>

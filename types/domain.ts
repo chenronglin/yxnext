@@ -1,4 +1,8 @@
 // 阅享平台 - 共享类型与状态定义
+// 说明：
+// 1. 这里统一维护“数据库、后端接口、前端页面”共用的基础枚举；
+// 2. 项目阶段统一使用内部固定编码 synopsis / outline / chapter / release / completed；
+// 3. 页面展示文案再把 release 翻译成“质检”，避免继续保留 qc / manuscript 这套旧别名。
 
 export type Role = "admin" | "editor" | "author"
 
@@ -39,15 +43,16 @@ export const PROJECT_LIFECYCLE_LABELS: Record<ProjectLifecycle, string> = {
   cancelled: "已取消",
 }
 
-// 项目阶段
-export type ProjectStage = "synopsis" | "outline" | "manuscript" | "qc" | "done"
+// 项目阶段：
+// 直接对齐数据库 ProjectStage 枚举，确保四层口径统一。
+export type ProjectStage = "synopsis" | "outline" | "chapter" | "release" | "completed"
 
 export const PROJECT_STAGE_LABELS: Record<ProjectStage, string> = {
   synopsis: "梗概",
   outline: "细纲",
-  manuscript: "正文",
-  qc: "全文质检",
-  done: "完成",
+  chapter: "正文",
+  release: "质检",
+  completed: "完成",
 }
 
 // Doc 状态

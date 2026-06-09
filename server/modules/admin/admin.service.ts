@@ -27,7 +27,7 @@ import type {
   GovernanceProjectDetail,
   ProjectItem,
   ProjectPersonOption,
-  QcStatus,
+  ReleaseDocStatus,
   StagePlan,
 } from "@/types/project"
 
@@ -39,6 +39,7 @@ type ManagedUserInput = {
   role?: Role
   email?: string
   phone?: string | null
+  biography?: string | null
   password?: string
 }
 
@@ -60,7 +61,7 @@ type SiMainTypeInput = {
 
 type StagePlanDefaultsInput = {
   items: Array<{
-    stage: "synopsis" | "outline" | "manuscript" | "qc"
+    stage: "synopsis" | "outline" | "chapter" | "release"
     days: number
     warningDaysBeforeDue?: number
   }>
@@ -74,7 +75,7 @@ type ProjectAssignmentInput = {
 
 type ProjectStagePlansInput = {
   items: Array<{
-    stage: "synopsis" | "outline" | "manuscript" | "qc"
+    stage: "synopsis" | "outline" | "chapter" | "release"
     planDays: number
   }>
 }
@@ -96,29 +97,29 @@ type AuditFilters = {
 }
 
 type RangeKey = "7d" | "30d" | "90d" | "all"
-type EditableProjectStage = Exclude<ProjectStage, "done">
+type EditableProjectStage = Exclude<ProjectStage, "completed">
 
 const stageCodeToUiStage: Record<"synopsis" | "outline" | "chapter" | "release", ProjectStage> = {
   synopsis: "synopsis",
   outline: "outline",
-  chapter: "manuscript",
-  release: "qc",
+  chapter: "chapter",
+  release: "release",
 }
 
-const uiStageToStageCode: Record<Exclude<ProjectStage, "done">, "synopsis" | "outline" | "chapter" | "release"> = {
+const uiStageToStageCode: Record<Exclude<ProjectStage, "completed">, "synopsis" | "outline" | "chapter" | "release"> = {
   synopsis: "synopsis",
   outline: "outline",
-  manuscript: "chapter",
-  qc: "release",
+  chapter: "chapter",
+  release: "release",
 }
 
-const stageOrder: Array<Exclude<ProjectStage, "done">> = ["synopsis", "outline", "manuscript", "qc"]
+const stageOrder: Array<Exclude<ProjectStage, "completed">> = ["synopsis", "outline", "chapter", "release"]
 
-const stageLabelMap: Record<Exclude<ProjectStage, "done">, string> = {
+const stageLabelMap: Record<Exclude<ProjectStage, "completed">, string> = {
   synopsis: "梗概",
   outline: "细纲",
-  manuscript: "正文",
-  qc: "全文质检",
+  chapter: "正文",
+  release: "质检",
 }
 
 const projectInclude = {
@@ -215,13 +216,31 @@ function userContact(user: { email: string; phone: string | null }) {
   return user.phone?.trim() ? `${user.phone} / ${user.email}` : user.email
 }
 
+function closeRegisterApprovalTodosQuery(userId: bigint, now: Date) {
+  // 注册审批待办是“每个管理员一条”的持久化任务；
+  // 审批通过或驳回时，需要一次性把所有管理员侧未完成记录关闭。
+  return {
+    where: {
+      todoType: "register_approval",
+      entityType: "user",
+      entityId: userId,
+      status: "open" as const,
+    },
+    data: {
+      status: "done" as const,
+      completedAt: now,
+      openDedupeKey: null,
+    },
+  }
+}
+
 function dbDocStatusToUiStatus(status: "draft" | "submitted" | "rejected" | "approved") {
   return status === "rejected" ? "returned" : status
 }
 
 function dbProjectStageToUiStage(stage: "synopsis" | "outline" | "chapter" | "release" | "completed"): ProjectStage {
   if (stage === "completed") {
-    return "done"
+    return "completed"
   }
 
   return stageCodeToUiStage[stage]
@@ -237,7 +256,7 @@ function uiLifecycleTone(lifecycle: ProjectLifecycle): BadgeTone {
 function stageTimingNote(stage: EditableProjectStage) {
   if (stage === "synopsis") return "确认转项目后开始"
   if (stage === "outline") return "梗概通过后开始"
-  if (stage === "manuscript") return "细纲通过后开始"
+  if (stage === "chapter") return "细纲通过后开始"
   return "手动解锁后开始"
 }
 
@@ -310,6 +329,7 @@ function toManagedUser(user: {
   status: UserStatus
   email: string
   phone: string | null
+  biography: string | null
   lastLoginAt: Date | null
   createdAt: Date
 }): ManagedUser {
@@ -322,6 +342,7 @@ function toManagedUser(user: {
     contact: userContact(user),
     email: user.email,
     phone: user.phone ?? undefined,
+    biography: user.biography ?? undefined,
     lastLogin: formatDateTime(user.lastLoginAt),
     createdAt: user.createdAt.toISOString(),
   }
@@ -333,6 +354,7 @@ function toApprovalRequest(user: {
   displayName: string | null
   email: string
   phone: string | null
+  biography: string | null
   createdAt: Date
   status: UserStatus
   rejectedReason: string | null
@@ -343,7 +365,8 @@ function toApprovalRequest(user: {
     penName: user.displayName ?? user.username,
     contact: userContact(user),
     appliedAt: user.createdAt.toISOString(),
-    note: "—",
+    note: user.biography ?? "—",
+    biography: user.biography ?? "",
     status: approvalStatus(user.status),
     rejectReason: user.rejectedReason ?? undefined,
   }
@@ -388,8 +411,6 @@ function toSysParam(item: {
 }
 
 function stageCodeToParamStage(stageCode: "synopsis" | "outline" | "chapter" | "release"): StagePlanDefaultItem["stage"] {
-  if (stageCode === "chapter") return "manuscript"
-  if (stageCode === "release") return "qc"
   return stageCode
 }
 
@@ -458,7 +479,7 @@ function toStagePlan(plan: ProjectRecord["stagePlans"][number]): StagePlan {
   }
 }
 
-function projectQcStatus(project: ProjectRecord): QcStatus {
+function projectReleaseDocStatus(project: ProjectRecord): ReleaseDocStatus {
   const releaseDoc = project.docs.find((doc) => doc.docType === "release")
 
   if (project.releaseStatus === "locked") {
@@ -492,7 +513,7 @@ function makeDocSummary(project: ProjectRecord): GovernanceDocSummaryItem[] {
   const synopsisDoc = project.docs.find((doc) => doc.docType === "synopsis")
   const outlineDoc = project.docs.find((doc) => doc.docType === "outline")
   const chapterDocs = project.docs.filter((doc) => doc.docType === "chapter")
-  const qcStatus = projectQcStatus(project)
+  const releaseDocStatus = projectReleaseDocStatus(project)
 
   return [
     {
@@ -519,25 +540,25 @@ function makeDocSummary(project: ProjectRecord): GovernanceDocSummaryItem[] {
     },
     {
       key: "release",
-      title: "全文质检 Doc",
+      title: "质检 Doc",
       statusLabel:
-        qcStatus === "locked"
+        releaseDocStatus === "locked"
           ? "未解锁"
-          : qcStatus === "unlocked"
+          : releaseDocStatus === "unlocked"
             ? "已解锁"
-            : qcStatus === "draft"
+            : releaseDocStatus === "draft"
               ? "草稿"
-              : qcStatus === "submitted"
+              : releaseDocStatus === "submitted"
                 ? "已提交待审"
-                : qcStatus === "returned"
+                : releaseDocStatus === "returned"
                   ? "退回待改"
                   : "审核通过",
       tone:
-        qcStatus === "approved"
+        releaseDocStatus === "approved"
           ? "success"
-          : qcStatus === "returned"
+          : releaseDocStatus === "returned"
             ? "warning"
-            : qcStatus === "submitted" || qcStatus === "unlocked"
+            : releaseDocStatus === "submitted" || releaseDocStatus === "unlocked"
               ? "info"
               : "neutral",
     },
@@ -547,7 +568,7 @@ function makeDocSummary(project: ProjectRecord): GovernanceDocSummaryItem[] {
 function toProjectItem(project: ProjectRecord): ProjectItem {
   const stage = dbProjectStageToUiStage(project.currentStage)
   const stagePlans = project.stagePlans.map(toStagePlan)
-  const currentPlan = stage === "done" ? null : stagePlans.find((item) => item.stage === stage)
+  const currentPlan = stage === "completed" ? null : stagePlans.find((item) => item.stage === stage)
   const chapterDocs = project.docs.filter((doc) => doc.docType === "chapter").map(toChapterDoc)
 
   return {
@@ -561,13 +582,13 @@ function toProjectItem(project: ProjectRecord): ProjectItem {
     authorId: project.authorId.toString(),
     stage,
     lifecycle: project.lifecycleStatus,
-    planStatus: stage === "done" ? "completed" : currentPlan?.status ?? "not_started",
+    planStatus: stage === "completed" ? "completed" : currentPlan?.status ?? "not_started",
     pendingDocs: project.docs.filter((doc) => doc.status !== "approved").length,
     overdue: project.stagePlans.some((plan) => plan.timelineStatus === "overdue"),
     createdAt: project.createdAt.toISOString(),
     updatedAt: project.updatedAt.toISOString(),
     finishedAt: formatDateTime(project.completedAt),
-    qcStatus: projectQcStatus(project),
+    releaseDocStatus: projectReleaseDocStatus(project),
     totalChapters: chapterDocs.length,
     approvedChapters: chapterDocs.filter((item) => item.approved).length,
     stagePlans,
@@ -789,9 +810,9 @@ async function dashboardStats(range: RangeKey = "30d"): Promise<DashboardStats> 
     stageCounts: [
       { stage: "synopsis", count: stageCountMap.get("synopsis") ?? 0 },
       { stage: "outline", count: stageCountMap.get("outline") ?? 0 },
-      { stage: "manuscript", count: stageCountMap.get("manuscript") ?? 0 },
-      { stage: "qc", count: stageCountMap.get("qc") ?? 0 },
-      { stage: "done", count: stageCountMap.get("done") ?? 0 },
+      { stage: "chapter", count: stageCountMap.get("chapter") ?? 0 },
+      { stage: "release", count: stageCountMap.get("release") ?? 0 },
+      { stage: "completed", count: stageCountMap.get("completed") ?? 0 },
     ],
     authorRanking: authorAgg.map((item) => ({
       name: authorMap.get(item.actorUserId.toString()) ?? item.actorUserId.toString(),
@@ -839,7 +860,7 @@ export async function getAdminReport(actor: ApiCurrentUser, range: RangeKey = "3
     todayReviewCount: stats.todayReviewCount,
     todayReturnCount: stats.todayReturnCount,
     stageCounts: stats.stageCounts.map((item) => ({
-      label: item.stage === "done" ? "完成" : stageLabelMap[item.stage],
+      label: item.stage === "completed" ? "完成" : stageLabelMap[item.stage],
       value: item.count,
     })),
     authorRanking: stats.authorRanking,
@@ -863,6 +884,7 @@ export async function listManagedUsers(actor: ApiCurrentUser) {
       status: true,
       email: true,
       phone: true,
+      biography: true,
       lastLoginAt: true,
       createdAt: true,
     },
@@ -883,6 +905,7 @@ export async function createManagedUser(actor: ApiCurrentUser, input: ManagedUse
   const name = trimToNull(input.name)
   const email = trimToNull(input.email)
   const password = trimToNull(input.password)
+  const biography = trimToNull(input.biography ?? null)
   const role = input.role
 
   if (!username || !name || !email || !password || !role) {
@@ -921,6 +944,7 @@ export async function createManagedUser(actor: ApiCurrentUser, input: ManagedUse
         status: "active",
         displayName: name,
         phone: trimToNull(input.phone),
+        biography,
       },
       select: {
         userId: true,
@@ -930,6 +954,7 @@ export async function createManagedUser(actor: ApiCurrentUser, input: ManagedUse
         status: true,
         email: true,
         phone: true,
+        biography: true,
         lastLoginAt: true,
         createdAt: true,
       },
@@ -944,6 +969,7 @@ export async function createManagedUser(actor: ApiCurrentUser, input: ManagedUse
         username: created.username,
         role: created.role,
         status: created.status,
+        biography,
       },
     })
 
@@ -971,6 +997,7 @@ export async function updateManagedUser(actor: ApiCurrentUser, userIdValue: stri
       status: true,
       email: true,
       phone: true,
+      biography: true,
       lastLoginAt: true,
       createdAt: true,
     },
@@ -987,6 +1014,7 @@ export async function updateManagedUser(actor: ApiCurrentUser, userIdValue: stri
   const username = trimToNull(input.username) ?? existing.username
   const email = trimToNull(input.email) ?? existing.email
   const name = trimToNull(input.name) ?? existing.displayName ?? existing.username
+  const biography = input.biography === undefined ? existing.biography : trimToNull(input.biography)
 
   const collision = await prisma.user.findFirst({
     where: {
@@ -1019,6 +1047,7 @@ export async function updateManagedUser(actor: ApiCurrentUser, userIdValue: stri
         role: input.role ?? existing.role,
         displayName: name,
         phone: input.phone === undefined ? existing.phone : trimToNull(input.phone),
+        biography,
       },
       select: {
         userId: true,
@@ -1028,6 +1057,7 @@ export async function updateManagedUser(actor: ApiCurrentUser, userIdValue: stri
         status: true,
         email: true,
         phone: true,
+        biography: true,
         lastLoginAt: true,
         createdAt: true,
       },
@@ -1043,12 +1073,14 @@ export async function updateManagedUser(actor: ApiCurrentUser, userIdValue: stri
         role: existing.role,
         email: existing.email,
         phone: existing.phone,
+        biography: existing.biography,
       },
       afterJson: {
         username: saved.username,
         role: saved.role,
         email: saved.email,
         phone: saved.phone,
+        biography: saved.biography,
       },
     })
 
@@ -1075,6 +1107,7 @@ export async function toggleManagedUserStatus(actor: ApiCurrentUser, userIdValue
       username: true,
       email: true,
       phone: true,
+      biography: true,
       role: true,
       lastLoginAt: true,
       createdAt: true,
@@ -1114,6 +1147,7 @@ export async function toggleManagedUserStatus(actor: ApiCurrentUser, userIdValue
         status: true,
         email: true,
         phone: true,
+        biography: true,
         lastLoginAt: true,
         createdAt: true,
       },
@@ -1216,6 +1250,7 @@ export async function listApprovalRequests(actor: ApiCurrentUser) {
       displayName: true,
       email: true,
       phone: true,
+      biography: true,
       createdAt: true,
       status: true,
       rejectedReason: true,
@@ -1234,6 +1269,7 @@ export async function approveApprovalRequest(actor: ApiCurrentUser, userIdValue:
   ensureAdmin(actor)
 
   const userId = parseBigIntId(userIdValue, "用户 ID")
+  const now = new Date()
   const existing = await prisma.user.findUnique({
     where: {
       userId,
@@ -1270,10 +1306,12 @@ export async function approveApprovalRequest(actor: ApiCurrentUser, userIdValue:
       data: {
         status: "active",
         approvedBy: actor.userId,
-        approvedAt: new Date(),
+        approvedAt: now,
         rejectedReason: null,
       },
     })
+
+    await tx.todoItem.updateMany(closeRegisterApprovalTodosQuery(userId, now))
 
     await tx.notification.create({
       data: {
@@ -1308,6 +1346,7 @@ export async function rejectApprovalRequest(actor: ApiCurrentUser, userIdValue: 
 
   const userId = parseBigIntId(userIdValue, "用户 ID")
   const reason = trimToNull(input.reason)
+  const now = new Date()
 
   if (!reason) {
     throw new ApiError({
@@ -1353,6 +1392,8 @@ export async function rejectApprovalRequest(actor: ApiCurrentUser, userIdValue: 
         rejectedReason: reason,
       },
     })
+
+    await tx.todoItem.updateMany(closeRegisterApprovalTodosQuery(userId, now))
 
     await tx.notification.create({
       data: {
@@ -2035,9 +2076,9 @@ export async function listGovernanceProjects(actor: ApiCurrentUser, filters: Pro
       ...(stage && stage !== "all"
         ? {
             currentStage:
-              stage === "done"
+              stage === "completed"
                 ? "completed"
-                : (uiStageToStageCode[stage as Exclude<ProjectStage, "done">] as Prisma.ProjectWhereInput["currentStage"]),
+                : (uiStageToStageCode[stage as Exclude<ProjectStage, "completed">] as Prisma.ProjectWhereInput["currentStage"]),
           }
         : {}),
       ...(overdue === "yes"
@@ -2330,7 +2371,7 @@ export async function transitionGovernanceProject(
     throw new ApiError({
       status: 409,
       code: "PROJECT_CANNOT_COMPLETE",
-      message: "全文质检未通过，不能标记项目完成",
+      message: "质检未通过，不能标记项目完成",
     })
   }
 

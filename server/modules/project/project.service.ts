@@ -17,8 +17,8 @@ import type {
   ProjectExportScope,
   ProjectItem,
   ReorderChapterInput,
+  ReleaseDocStatus,
   StagePlan,
-  QcStatus,
 } from "@/types/project"
 
 type TxClient = Prisma.TransactionClient
@@ -30,16 +30,16 @@ type ProjectListFilters = {
   overdue?: string | null
 }
 
-// 项目服务对外统一返回前端语义里的阶段值，避免调用方再感知数据库里的 chapter/release 编码。
+// 项目服务直接返回数据库真实阶段编码，页面层只负责把 release 翻译成“质检”。
 const stageCodeToUiStage: Record<"synopsis" | "outline" | "chapter" | "release", ProjectStage> = {
   synopsis: "synopsis",
   outline: "outline",
-  chapter: "manuscript",
-  release: "qc",
+  chapter: "chapter",
+  release: "release",
 }
 
 // 阶段计划只覆盖四个协作阶段；“完成”是项目生命周期状态，不出现在阶段计划表里。
-const editableStageOrder: Array<Exclude<ProjectStage, "done">> = ["synopsis", "outline", "manuscript", "qc"]
+const editableStageOrder: Array<Exclude<ProjectStage, "completed">> = ["synopsis", "outline", "chapter", "release"]
 
 // 新建 Doc 草稿时沿用当前项目统一的最小文档根结构，保证前端编辑器后续可以直接接管。
 const DEFAULT_CONTENT_SCHEMA_VERSION = 1
@@ -174,16 +174,16 @@ function dbDocStatusToUiStatus(status: "draft" | "submitted" | "rejected" | "app
 
 function dbProjectStageToUiStage(stage: "synopsis" | "outline" | "chapter" | "release" | "completed"): ProjectStage {
   if (stage === "completed") {
-    return "done"
+    return "completed"
   }
 
   return stageCodeToUiStage[stage]
 }
 
-function stageTimingNote(stage: Exclude<ProjectStage, "done">) {
+function stageTimingNote(stage: Exclude<ProjectStage, "completed">) {
   if (stage === "synopsis") return "确认转项目后开始"
   if (stage === "outline") return "梗概通过后开始"
-  if (stage === "manuscript") return "细纲通过后开始"
+  if (stage === "chapter") return "细纲通过后开始"
   return "手动解锁后开始"
 }
 
@@ -245,7 +245,7 @@ function assertProjectWritable(project: ProjectRecord) {
 }
 
 function assertCollaboratorCanManageProject(actor: ApiCurrentUser, project: ProjectRecord) {
-  // 项目层的章节编排、全文质检解锁等动作只允许管理员或当前项目协作者操作；
+  // 项目层的章节编排、质检解锁等动作只允许管理员或当前项目协作者操作；
   // 这里不额外区分作者/编辑，是为了兼容当前前端对章节管理入口的角色设计。
   if (actor.role === "admin") {
     return
@@ -267,7 +267,7 @@ function assertCollaboratorCanManageProject(actor: ApiCurrentUser, project: Proj
 }
 
 function assertEditorOrAdmin(actor: ApiCurrentUser, project: ProjectRecord) {
-  // 全文质检解锁、项目完成、项目导出属于编辑治理动作，不向作者开放。
+  // 质检解锁、项目完成、项目导出属于编辑治理动作，不向作者开放。
   if (actor.role === "admin") {
     return
   }
@@ -284,7 +284,7 @@ function assertEditorOrAdmin(actor: ApiCurrentUser, project: ProjectRecord) {
 }
 
 function toStagePlan(plan: ProjectRecord["stagePlans"][number]): StagePlan {
-  const stage = stageCodeToUiStage[plan.stageCode] as Exclude<ProjectStage, "done">
+  const stage = stageCodeToUiStage[plan.stageCode] as Exclude<ProjectStage, "completed">
 
   return {
     stage,
@@ -297,7 +297,7 @@ function toStagePlan(plan: ProjectRecord["stagePlans"][number]): StagePlan {
   }
 }
 
-function projectQcStatus(project: ProjectRecord): QcStatus {
+function projectReleaseDocStatus(project: ProjectRecord): ReleaseDocStatus {
   const releaseDoc = project.docs.find((doc) => doc.docType === "release")
 
   if (project.releaseStatus === "locked") {
@@ -344,7 +344,7 @@ function makeDocSummary(project: ProjectRecord): GovernanceDocSummaryItem[] {
   const synopsisDoc = project.docs.find((doc) => doc.docType === "synopsis")
   const outlineDoc = project.docs.find((doc) => doc.docType === "outline")
   const chapterDocs = project.docs.filter((doc) => doc.docType === "chapter")
-  const qcStatus = projectQcStatus(project)
+  const releaseDocStatus = projectReleaseDocStatus(project)
 
   return [
     {
@@ -375,25 +375,25 @@ function makeDocSummary(project: ProjectRecord): GovernanceDocSummaryItem[] {
     },
     {
       key: "release",
-      title: "全文质检 Doc",
+      title: "质检 Doc",
       statusLabel:
-        qcStatus === "locked"
+        releaseDocStatus === "locked"
           ? "未解锁"
-          : qcStatus === "unlocked"
+          : releaseDocStatus === "unlocked"
             ? "已解锁"
-            : qcStatus === "draft"
+            : releaseDocStatus === "draft"
               ? "草稿"
-              : qcStatus === "submitted"
+              : releaseDocStatus === "submitted"
                 ? "已提交待审"
-                : qcStatus === "returned"
+                : releaseDocStatus === "returned"
                   ? "退回待改"
                   : "审核通过",
       tone:
-        qcStatus === "approved"
+        releaseDocStatus === "approved"
           ? "success"
-          : qcStatus === "returned"
+          : releaseDocStatus === "returned"
             ? "warning"
-            : qcStatus === "submitted" || qcStatus === "unlocked"
+            : releaseDocStatus === "submitted" || releaseDocStatus === "unlocked"
               ? "info"
               : "neutral",
     },
@@ -417,7 +417,7 @@ function makeDocDirectory(project: ProjectRecord): ProjectDocDirectory {
 function toProjectItem(project: ProjectRecord): ProjectItem {
   const stage = dbProjectStageToUiStage(project.currentStage)
   const stagePlans = project.stagePlans.map(toStagePlan)
-  const currentPlan = stage === "done" ? null : stagePlans.find((item) => item.stage === stage)
+  const currentPlan = stage === "completed" ? null : stagePlans.find((item) => item.stage === stage)
   const chapterDocs = project.docs.filter((doc) => doc.docType === "chapter").map(toChapterDoc)
 
   return {
@@ -431,13 +431,13 @@ function toProjectItem(project: ProjectRecord): ProjectItem {
     authorId: project.authorId.toString(),
     stage,
     lifecycle: project.lifecycleStatus as ProjectLifecycle,
-    planStatus: stage === "done" ? "completed" : (currentPlan?.status ?? "not_started"),
+    planStatus: stage === "completed" ? "completed" : (currentPlan?.status ?? "not_started"),
     pendingDocs: project.docs.filter((doc) => doc.status !== "approved").length,
     overdue: project.stagePlans.some((plan) => plan.timelineStatus === "overdue"),
     createdAt: project.createdAt.toISOString(),
     updatedAt: project.updatedAt.toISOString(),
     finishedAt: toIsoString(project.completedAt),
-    qcStatus: projectQcStatus(project),
+    releaseDocStatus: projectReleaseDocStatus(project),
     totalChapters: chapterDocs.length,
     approvedChapters: chapterDocs.filter((item) => item.approved).length,
     stagePlans,
@@ -455,7 +455,7 @@ function toProjectDetail(project: ProjectRecord): ProjectDetail {
 }
 
 function textToParagraphNodes(text: string) {
-  // 全文质检初稿只需要一个可被编辑器识别的最小正文结构；
+  // 质检初稿只需要一个可被编辑器识别的最小正文结构；
   // 这里按空行切段，既能保留章节内容，又不会让导入逻辑依赖前端富文本节点实现。
   return text
     .split(/\n{2,}/)
@@ -618,7 +618,7 @@ async function unlockStagePlan(tx: TxClient, projectId: bigint, stageCode: "rele
     throw new ApiError({
       status: 409,
       code: "PROJECT_STAGE_PLAN_MISSING",
-      message: "全文质检阶段计划不存在，无法解锁",
+      message: "质检阶段计划不存在，无法解锁",
     })
   }
 
@@ -669,13 +669,9 @@ export async function listMyProjects(actor: ApiCurrentUser, filters: ProjectList
       ...(stage && stage !== "all"
         ? {
             currentStage:
-              stage === "done"
+              stage === "completed"
                 ? "completed"
-                : (stage === "manuscript"
-                    ? "chapter"
-                    : stage === "qc"
-                      ? "release"
-                      : stage) as Prisma.ProjectWhereInput["currentStage"],
+                : stage as Prisma.ProjectWhereInput["currentStage"],
           }
         : {}),
       ...(overdue === "yes"
@@ -1014,7 +1010,7 @@ export async function unlockProjectQc(actor: ApiCurrentUser, projectIdValue: str
       throw new ApiError({
         status: 409,
         code: "PROJECT_QC_ALREADY_UNLOCKED",
-        message: "全文质检已解锁，无需重复操作",
+        message: "质检已解锁，无需重复操作",
       })
     }
 
@@ -1026,7 +1022,7 @@ export async function unlockProjectQc(actor: ApiCurrentUser, projectIdValue: str
       throw new ApiError({
         status: 409,
         code: "PROJECT_QC_NO_CHAPTERS",
-        message: "当前项目还没有正文章节，不能解锁全文质检",
+        message: "当前项目还没有正文章节，不能解锁质检",
       })
     }
 
@@ -1035,7 +1031,7 @@ export async function unlockProjectQc(actor: ApiCurrentUser, projectIdValue: str
       throw new ApiError({
         status: 409,
         code: "PROJECT_QC_CHAPTERS_PENDING",
-        message: "仍有正文章节未审核通过，不能解锁全文质检",
+        message: "仍有正文章节未审核通过，不能解锁质检",
       })
     }
 
@@ -1059,7 +1055,7 @@ export async function unlockProjectQc(actor: ApiCurrentUser, projectIdValue: str
           projectId: project.projectId,
           docType: "release",
           stageCode: "release",
-          title: "全文质检",
+          title: "质检",
           status: "draft",
           holderRole: "author",
           currentWordCount: releaseWordCount,
@@ -1206,8 +1202,8 @@ export async function unlockProjectQc(actor: ApiCurrentUser, projectIdValue: str
     await createProjectNotification(tx, {
       recipientUserId: project.authorId,
       type: "project_enter_qc",
-      title: "项目已进入全文质检",
-      body: `《${project.title}》已解锁全文质检，请开始全文质检协作。`,
+      title: "项目已进入质检",
+      body: `《${project.title}》已解锁质检，请开始质检协作。`,
       projectId: project.projectId,
       entityId: releaseDocId,
       docId: releaseDocId,
@@ -1243,7 +1239,7 @@ export async function completeProject(actor: ApiCurrentUser, projectIdValue: str
       throw new ApiError({
         status: 409,
         code: "PROJECT_CANNOT_COMPLETE",
-        message: "全文质检未通过，不能标记项目完成",
+        message: "质检未通过，不能标记项目完成",
       })
     }
 
@@ -1381,19 +1377,19 @@ export async function exportProjectContent(
     }
   }
 
-  if (scope === "qc") {
+  if (scope === "release") {
     const body = pickRevisionExportText(releaseDoc)
     if (!releaseDoc || !body?.trim()) {
       throw new ApiError({
         status: 409,
         code: "PROJECT_EXPORT_SOURCE_MISSING",
-        message: "全文质检 Doc 暂无可导出的有效内容",
+        message: "质检 Doc 暂无可导出的有效内容",
       })
     }
 
     return {
-      filename: `${project.title}-全文质检.md`,
-      content: makeMarkdownSection("全文质检", body),
+      filename: `${project.title}-质检.md`,
+      content: makeMarkdownSection("质检", body),
       contentType: "text/markdown; charset=utf-8",
     }
   }
@@ -1402,7 +1398,7 @@ export async function exportProjectContent(
     throw new ApiError({
       status: 409,
       code: "PROJECT_FINAL_NOT_READY",
-      message: "全文质检未通过，整个项目的终稿导出尚未完成",
+      message: "质检未通过，整个项目的终稿导出尚未完成",
     })
   }
 

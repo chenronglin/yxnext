@@ -11,7 +11,7 @@ export const runtime = "nodejs"
 const stagePlansSchema = z.object({
   items: z.array(
     z.object({
-      stage: z.enum(["synopsis", "outline", "manuscript", "qc"]),
+      stage: z.enum(["synopsis", "outline", "chapter", "release"]),
       planDays: z.number().int(),
     }),
   ),

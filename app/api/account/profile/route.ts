@@ -12,6 +12,8 @@ const updateProfileSchema = z.object({
   name: z.string().trim().optional(),
   email: z.string().trim().email("请输入有效的邮箱地址").optional(),
   phone: z.string().trim().nullable().optional(),
+  // 个人简介现在已经有真实库表字段，对外接口允许直接读写。
+  biography: z.string().trim().nullable().optional(),
   avatarUrl: z.string().trim().url("头像地址格式不正确").nullable().optional(),
 })
 

@@ -200,7 +200,7 @@ export default function ApprovalsPage() {
                       <span>联系方式：{request.contact}</span>
                       <span>申请时间：{formatDateTime(request.appliedAt)}</span>
                     </div>
-                    <p className="text-sm text-muted-foreground">申请说明：{request.note}</p>
+                    <p className="text-sm text-muted-foreground">个人简介：{request.biography || "—"}</p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <Button size="sm" variant="outline" className="bg-transparent" onClick={() => setDetail(request)}>
@@ -248,7 +248,7 @@ export default function ApprovalsPage() {
                     <span>联系方式：{request.contact}</span>
                     <span>申请时间：{formatDateTime(request.appliedAt)}</span>
                   </div>
-                  <p className="text-sm text-muted-foreground">申请说明：{request.note}</p>
+                  <p className="text-sm text-muted-foreground">个人简介：{request.biography || "—"}</p>
                   {request.rejectReason && <p className="text-sm text-red-600">驳回原因：{request.rejectReason}</p>}
                 </Card>
               ))}
@@ -269,7 +269,7 @@ export default function ApprovalsPage() {
               <DetailRow label="联系方式" value={detail.contact} />
               <DetailRow label="申请时间" value={formatDateTime(detail.appliedAt)} />
               <DetailRow label="状态" value={detail.status === "pending" ? "待审批" : "已驳回"} />
-              <DetailRow label="申请说明" value={detail.note} />
+              <DetailRow label="个人简介" value={detail.biography || "—"} />
               <DetailRow label="驳回原因" value={detail.rejectReason ?? "—"} />
             </dl>
           )}

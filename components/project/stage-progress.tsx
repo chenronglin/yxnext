@@ -7,7 +7,7 @@ interface StageProgressProps {
   project: ProjectItem
 }
 
-// 阶段进度条：梗概 → 细纲 → 正文 → 全文质检 → 完成
+// 阶段进度条：梗概 → 细纲 → 正文 → 质检 → 完成
 export function StageProgress({ project }: StageProgressProps) {
   // 统一使用共享阶段顺序，避免治理页和项目页因为不同 mock 常量而显示不一致。
   const currentIndex = STAGE_ORDER.indexOf(project.stage)

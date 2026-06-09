@@ -270,7 +270,7 @@ function makeDocRecord(
     currentPlainText: string | null
     currentCleanText: string | null
     summary: string | null
-    lastAction: "author_save" | "editor_save" | "author_submit" | "editor_reject" | "editor_approve" | "admin_reopen" | null
+    lastAction: "author_save" | "editor_save" | "author_submit" | "editor_reject" | "editor_approve" | null
     lastActorId: bigint | null
     lastActionAt: Date | null
     lastHandoffNote: string | null

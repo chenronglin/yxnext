@@ -8,7 +8,7 @@ import { requireApiCurrentUser } from "@/server/shared/current-user"
 // 项目导出返回附件流而不是 JSON，因此这里直接构造文本响应。
 export const runtime = "nodejs"
 
-const scopeSchema = z.enum(["synopsis", "outline", "chapters", "qc", "project"])
+const scopeSchema = z.enum(["synopsis", "outline", "chapters", "release", "project"])
 const formatSchema = z.enum(["markdown"])
 
 type ProjectExportRouteContext = {
