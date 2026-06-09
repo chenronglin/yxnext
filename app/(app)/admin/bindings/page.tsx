@@ -1,8 +1,12 @@
 "use client"
 
-import { useState } from "react"
-import { Card } from "@/components/ui/card"
+import { useEffect, useState } from "react"
+import { Link2Off, Plus, Upload } from "lucide-react"
+
+import { PageHeader } from "@/components/page-header"
+import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
+import { Card } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -19,17 +23,120 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { PageHeader } from "@/components/page-header"
-import { StatusBadge } from "@/components/status-badge"
-import { BINDINGS, type Binding } from "@/mocks/admin-data"
-import { PROJECT_EDITORS, PROJECT_AUTHORS } from "@/mocks/project-data"
-import { Plus, Upload, Link2Off } from "lucide-react"
+import { fetchJson } from "@/lib/api"
+import type { Binding } from "@/types/admin"
+import type { ProjectPersonOption } from "@/types/project"
+
+type BindingsResponse = {
+  bindings: Binding[]
+  editors: ProjectPersonOption[]
+  authors: ProjectPersonOption[]
+}
+
+function formatDateTime(value: string) {
+  return new Date(value).toLocaleString("zh-CN")
+}
 
 export default function BindingsPage() {
+  const [bindings, setBindings] = useState<Binding[]>([])
+  const [editors, setEditors] = useState<ProjectPersonOption[]>([])
+  const [authors, setAuthors] = useState<ProjectPersonOption[]>([])
+  const [loading, setLoading] = useState(true)
+  const [submitting, setSubmitting] = useState(false)
+  const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null)
   const [addOpen, setAddOpen] = useState(false)
   const [unbindTarget, setUnbindTarget] = useState<Binding | null>(null)
-  const [newEditor, setNewEditor] = useState<string>("")
-  const [newAuthor, setNewAuthor] = useState<string>("")
+  const [newEditor, setNewEditor] = useState("")
+  const [newAuthor, setNewAuthor] = useState("")
+  const selectedEditorName = editors.find((editor) => editor.id === newEditor)?.name
+  const selectedAuthorName = authors.find((author) => author.id === newAuthor)?.name
+
+  async function loadBindings() {
+    // 绑定管理页除了关系表本身，还要拿到当前可选编辑和作者，供新建绑定弹窗使用。
+    setLoading(true)
+    setMessage(null)
+
+    try {
+      const response = await fetchJson<BindingsResponse>("/api/admin/bindings")
+      setBindings(response.bindings)
+      setEditors(response.editors)
+      setAuthors(response.authors)
+    } catch (error) {
+      setMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "绑定关系读取失败",
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void loadBindings()
+  }, [])
+
+  async function handleCreateBinding() {
+    if (!newEditor || !newAuthor || submitting) return
+
+    setSubmitting(true)
+    setMessage(null)
+
+    try {
+      const response = await fetchJson<{ binding: Binding }>("/api/admin/bindings", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          editorId: newEditor,
+          authorId: newAuthor,
+        }),
+      })
+
+      setMessage({
+        type: "success",
+        text: `绑定「${response.binding.editor} - ${response.binding.author}」已创建`,
+      })
+      setAddOpen(false)
+      setNewEditor("")
+      setNewAuthor("")
+      await loadBindings()
+    } catch (error) {
+      setMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "新增绑定失败",
+      })
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function handleUnbind() {
+    if (!unbindTarget || submitting) return
+
+    setSubmitting(true)
+    setMessage(null)
+
+    try {
+      await fetchJson<{ binding: Binding }>(`/api/admin/bindings/${unbindTarget.id}/unbind`, {
+        method: "POST",
+      })
+
+      setMessage({
+        type: "success",
+        text: `绑定「${unbindTarget.editor} - ${unbindTarget.author}」已解绑`,
+      })
+      setUnbindTarget(null)
+      await loadBindings()
+    } catch (error) {
+      setMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "解绑失败",
+      })
+    } finally {
+      setSubmitting(false)
+    }
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -39,7 +146,7 @@ export default function BindingsPage() {
         description="维护编辑与作者的绑定关系，决定 SI 预发范围与协作可见性"
         actions={
           <div className="flex gap-2">
-            <Button variant="outline" className="bg-transparent">
+            <Button variant="outline" className="bg-transparent" disabled>
               <Upload className="mr-1.5 size-4" />
               批量导入
             </Button>
@@ -51,7 +158,18 @@ export default function BindingsPage() {
         }
       />
 
-      {/* 绑定关系表 */}
+      {message && (
+        <div
+          className={
+            message.type === "error"
+              ? "rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600"
+              : "rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"
+          }
+        >
+          {message.text}
+        </div>
+      )}
+
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full min-w-[720px] text-sm">
@@ -66,33 +184,49 @@ export default function BindingsPage() {
               </tr>
             </thead>
             <tbody>
-              {BINDINGS.map((b) => (
-                <tr key={b.id} className="border-b border-border last:border-0 hover:bg-muted/30">
-                  <td className="px-4 py-3 font-medium text-foreground">{b.editor}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{b.author}</td>
-                  <td className="px-4 py-3">
-                    <StatusBadge
-                      label={b.status === "active" ? "生效中" : "已解绑"}
-                      tone={b.status === "active" ? "success" : "neutral"}
-                    />
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground">{b.createdAt}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{b.operator}</td>
-                  <td className="px-4 py-3 text-right">
-                    {b.status === "active" && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-8 bg-transparent text-red-600 hover:text-red-600"
-                        onClick={() => setUnbindTarget(b)}
-                      >
-                        <Link2Off className="mr-1 size-3.5" />
-                        解绑
-                      </Button>
-                    )}
+              {loading && (
+                <tr>
+                  <td colSpan={6} className="px-4 py-10 text-center text-muted-foreground">
+                    正在加载绑定关系...
                   </td>
                 </tr>
-              ))}
+              )}
+              {!loading && bindings.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="px-4 py-10 text-center text-muted-foreground">
+                    暂无绑定关系
+                  </td>
+                </tr>
+              )}
+              {!loading &&
+                bindings.map((binding) => (
+                  <tr key={binding.id} className="border-b border-border last:border-0 hover:bg-muted/30">
+                    <td className="px-4 py-3 font-medium text-foreground">{binding.editor}</td>
+                    <td className="px-4 py-3 text-muted-foreground">{binding.author}</td>
+                    <td className="px-4 py-3">
+                      <StatusBadge
+                        label={binding.status === "active" ? "生效中" : "已解绑"}
+                        tone={binding.status === "active" ? "success" : "neutral"}
+                      />
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground">{formatDateTime(binding.createdAt)}</td>
+                    <td className="px-4 py-3 text-muted-foreground">{binding.operator}</td>
+                    <td className="px-4 py-3 text-right">
+                      {binding.status === "active" && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8 bg-transparent text-red-600 hover:text-red-600"
+                          disabled={submitting}
+                          onClick={() => setUnbindTarget(binding)}
+                        >
+                          <Link2Off className="mr-1 size-3.5" />
+                          解绑
+                        </Button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
             </tbody>
           </table>
         </div>
@@ -102,24 +236,25 @@ export default function BindingsPage() {
         绑定关系影响编辑预发 SI 时可选的作者范围。编辑预发时，作者选择器只展示已绑定作者。
       </p>
 
-      {/* 新增绑定弹窗 */}
-      <Dialog open={addOpen} onOpenChange={setAddOpen}>
+      <Dialog open={addOpen} onOpenChange={(open) => !open && !submitting && setAddOpen(false)}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>新增绑定</DialogTitle>
-            <DialogDescription>选择编辑和作者创建绑定关系，重复绑定将被提示。</DialogDescription>
+            <DialogDescription>
+              选择编辑和作者创建绑定关系。一个作者同一时刻只能绑定给一个编辑，已绑定作者不会出现在下拉列表中。
+            </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-4 py-2">
             <div className="flex flex-col gap-2">
               <Label>编辑</Label>
               <Select value={newEditor} onValueChange={setNewEditor}>
                 <SelectTrigger>
-                  <SelectValue placeholder="选择编辑" />
+                  <SelectValue>{selectedEditorName ?? "选择编辑"}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  {PROJECT_EDITORS.map((e) => (
-                    <SelectItem key={e.id} value={e.id}>
-                      {e.name}
+                  {editors.map((editor) => (
+                    <SelectItem key={editor.id} value={editor.id}>
+                      {editor.name}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -129,12 +264,15 @@ export default function BindingsPage() {
               <Label>作者</Label>
               <Select value={newAuthor} onValueChange={setNewAuthor}>
                 <SelectTrigger>
-                  <SelectValue placeholder="选择作者" />
+                  <SelectValue>{selectedAuthorName ?? "选择作者"}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  {PROJECT_AUTHORS.map((a) => (
-                    <SelectItem key={a.id} value={a.id}>
-                      {a.name}
+                  {authors.length === 0 && (
+                    <div className="px-2 py-2 text-sm text-muted-foreground">当前没有可绑定的作者</div>
+                  )}
+                  {authors.map((author) => (
+                    <SelectItem key={author.id} value={author.id}>
+                      {author.name}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -142,18 +280,17 @@ export default function BindingsPage() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" className="bg-transparent" onClick={() => setAddOpen(false)}>
+            <Button variant="outline" className="bg-transparent" disabled={submitting} onClick={() => setAddOpen(false)}>
               取消
             </Button>
-            <Button disabled={!newEditor || !newAuthor} onClick={() => setAddOpen(false)}>
-              确认绑定
+            <Button disabled={!newEditor || !newAuthor || submitting} onClick={() => void handleCreateBinding()}>
+              {submitting ? "提交中..." : "确认绑定"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* 解绑确认弹窗 */}
-      <Dialog open={!!unbindTarget} onOpenChange={(o) => !o && setUnbindTarget(null)}>
+      <Dialog open={unbindTarget !== null} onOpenChange={(open) => !open && setUnbindTarget(null)}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>确认解绑</DialogTitle>
@@ -162,11 +299,11 @@ export default function BindingsPage() {
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" className="bg-transparent" onClick={() => setUnbindTarget(null)}>
+            <Button variant="outline" className="bg-transparent" disabled={submitting} onClick={() => setUnbindTarget(null)}>
               取消
             </Button>
-            <Button className="bg-red-600 hover:bg-red-700" onClick={() => setUnbindTarget(null)}>
-              确认解绑
+            <Button className="bg-red-600 hover:bg-red-700" disabled={submitting} onClick={() => void handleUnbind()}>
+              {submitting ? "处理中..." : "确认解绑"}
             </Button>
           </DialogFooter>
         </DialogContent>

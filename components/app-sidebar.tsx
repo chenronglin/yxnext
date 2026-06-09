@@ -9,11 +9,37 @@ import { useSidebar } from "@/components/sidebar-provider"
 import { NAV_BY_ROLE } from "@/config/navigation"
 import { ROLE_LABELS } from "@/types/domain"
 
+function isNavItemActive(pathname: string, href: string, allHrefs: string[]) {
+  // 先判断当前菜单自身是否命中：支持精确命中和“详情页仍归属当前菜单”的子路径命中。
+  const matchesCurrent = pathname === href || pathname.startsWith(`${href}/`)
+
+  if (!matchesCurrent) {
+    return false
+  }
+
+  // 当多个菜单存在父子前缀关系时，必须优先把高亮归给更具体的那一项。
+  // 例如 `/si/prereleases` 既会命中 `/si`，也会命中 `/si/prereleases`；
+  // 此时应该只高亮后者，避免两个菜单同时处于 active 状态。
+  const matchedLongerHref = allHrefs.some((candidateHref) => {
+    if (candidateHref === href) {
+      return false
+    }
+
+    const matchesCandidate =
+      pathname === candidateHref || pathname.startsWith(`${candidateHref}/`)
+
+    return matchesCandidate && candidateHref.length > href.length
+  })
+
+  return !matchedLongerHref
+}
+
 export function AppSidebar() {
   const pathname = usePathname()
   const { role } = useRole()
   const { collapsed, toggle } = useSidebar()
   const items = NAV_BY_ROLE[role]
+  const allHrefs = items.map((item) => item.href)
 
   return (
     <aside
@@ -57,7 +83,7 @@ export function AppSidebar() {
       <nav className="flex-1 overflow-y-auto px-3 pb-4">
         <ul className="flex flex-col gap-0.5">
           {items.map((item) => {
-            const active = pathname === item.href || pathname.startsWith(item.href + "/")
+            const active = isNavItemActive(pathname, item.href, allHrefs)
             const Icon = item.icon
             return (
               <li key={item.href}>

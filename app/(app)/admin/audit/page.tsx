@@ -1,7 +1,18 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
+import { Search } from "lucide-react"
+
+import { PageHeader } from "@/components/page-header"
+import { StatusBadge } from "@/components/status-badge"
 import { Card } from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -10,31 +21,58 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import { PageHeader } from "@/components/page-header"
-import { StatusBadge } from "@/components/status-badge"
-import { AUDIT_LOGS, AUDIT_ACTIONS, ROLE_TONE, type AuditLog } from "@/mocks/admin-data"
+import { fetchJson } from "@/lib/api"
 import { ROLE_LABELS } from "@/types/domain"
-import { Search } from "lucide-react"
+import { ROLE_TONE, type AuditLog } from "@/types/admin"
+
+type AuditResponse = {
+  logs: AuditLog[]
+  actions: string[]
+}
+
+function formatDateTime(value: string) {
+  return new Date(value).toLocaleString("zh-CN")
+}
 
 export default function AuditPage() {
+  const [logs, setLogs] = useState<AuditLog[]>([])
+  const [actions, setActions] = useState<string[]>([])
+  const [loading, setLoading] = useState(true)
   const [keyword, setKeyword] = useState("")
   const [action, setAction] = useState<string>("all")
   const [detail, setDetail] = useState<AuditLog | null>(null)
+  const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null)
+
+  async function loadLogs() {
+    // 审计页一次性读取最近日志，再由前端做关键字和动作筛选，保证交互流畅。
+    setLoading(true)
+    setMessage(null)
+
+    try {
+      const response = await fetchJson<AuditResponse>("/api/admin/audit")
+      setLogs(response.logs)
+      setActions(response.actions)
+    } catch (error) {
+      setMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "审计日志读取失败",
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void loadLogs()
+  }, [])
 
   const filtered = useMemo(() => {
-    return AUDIT_LOGS.filter((l) => {
-      if (keyword && !l.operator.includes(keyword) && !l.target.includes(keyword)) return false
-      if (action !== "all" && l.action !== action) return false
+    return logs.filter((log) => {
+      if (keyword && !log.operator.includes(keyword) && !log.target.includes(keyword)) return false
+      if (action !== "all" && log.action !== action) return false
       return true
     })
-  }, [keyword, action])
+  }, [logs, keyword, action])
 
   return (
     <div className="flex flex-col gap-6">
@@ -44,13 +82,24 @@ export default function AuditPage() {
         description="记录关键业务动作，支持按操作人、操作类型、业务对象筛选审计"
       />
 
-      {/* 筛选区 */}
+      {message && (
+        <div
+          className={
+            message.type === "error"
+              ? "rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600"
+              : "rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"
+          }
+        >
+          {message.text}
+        </div>
+      )}
+
       <Card className="flex flex-col gap-3 p-4 lg:flex-row lg:items-center">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={keyword}
-            onChange={(e) => setKeyword(e.target.value)}
+            onChange={(event) => setKeyword(event.target.value)}
             placeholder="搜索操作人、业务对象"
             className="pl-9"
           />
@@ -61,16 +110,15 @@ export default function AuditPage() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">全部操作类型</SelectItem>
-            {AUDIT_ACTIONS.map((a) => (
-              <SelectItem key={a} value={a}>
-                {a}
+            {actions.map((item) => (
+              <SelectItem key={item} value={item}>
+                {item}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
       </Card>
 
-      {/* 日志列表 */}
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full min-w-[960px] text-sm">
@@ -86,32 +134,40 @@ export default function AuditPage() {
               </tr>
             </thead>
             <tbody>
-              {filtered.length === 0 && (
+              {loading && (
+                <tr>
+                  <td colSpan={7} className="px-4 py-10 text-center text-muted-foreground">
+                    正在加载日志...
+                  </td>
+                </tr>
+              )}
+              {!loading && filtered.length === 0 && (
                 <tr>
                   <td colSpan={7} className="px-4 py-10 text-center text-muted-foreground">
                     暂无符合条件的日志
                   </td>
                 </tr>
               )}
-              {filtered.map((log) => (
-                <tr
-                  key={log.id}
-                  className="cursor-pointer border-b border-border last:border-0 hover:bg-muted/30"
-                  onClick={() => setDetail(log)}
-                >
-                  <td className="px-4 py-3 text-muted-foreground">{log.time}</td>
-                  <td className="px-4 py-3 font-medium text-foreground">{log.operator}</td>
-                  <td className="px-4 py-3">
-                    <StatusBadge label={ROLE_LABELS[log.role]} tone={ROLE_TONE[log.role]} />
-                  </td>
-                  <td className="px-4 py-3 text-foreground">{log.action}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{log.target}</td>
-                  <td className="px-4 py-3 text-xs text-muted-foreground">
-                    {log.before} → {log.after}
-                  </td>
-                  <td className="px-4 py-3 text-right text-xs text-primary">查看</td>
-                </tr>
-              ))}
+              {!loading &&
+                filtered.map((log) => (
+                  <tr
+                    key={log.id}
+                    className="cursor-pointer border-b border-border last:border-0 hover:bg-muted/30"
+                    onClick={() => setDetail(log)}
+                  >
+                    <td className="px-4 py-3 text-muted-foreground">{formatDateTime(log.time)}</td>
+                    <td className="px-4 py-3 font-medium text-foreground">{log.operator}</td>
+                    <td className="px-4 py-3">
+                      <StatusBadge label={ROLE_LABELS[log.role]} tone={ROLE_TONE[log.role]} />
+                    </td>
+                    <td className="px-4 py-3 text-foreground">{log.action}</td>
+                    <td className="px-4 py-3 text-muted-foreground">{log.target}</td>
+                    <td className="px-4 py-3 text-xs text-muted-foreground">
+                      {log.before} → {log.after}
+                    </td>
+                    <td className="px-4 py-3 text-right text-xs text-primary">查看</td>
+                  </tr>
+                ))}
             </tbody>
           </table>
         </div>
@@ -119,12 +175,11 @@ export default function AuditPage() {
 
       <p className="text-xs text-muted-foreground">日志只读，不允许修改和删除。</p>
 
-      {/* 日志详情抽屉 */}
-      <Dialog open={!!detail} onOpenChange={(o) => !o && setDetail(null)}>
+      <Dialog open={detail !== null} onOpenChange={(open) => !open && setDetail(null)}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>日志详情</DialogTitle>
-            <DialogDescription>{detail?.time}</DialogDescription>
+            <DialogDescription>{detail ? formatDateTime(detail.time) : "—"}</DialogDescription>
           </DialogHeader>
           {detail && (
             <dl className="grid grid-cols-3 gap-y-3 text-sm">

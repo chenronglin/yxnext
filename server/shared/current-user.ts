@@ -4,7 +4,7 @@ import type { NextRequest } from "next/server"
 
 import { getCurrentUser, getCurrentUserBySessionId, SESSION_COOKIE_NAME } from "@/server/auth/session"
 import { ApiError } from "@/server/shared/api-response"
-import type { CurrentUser } from "@/types/domain"
+import type { CurrentUser, Role } from "@/types/domain"
 
 export type ApiCurrentUser = CurrentUser & {
   userId: bigint
@@ -46,4 +46,17 @@ export async function requireServerCurrentUser(): Promise<ApiCurrentUser> {
   }
 
   return toApiCurrentUser(currentUser)
+}
+
+// 需要特定角色的模块统一在这里做角色断言，避免各 service 重复拼 403 错误。
+export function assertRole(actor: ApiCurrentUser, roles: Role[]) {
+  if (roles.includes(actor.role)) {
+    return
+  }
+
+  throw new ApiError({
+    status: 403,
+    code: "FORBIDDEN",
+    message: "无权访问该资源",
+  })
 }

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Card } from "@/components/ui/card"
 import {
   Select,
@@ -12,6 +12,8 @@ import {
 import { PageHeader } from "@/components/page-header"
 import { StatCard } from "@/components/stat-card"
 import { useRole } from "@/components/role-provider"
+import { fetchJson } from "@/lib/api"
+import type { AdminReportStats } from "@/types/admin"
 import {
   Users,
   FolderKanban,
@@ -30,9 +32,11 @@ const RANGE_LABELS: Record<string, string> = {
   all: "全部时间",
 }
 
+type RangeKey = "7d" | "30d" | "90d" | "all"
+
 export default function ReportsPage() {
   const { role } = useRole()
-  const [range, setRange] = useState("30d")
+  const [range, setRange] = useState<RangeKey>("30d")
   const [dimension, setDimension] = useState("project")
 
   return (
@@ -43,7 +47,7 @@ export default function ReportsPage() {
         description="按角色和权限展示统计数据，支持切换时间范围与统计维度"
         actions={
           <div className="flex gap-2">
-            <Select value={range} onValueChange={setRange}>
+            <Select value={range} onValueChange={(value) => setRange(value as RangeKey)}>
               <SelectTrigger className="w-32">
                 <SelectValue>{RANGE_LABELS[range]}</SelectValue>
               </SelectTrigger>
@@ -71,54 +75,106 @@ export default function ReportsPage() {
         }
       />
 
-      {role === "admin" && <AdminReport />}
+      {role === "admin" && <AdminReport range={range} />}
       {role === "editor" && <EditorReport />}
       {role === "author" && <AuthorReport />}
     </div>
   )
 }
 
-function AdminReport() {
+function AdminReport({ range }: { range: RangeKey }) {
+  const [stats, setStats] = useState<AdminReportStats | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null)
+
+  useEffect(() => {
+    async function loadReport() {
+      // 报表页和看板页都依赖后台聚合，但这里额外展示总提交字数，因此单独请求报表接口。
+      setLoading(true)
+      setMessage(null)
+
+      try {
+        const response = await fetchJson<{ stats: AdminReportStats }>(`/api/admin/reports?range=${range}`)
+        setStats(response.stats)
+      } catch (error) {
+        setMessage({
+          type: "error",
+          text: error instanceof Error ? error.message : "管理员报表读取失败",
+        })
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    void loadReport()
+  }, [range])
+
   return (
     <div className="flex flex-col gap-6">
+      {message && (
+        <div
+          className={
+            message.type === "error"
+              ? "rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600"
+              : "rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"
+          }
+        >
+          {message.text}
+        </div>
+      )}
+
       <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4">
-        <StatCard label="用户数" value={42} icon={Users} />
-        <StatCard label="项目总数" value={18} icon={FolderKanban} />
-        <StatCard label="已完成项目" value={6} icon={CheckCircle2} tone="success" />
-        <StatCard label="已逾期项目" value={2} icon={AlertTriangle} tone="danger" />
-        <StatCard label="总提交字数" value="128.6 万" icon={PenLine} />
-        <StatCard label="今日提交" value={9} icon={FileText} />
-        <StatCard label="今日审核" value={7} icon={CheckCircle2} tone="success" />
-        <StatCard label="今日退回" value={3} icon={RotateCcw} tone="warning" />
+        <StatCard label="用户数" value={loading ? "..." : stats?.userCount ?? 0} icon={Users} />
+        <StatCard label="项目总数" value={loading ? "..." : stats?.projectTotal ?? 0} icon={FolderKanban} />
+        <StatCard
+          label="已完成项目"
+          value={loading ? "..." : stats?.completedProjectTotal ?? 0}
+          icon={CheckCircle2}
+          tone="success"
+        />
+        <StatCard
+          label="已逾期项目"
+          value={loading ? "..." : stats?.overdueProjectTotal ?? 0}
+          icon={AlertTriangle}
+          tone="danger"
+        />
+        <StatCard
+          label="总提交字数"
+          value={loading ? "..." : `${(((stats?.totalSubmittedWords ?? 0) / 10000)).toFixed(1)} 万`}
+          icon={PenLine}
+        />
+        <StatCard label="今日提交" value={loading ? "..." : stats?.todaySubmitCount ?? 0} icon={FileText} />
+        <StatCard
+          label="今日审核"
+          value={loading ? "..." : stats?.todayReviewCount ?? 0}
+          icon={CheckCircle2}
+          tone="success"
+        />
+        <StatCard
+          label="今日退回"
+          value={loading ? "..." : stats?.todayReturnCount ?? 0}
+          icon={RotateCcw}
+          tone="warning"
+        />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
         <Card className="p-5 lg:col-span-1">
           <h3 className="mb-3 text-sm font-semibold text-foreground">各阶段项目数</h3>
-          <StageBars data={[
-            { label: "梗概", value: 3 },
-            { label: "细纲", value: 4 },
-            { label: "正文", value: 5 },
-            { label: "全文质检", value: 2 },
-            { label: "完成", value: 4 },
-          ]} />
+          {loading ? (
+            <p className="text-sm text-muted-foreground">正在加载阶段统计...</p>
+          ) : (
+            <StageBars data={stats?.stageCounts ?? []} />
+          )}
         </Card>
 
         <RankCard
           title="作者提交排行"
-          rows={[
-            { name: "苏小白", value: "32.4 万字" },
-            { name: "墨清欢", value: "28.1 万字" },
-            { name: "江临", value: "19.7 万字" },
-            { name: "秦书", value: "12.3 万字" },
-          ]}
+          rows={loading ? [] : stats?.authorRanking ?? []}
         />
         <RankCard
           title="编辑效率排行"
-          rows={[
-            { name: "林编辑", value: "审核 86 次" },
-            { name: "陈编辑", value: "审核 72 次" },
-          ]}
+          rows={loading ? [] : stats?.editorRanking ?? []}
         />
       </div>
     </div>

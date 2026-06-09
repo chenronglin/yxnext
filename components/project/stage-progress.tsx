@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils"
-import { STAGE_ORDER, type ProjectItem } from "@/mocks/project-data"
+import { STAGE_ORDER, type ProjectItem } from "@/types/project"
 import { PROJECT_STAGE_LABELS } from "@/types/domain"
 import { Check, Lock } from "lucide-react"
 
@@ -9,6 +9,7 @@ interface StageProgressProps {
 
 // 阶段进度条：梗概 → 细纲 → 正文 → 全文质检 → 完成
 export function StageProgress({ project }: StageProgressProps) {
+  // 统一使用共享阶段顺序，避免治理页和项目页因为不同 mock 常量而显示不一致。
   const currentIndex = STAGE_ORDER.indexOf(project.stage)
 
   return (

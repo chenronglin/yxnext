@@ -16,9 +16,6 @@ import { StatusBadge } from "@/components/status-badge"
 import { useRole } from "@/components/role-provider"
 import {
   PROJECTS,
-  PROJECT_LIFECYCLE_TONE,
-  PROJECT_STAGE_TONE,
-  STAGE_PLAN_TONE,
   PROJECT_EDITORS,
   PROJECT_AUTHORS,
 } from "@/mocks/project-data"
@@ -29,29 +26,61 @@ import {
   type ProjectLifecycle,
   type ProjectStage,
 } from "@/types/domain"
+import {
+  PROJECT_LIFECYCLE_TONE,
+  PROJECT_STAGE_TONE,
+  STAGE_PLAN_TONE,
+  type ProjectItem,
+  type ProjectPersonOption,
+} from "@/types/project"
 import { Search, Eye, ArrowRight, Download, Settings2 } from "lucide-react"
 
 interface ProjectListProps {
   // governance = 管理员治理列表（P36），mine = 我的项目（P17 编辑/作者）
   variant: "governance" | "mine"
+  // 治理页接真实接口后，把项目列表和筛选器选项直接透传进来。
+  items?: ProjectItem[]
+  editorOptions?: ProjectPersonOption[]
+  authorOptions?: ProjectPersonOption[]
+  loading?: boolean
+  message?: { type: "error" | "success"; text: string } | null
+  initialFilters?: {
+    keyword?: string
+    stage?: ProjectStage | "all"
+    lifecycle?: ProjectLifecycle | "all"
+    editor?: string
+    author?: string
+    overdue?: "all" | "yes" | "no"
+  }
 }
 
-export function ProjectList({ variant }: ProjectListProps) {
+export function ProjectList({
+  variant,
+  items,
+  editorOptions,
+  authorOptions,
+  loading = false,
+  message = null,
+  initialFilters,
+}: ProjectListProps) {
   const { role, user } = useRole()
-  const [keyword, setKeyword] = useState("")
-  const [stage, setStage] = useState<ProjectStage | "all">("all")
-  const [lifecycle, setLifecycle] = useState<ProjectLifecycle | "all">("all")
-  const [editor, setEditor] = useState<string>("all")
-  const [author, setAuthor] = useState<string>("all")
-  const [overdue, setOverdue] = useState<string>("all")
+  const [keyword, setKeyword] = useState(initialFilters?.keyword ?? "")
+  const [stage, setStage] = useState<ProjectStage | "all">(initialFilters?.stage ?? "all")
+  const [lifecycle, setLifecycle] = useState<ProjectLifecycle | "all">(initialFilters?.lifecycle ?? "all")
+  const [editor, setEditor] = useState<string>(initialFilters?.editor ?? "all")
+  const [author, setAuthor] = useState<string>(initialFilters?.author ?? "all")
+  const [overdue, setOverdue] = useState<string>(initialFilters?.overdue ?? "all")
+
+  const editorList = editorOptions ?? PROJECT_EDITORS
+  const authorList = authorOptions ?? PROJECT_AUTHORS
 
   const scoped = useMemo(() => {
-    if (variant === "governance") return PROJECTS
+    if (variant === "governance") return items ?? PROJECTS
     // 我的项目：编辑看自己负责的，作者看分配给自己的
     if (role === "editor") return PROJECTS.filter((p) => p.editor === user.name)
     if (role === "author") return PROJECTS.filter((p) => p.author === user.name)
     return PROJECTS
-  }, [variant, role, user.name])
+  }, [variant, items, role, user.name])
 
   const filtered = useMemo(() => {
     return scoped.filter((p) => {
@@ -70,6 +99,18 @@ export function ProjectList({ variant }: ProjectListProps) {
 
   return (
     <div className="flex flex-col gap-6">
+      {message && (
+        <div
+          className={
+            message.type === "error"
+              ? "rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600"
+              : "rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"
+          }
+        >
+          {message.text}
+        </div>
+      )}
+
       {/* 筛选区 */}
       <Card className="flex flex-col gap-3 p-4">
         <div className="relative">
@@ -114,12 +155,12 @@ export function ProjectList({ variant }: ProjectListProps) {
             <Select value={editor} onValueChange={setEditor}>
               <SelectTrigger className="w-32">
                 <SelectValue>
-                  {editor === "all" ? "全部编辑" : PROJECT_EDITORS.find((e) => e.id === editor)?.name}
+                  {editor === "all" ? "全部编辑" : editorList.find((e) => e.id === editor)?.name}
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">全部编辑</SelectItem>
-                {PROJECT_EDITORS.map((e) => (
+                {editorList.map((e) => (
                   <SelectItem key={e.id} value={e.id}>
                     {e.name}
                   </SelectItem>
@@ -131,12 +172,12 @@ export function ProjectList({ variant }: ProjectListProps) {
             <Select value={author} onValueChange={setAuthor}>
               <SelectTrigger className="w-32">
                 <SelectValue>
-                  {author === "all" ? "全部作者" : PROJECT_AUTHORS.find((a) => a.id === author)?.name}
+                  {author === "all" ? "全部作者" : authorList.find((a) => a.id === author)?.name}
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">全部作者</SelectItem>
-                {PROJECT_AUTHORS.map((a) => (
+                {authorList.map((a) => (
                   <SelectItem key={a.id} value={a.id}>
                     {a.name}
                   </SelectItem>
@@ -182,14 +223,21 @@ export function ProjectList({ variant }: ProjectListProps) {
               </tr>
             </thead>
             <tbody>
-              {filtered.length === 0 && (
+              {loading && (
+                <tr>
+                  <td colSpan={10} className="px-4 py-10 text-center text-muted-foreground">
+                    正在加载项目...
+                  </td>
+                </tr>
+              )}
+              {!loading && filtered.length === 0 && (
                 <tr>
                   <td colSpan={10} className="px-4 py-10 text-center text-muted-foreground">
                     暂无符合条件的项目
                   </td>
                 </tr>
               )}
-              {filtered.map((p) => {
+              {!loading && filtered.map((p) => {
                 const detailHref = isGov ? `/governance/projects/${p.id}` : `/projects/${p.id}`
                 return (
                   <tr key={p.id} className="border-b border-border last:border-0 hover:bg-muted/30">
