@@ -56,7 +56,6 @@ const authorNav: NavItem[] = [
   { label: "我的 SI", href: "/my-si", icon: BookMarked },
   { label: "我的项目", href: "/projects", icon: FolderKanban },
   { label: "通知中心", href: "/notifications", icon: Bell },
-  { label: "AI 助手", href: "/ai", icon: Bot },
   { label: "个人设置", href: "/settings", icon: UserCog },
 ]
 

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { PageHeader } from "@/components/page-header"
 import { Card } from "@/components/ui/card"
@@ -31,14 +31,71 @@ export function SiForm({ mode, initial }: SiFormProps) {
   const router = useRouter()
   const [title, setTitle] = useState(initial?.title ?? "")
   const [mainType, setMainType] = useState(initial?.mainType ?? "")
-  const [trope, setTrope] = useState(initial?.trope ?? "")
-  const [benchmark, setBenchmark] = useState(initial?.benchmark ?? "")
+  const [tags, setTags] = useState<string[]>(() => {
+    if (!initial?.trope) return []
+    return initial.trope.split(/\s*\/\s*/).map(t => t.trim()).filter(Boolean)
+  })
+  const [tagInput, setTagInput] = useState("")
+  const [cachedTags, setCachedTags] = useState<string[]>([])
   const [authors, setAuthors] = useState<string[]>(initial?.authors ?? [])
   const [remark, setRemark] = useState(initial?.remark ?? "")
   const [freshTwist, setFreshTwist] = useState(initial?.freshTwist ?? "")
   const [synopsis, setSynopsis] = useState(initial?.synopsis ?? "")
   const [showErrors, setShowErrors] = useState(false)
   const [prereleaseOpen, setPrereleaseOpen] = useState(false)
+
+  // Load tags cache from localStorage
+  useEffect(() => {
+    const saved = localStorage.getItem("trope-cached-tags")
+    const defaultTags = ["马甲爽文", "扮猪吃虎", "双线叙事", "世界观庞大", "高概念", "废土拾荒"]
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved)
+        if (Array.isArray(parsed)) {
+          setCachedTags(Array.from(new Set([...defaultTags, ...parsed])))
+          return
+        }
+      } catch (e) {}
+    }
+    setCachedTags(defaultTags)
+  }, [])
+
+  const addTag = (tag: string) => {
+    const trimmed = tag.trim()
+    if (!trimmed) return
+    
+    // Add to current selection
+    if (!tags.includes(trimmed)) {
+      setTags(prev => [...prev, trimmed])
+    }
+
+    // Add to cache
+    if (!cachedTags.includes(trimmed)) {
+      const newCache = [...cachedTags, trimmed]
+      setCachedTags(newCache)
+      localStorage.setItem("trope-cached-tags", JSON.stringify(newCache))
+    }
+  }
+
+  const removeTag = (tagToRemove: string) => {
+    setTags(prev => prev.filter(t => t !== tagToRemove))
+  }
+
+  const deleteCachedTag = (tagToDelete: string, e: React.MouseEvent) => {
+    e.stopPropagation() // Prevent selecting the tag
+    const newCache = cachedTags.filter(t => t !== tagToDelete)
+    setCachedTags(newCache)
+    localStorage.setItem("trope-cached-tags", JSON.stringify(newCache))
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.nativeEvent.isComposing) return
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault()
+      addTag(tagInput)
+      setTagInput("")
+    }
+  }
 
   const titleError = showErrors && !title.trim()
   const typeError = showErrors && !mainType
@@ -114,24 +171,65 @@ export function SiForm({ mode, initial }: SiFormProps) {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="trope">Trope</Label>
-                <Input
-                  id="trope"
-                  value={trope}
-                  onChange={(e) => setTrope(e.target.value)}
-                  placeholder="自由输入，如：马甲爽文 / 扮猪吃虎"
-                />
+                <Label htmlFor="trope">Trope 标签</Label>
+                <div className="flex flex-wrap gap-1.5 p-1.5 border border-input rounded-md bg-background min-h-[38px] focus-within:ring-2 focus-within:ring-ring/30 focus-within:border-ring">
+                  {tags.map((tag) => (
+                    <span
+                      key={tag}
+                      className="inline-flex items-center gap-1 rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-foreground border border-primary/20"
+                    >
+                      {tag}
+                      <button
+                        type="button"
+                        onClick={() => removeTag(tag)}
+                        className="text-muted-foreground hover:text-foreground"
+                      >
+                        <X className="size-3" />
+                      </button>
+                    </span>
+                  ))}
+                  <input
+                    id="trope"
+                    type="text"
+                    value={tagInput}
+                    onChange={(e) => setTagInput(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder={tags.length === 0 ? "输入后按空格或回车添加" : "添加标签..."}
+                    className="flex-1 min-w-[120px] bg-transparent text-sm outline-none border-none py-0.5 px-1 placeholder:text-muted-foreground"
+                  />
+                </div>
+                
+                {/* 候选/推荐历史标签 */}
+                {cachedTags.length > 0 && (
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    {cachedTags.map((tag) => {
+                      const selected = tags.includes(tag)
+                      return (
+                        <div
+                          key={tag}
+                          onClick={() => selected ? removeTag(tag) : addTag(tag)}
+                          className={cn(
+                            "relative inline-flex items-center gap-1.5 rounded-md pr-6 pl-2.5 py-0.5 text-[11px] border cursor-pointer select-none transition-colors",
+                            selected
+                              ? "bg-primary/5 text-primary border-primary/30"
+                              : "bg-muted text-muted-foreground hover:bg-secondary hover:text-foreground border-border"
+                          )}
+                        >
+                          <span>{tag}</span>
+                          <button
+                            type="button"
+                            onClick={(e) => deleteCachedTag(tag, e)}
+                            className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground/60 hover:text-destructive transition-colors"
+                            title="从历史缓存中删除"
+                          >
+                            <X className="size-2.5" />
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="benchmark">对标书目</Label>
-              <Input
-                id="benchmark"
-                value={benchmark}
-                onChange={(e) => setBenchmark(e.target.value)}
-                placeholder="参考或对标的作品"
-              />
             </div>
 
             <div className="space-y-2">
@@ -160,12 +258,12 @@ export function SiForm({ mode, initial }: SiFormProps) {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="remark">备注</Label>
+              <Label htmlFor="remark">作者说明</Label>
               <Textarea
                 id="remark"
                 value={remark}
                 onChange={(e) => setRemark(e.target.value)}
-                placeholder="补充说明，如节奏要求、注意事项等"
+                placeholder="面向作者的补充说明，如大纲要求、写作节奏提示、交稿频次等"
                 rows={2}
               />
             </div>
@@ -253,7 +351,7 @@ export function SiForm({ mode, initial }: SiFormProps) {
       <PrereleaseDialog
         open={prereleaseOpen}
         onOpenChange={setPrereleaseOpen}
-        si={{ title: title || "未命名选题", mainType: mainType || "—", trope }}
+        si={{ title: title || "未命名选题", mainType: mainType || "—", trope: tags.join(" / ") }}
       />
     </div>
   )

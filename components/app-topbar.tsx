@@ -1,7 +1,8 @@
 "use client"
 
+import { useState } from "react"
 import Link from "next/link"
-import { Search, Bell, LogOut, ChevronDown, Menu } from "lucide-react"
+import { Search, Bell, LogOut, ChevronDown, Menu, Languages } from "lucide-react"
 import { useRole } from "@/components/role-provider"
 import { useSidebar } from "@/components/sidebar-provider"
 import { ROLE_LABELS, type Role } from "@/lib/types"
@@ -21,6 +22,7 @@ import {
 export function AppTopbar() {
   const { user, role, setRole } = useRole()
   const { collapsed, toggle } = useSidebar()
+  const [lang, setLang] = useState("zh")
 
   return (
     <header className="flex h-16 shrink-0 items-center gap-4 border-b border-border bg-background px-4 md:px-6">
@@ -55,6 +57,20 @@ export function AppTopbar() {
             <DropdownMenuRadioItem value="admin">管理员</DropdownMenuRadioItem>
             <DropdownMenuRadioItem value="editor">编辑</DropdownMenuRadioItem>
             <DropdownMenuRadioItem value="author">作者</DropdownMenuRadioItem>
+          </DropdownMenuRadioGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      {/* 演示用：多语言切换器 */}
+      <DropdownMenu>
+        <DropdownMenuTrigger className="inline-flex size-9 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary" aria-label="选择语言">
+          <Languages className="size-5" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-36">
+          <DropdownMenuRadioGroup value={lang} onValueChange={setLang}>
+            <DropdownMenuLabel>选择语言 / Language</DropdownMenuLabel>
+            <DropdownMenuRadioItem value="zh">简体中文</DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="en">English</DropdownMenuRadioItem>
           </DropdownMenuRadioGroup>
         </DropdownMenuContent>
       </DropdownMenu>
