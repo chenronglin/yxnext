@@ -10,6 +10,10 @@ export type ApiCurrentUser = CurrentUser & {
   userId: bigint
 }
 
+type RequireCurrentUserOptions = {
+  allowPasswordResetRequired?: boolean
+}
+
 // Server Component 和 Route Handler 都需要同一套 actor 结构，这里集中做一次转换。
 export function toApiCurrentUser(currentUser: CurrentUser): ApiCurrentUser {
   return {
@@ -19,7 +23,10 @@ export function toApiCurrentUser(currentUser: CurrentUser): ApiCurrentUser {
 }
 
 // Route Handler 统一从 session cookie 读取当前用户；前端传 userId 不参与鉴权判断。
-export async function requireApiCurrentUser(request: NextRequest): Promise<ApiCurrentUser> {
+export async function requireApiCurrentUser(
+  request: NextRequest,
+  options: RequireCurrentUserOptions = {},
+): Promise<ApiCurrentUser> {
   const currentUser = await getCurrentUserBySessionId(request.cookies.get(SESSION_COOKIE_NAME)?.value)
 
   if (!currentUser) {
@@ -30,11 +37,21 @@ export async function requireApiCurrentUser(request: NextRequest): Promise<ApiCu
     })
   }
 
+  if (currentUser.passwordResetRequired && !options.allowPasswordResetRequired) {
+    throw new ApiError({
+      status: 403,
+      code: "PASSWORD_RESET_REQUIRED",
+      message: "管理员已重置你的密码，请先前往个人设置修改密码后再继续使用",
+    })
+  }
+
   return toApiCurrentUser(currentUser)
 }
 
 // Server Component 直接读取当前请求上下文里的 session，避免为了取数据再绕一次 HTTP。
-export async function requireServerCurrentUser(): Promise<ApiCurrentUser> {
+export async function requireServerCurrentUser(
+  options: RequireCurrentUserOptions = {},
+): Promise<ApiCurrentUser> {
   const currentUser = await getCurrentUser()
 
   if (!currentUser) {
@@ -42,6 +59,14 @@ export async function requireServerCurrentUser(): Promise<ApiCurrentUser> {
       status: 401,
       code: "UNAUTHORIZED",
       message: "未登录或登录已过期",
+    })
+  }
+
+  if (currentUser.passwordResetRequired && !options.allowPasswordResetRequired) {
+    throw new ApiError({
+      status: 403,
+      code: "PASSWORD_RESET_REQUIRED",
+      message: "管理员已重置你的密码，请先前往个人设置修改密码后再继续使用",
     })
   }
 

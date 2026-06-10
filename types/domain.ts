@@ -96,4 +96,7 @@ export interface CurrentUser {
   status: UserStatus
   email: string
   phone?: string
+  // 管理员重置密码后，系统会强制用户先完成一次自助改密；
+  // 前端据此在登录后立刻跳转到设置页，并阻止继续进入业务主链。
+  passwordResetRequired?: boolean
 }

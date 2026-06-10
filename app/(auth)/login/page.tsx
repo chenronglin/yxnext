@@ -40,27 +40,24 @@ export default function LoginPage() {
         }),
       })
 
-      const result = (await response.json().catch(() => null)) as
-        | { message?: string; status?: string }
-        | null
+      const result = (await response.json().catch(() => null)) as {
+        message?: string
+        currentUser?: {
+          passwordResetRequired?: boolean
+        }
+      } | null
 
       if (!response.ok) {
-        // 待审批、已驳回、已禁用等状态由账号状态页承接，不留在登录表单里展示。
-        if (
-          response.status === 403 &&
-          result?.status &&
-          ["pending", "rejected", "disabled"].includes(result.status)
-        ) {
-          router.replace(`/account-status?status=${result.status}`)
-          return
-        }
-
+        // 登录失败统一只展示通用错误，不再根据接口返回细节分流到账号状态页，
+        // 避免前端变成账号状态枚举的放大器。
         setError(result?.message ?? "登录失败，请检查账号和密码")
         return
       }
 
       // 登录成功后刷新服务端组件缓存，让 app 布局立刻读到新的 session cookie。
-      router.replace("/dashboard")
+      // 管理员重置密码后的首次登录不允许继续进入业务首页，
+      // 必须先跳到设置页完成一次自助改密。
+      router.replace(result?.currentUser?.passwordResetRequired ? "/settings?mustChangePassword=1" : "/dashboard")
       router.refresh()
     } catch {
       setError("网络异常，请稍后重试")

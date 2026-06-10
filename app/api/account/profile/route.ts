@@ -19,7 +19,8 @@ const updateProfileSchema = z.object({
 
 export async function GET(request: NextRequest) {
   try {
-    const actor = await requireApiCurrentUser(request)
+    // 强制改密后的设置页仍需要读取当前用户资料，因此这里显式放行。
+    const actor = await requireApiCurrentUser(request, { allowPasswordResetRequired: true })
     const result = await getAccountProfile(actor)
 
     return ok(result)
@@ -30,6 +31,7 @@ export async function GET(request: NextRequest) {
 
 export async function PATCH(request: NextRequest) {
   try {
+    // 为了避免“尚未改密时顺手改资料”扩大流程范围，PATCH 仍然维持统一拦截。
     const actor = await requireApiCurrentUser(request)
     const body = updateProfileSchema.parse(await request.json().catch(() => ({})))
     const result = await updateAccountProfile(actor, body)

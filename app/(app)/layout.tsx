@@ -2,6 +2,7 @@ import type { ReactNode } from "react"
 import { redirect } from "next/navigation"
 
 import { RoleProvider } from "@/components/role-provider"
+import { PasswordResetGuard } from "@/components/password-reset-guard"
 import { SidebarProvider } from "@/components/sidebar-provider"
 import { AppSidebar } from "@/components/app-sidebar"
 import { AppTopbar } from "@/components/app-topbar"
@@ -17,6 +18,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
 
   return (
     <RoleProvider initialUser={currentUser}>
+      <PasswordResetGuard />
       <SidebarProvider>
         <div className="flex h-screen overflow-hidden bg-background">
           <AppSidebar />

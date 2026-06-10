@@ -23,7 +23,6 @@ type LoginResult = {
 type RegisterInput = {
   username: string
   name: string
-  role: "author" | "editor"
   email: string
   phone?: string | null
   biography?: string | null
@@ -57,6 +56,7 @@ export async function loginWithPassword(input: LoginInput): Promise<LoginResult>
       username: true,
       email: true,
       passwordHash: true,
+      passwordResetRequired: true,
       role: true,
       status: true,
       displayName: true,
@@ -75,7 +75,8 @@ export async function loginWithPassword(input: LoginInput): Promise<LoginResult>
     throw new AuthServiceError("INVALID_CREDENTIALS", "账号或密码错误")
   }
 
-  // 非 active 用户不创建 session，前端根据状态跳转到统一账号状态页。
+  // 非 active 用户不创建 session。
+  // 路由层会对外统一返回登录失败，避免把待审批/已禁用等状态暴露给未登录请求。
   if (user.status !== "active") {
     throw new AuthServiceError("ACCOUNT_NOT_ACTIVE", "账号当前不可登录", user.status)
   }
@@ -270,11 +271,13 @@ export async function registerPendingUser(input: RegisterInput): Promise<Registe
   const passwordHash = await bcrypt.hash(input.password, 10)
 
   const user = await prisma.$transaction(async (tx) => {
+    // 外部公开注册入口一律只创建作者申请。
+    // 这样即使有人篡改前端请求体，也无法直接借注册流程申请 editor 权限。
     const createdUser = await tx.user.create({
       data: {
         username,
         displayName: name,
-        role: input.role,
+        role: "author",
         email,
         phone,
         biography,
@@ -293,12 +296,12 @@ export async function registerPendingUser(input: RegisterInput): Promise<Registe
     await tx.operationLog.create({
       data: {
         actorUserId: createdUser.userId,
-        actorRole: input.role,
+        actorRole: "author",
         action: "auth.register",
         entityType: "user",
         entityId: createdUser.userId,
         afterJson: {
-          role: input.role,
+          role: "author",
           status: createdUser.status,
           biography,
         },

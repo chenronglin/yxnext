@@ -168,6 +168,7 @@ model User {
   username       String      @unique @map("username") @db.VarChar(100)
   email          String      @unique @map("email") @db.VarChar(255)
   passwordHash   String      @map("password_hash") @db.VarChar(255)
+  passwordResetRequired Boolean @default(false) @map("password_reset_required")
   role           Role        @map("role")
   status         UserStatus  @default(pending) @map("status")
   displayName    String?     @map("display_name") @db.VarChar(100)

@@ -5,8 +5,12 @@ import { randomBytes } from "crypto"
 import bcrypt from "bcryptjs"
 import { Prisma } from "@prisma/client"
 
+import { revokeAllUserSessionsByUserId } from "@/server/auth/session"
 import { prisma } from "@/server/db/prisma"
 import { ApiError } from "@/server/shared/api-response"
+import { buildDocxBuffer } from "@/server/shared/docx-export"
+import { makeActiveBindingKey, makeActiveDocKey, translateUniqueConstraintError } from "@/server/shared/invariant-keys"
+import { syncActiveProjectTimelineStatuses } from "@/server/shared/project-stage-timeline"
 import { assertRole } from "@/server/shared/current-user"
 import type { ApiCurrentUser } from "@/server/shared/current-user"
 import type {
@@ -210,6 +214,184 @@ function formatDateTime(value: Date | null | undefined) {
 
 function userName(user: { username: string; displayName: string | null }) {
   return user.displayName ?? user.username
+}
+
+function holderRoleByDocStatus(status: "draft" | "submitted" | "rejected" | "approved") {
+  if (status === "submitted") {
+    return "editor" as const
+  }
+
+  if (status === "approved") {
+    return "none" as const
+  }
+
+  return "author" as const
+}
+
+function draftOwnerRoleByDocStatus(status: "draft" | "submitted" | "rejected" | "approved") {
+  return status === "submitted" ? ("editor" as const) : ("author" as const)
+}
+
+function stageByProjectDocs(input: {
+  releaseStatus: "locked" | "unlocked" | "approved"
+  hasOutlineDoc: boolean
+  hasChapterDoc: boolean
+  hasReleaseDoc: boolean
+  synopsisApproved: boolean
+  outlineApproved: boolean
+}) {
+  // restore 的目标不是“复原旧字段”，而是把项目重新拉回一个可继续协作的合法阶段。
+  // 这里优先依据更靠后的真实 Doc 存在情况与通过情况回推当前阶段。
+  if (input.releaseStatus !== "locked" || input.hasReleaseDoc) {
+    return "release" as const
+  }
+
+  if (input.hasChapterDoc || input.outlineApproved) {
+    return "chapter" as const
+  }
+
+  if (input.hasOutlineDoc || input.synopsisApproved) {
+    return "outline" as const
+  }
+
+  return "synopsis" as const
+}
+
+async function ensureActiveDraftForRestore(
+  tx: TxClient,
+  input: {
+    doc: {
+      docId: bigint
+      status: "draft" | "submitted" | "rejected" | "approved"
+      chapterNo: number | null
+      activeDraftId: bigint | null
+      currentWordCount: number
+      currentPlainText: string | null
+      currentCleanText: string | null
+      summary: string | null
+      projectId: bigint
+      projectAuthorId: bigint
+      projectEditorId: bigint
+      finalRevision: {
+        revisionId: bigint
+        contentSchemaVersion: number
+        contentJson: Prisma.JsonValue
+        wordCount: number
+        plainText: string | null
+        cleanText: string | null
+        exportText: string | null
+        summary: string | null
+        commentCount: number
+        suggestionCount: number
+        revisionMarkCount: number
+      } | null
+      latestRevision: {
+        revisionId: bigint
+        contentSchemaVersion: number
+        contentJson: Prisma.JsonValue
+        wordCount: number
+        plainText: string | null
+        cleanText: string | null
+        exportText: string | null
+        summary: string | null
+        commentCount: number
+        suggestionCount: number
+        revisionMarkCount: number
+      } | null
+    }
+    reopenApprovedReleaseDoc?: boolean
+  },
+) {
+  if (input.doc.status === "approved" && !input.reopenApprovedReleaseDoc) {
+    await tx.doc.update({
+      where: {
+        docId: input.doc.docId,
+      },
+      data: {
+        activeDraftId: null,
+        holderRole: "none",
+      },
+    })
+
+    return
+  }
+
+  const activeDraft = await tx.docCurrentDraft.findFirst({
+    where: {
+      docId: input.doc.docId,
+      status: "active",
+    },
+    select: {
+      draftId: true,
+    },
+  })
+
+  if (activeDraft) {
+    await tx.doc.update({
+      where: {
+        docId: input.doc.docId,
+      },
+      data: {
+        activeDraftId: activeDraft.draftId,
+        holderRole: input.reopenApprovedReleaseDoc ? "author" : holderRoleByDocStatus(input.doc.status),
+        status: input.reopenApprovedReleaseDoc ? "draft" : input.doc.status,
+      },
+    })
+
+    return
+  }
+
+  const sourceRevision = input.doc.latestRevision ?? input.doc.finalRevision
+  const nextOwnerRole = input.reopenApprovedReleaseDoc ? "author" : draftOwnerRoleByDocStatus(input.doc.status)
+  const nextOwnerUserId = nextOwnerRole === "editor" ? input.doc.projectEditorId : input.doc.projectAuthorId
+
+  const createdDraft = await tx.docCurrentDraft.create({
+    data: {
+      docId: input.doc.docId,
+      ownerRole: nextOwnerRole,
+      ownerUserId: nextOwnerUserId,
+      baseRevisionId: sourceRevision?.revisionId ?? null,
+      contentSchemaVersion: sourceRevision?.contentSchemaVersion ?? 1,
+      contentJson: (sourceRevision?.contentJson ??
+        ({
+          type: "doc",
+          content: input.doc.currentPlainText
+            ? input.doc.currentPlainText
+                .split(/\n{2,}/)
+                .map((segment) => segment.trim())
+                .filter(Boolean)
+                .map((segment) => ({
+                  type: "paragraph",
+                  content: [{ type: "text", text: segment }],
+                }))
+            : [],
+        })) as Prisma.InputJsonValue,
+      wordCount: sourceRevision?.wordCount ?? input.doc.currentWordCount,
+      plainText: sourceRevision?.plainText ?? input.doc.currentPlainText,
+      cleanText: sourceRevision?.cleanText ?? input.doc.currentCleanText,
+      exportText: sourceRevision?.exportText ?? input.doc.currentCleanText ?? input.doc.currentPlainText,
+      summary: sourceRevision?.summary ?? input.doc.summary,
+      commentCount: sourceRevision?.commentCount ?? 0,
+      suggestionCount: sourceRevision?.suggestionCount ?? 0,
+      revisionMarkCount: sourceRevision?.revisionMarkCount ?? 0,
+      status: "active",
+      activeDocKey: makeActiveDocKey(input.doc.docId),
+    },
+    select: {
+      draftId: true,
+    },
+  })
+
+  await tx.doc.update({
+    where: {
+      docId: input.doc.docId,
+    },
+    data: {
+      activeDraftId: createdDraft.draftId,
+      holderRole: nextOwnerRole,
+      status: input.reopenApprovedReleaseDoc ? "draft" : input.doc.status,
+    },
+  })
 }
 
 function userContact(user: { email: string; phone: string | null }) {
@@ -671,6 +853,8 @@ async function ensureUserByRole(tx: TxClient, userId: bigint, role: Role) {
 }
 
 async function dashboardStats(range: RangeKey = "30d"): Promise<DashboardStats> {
+  await syncActiveProjectTimelineStatuses()
+
   const since = startDateByRange(range)
   const today = startOfToday()
 
@@ -1131,6 +1315,34 @@ export async function toggleManagedUserStatus(actor: ApiCurrentUser, userIdValue
   }
 
   const nextStatus: UserStatus = existing.status === "active" ? "disabled" : "active"
+
+  // 管理员禁用自己会直接让当前治理入口失效，必须在服务层阻断。
+  if (existing.userId === actor.userId && nextStatus === "disabled") {
+    throw new ApiError({
+      status: 409,
+      code: "ADMIN_SELF_DISABLE_FORBIDDEN",
+      message: "管理员不能禁用自己的账号",
+    })
+  }
+
+  // 系统至少需要保留一个活动管理员，避免用户治理、审批和恢复操作全部失去执行者。
+  if (existing.role === "admin" && nextStatus === "disabled") {
+    const activeAdminTotal = await prisma.user.count({
+      where: {
+        role: "admin",
+        status: "active",
+      },
+    })
+
+    if (activeAdminTotal <= 1) {
+      throw new ApiError({
+        status: 409,
+        code: "LAST_ADMIN_DISABLE_FORBIDDEN",
+        message: "系统至少需要保留一个活动管理员",
+      })
+    }
+  }
+
   const updated = await prisma.$transaction(async (tx) => {
     const saved = await tx.user.update({
       where: {
@@ -1153,6 +1365,12 @@ export async function toggleManagedUserStatus(actor: ApiCurrentUser, userIdValue
       },
     })
 
+    // 账号一旦被禁用，旧会话必须立即全部失效；
+    // 否则浏览器里已经持有的 cookie 还能继续访问，禁用动作就没有真正收口权限。
+    if (nextStatus === "disabled") {
+      await revokeAllUserSessionsByUserId(userId, tx)
+    }
+
     await writeOperationLog(tx, {
       actor,
       action: nextStatus === "disabled" ? "admin.user.disable" : "admin.user.enable",
@@ -1163,6 +1381,9 @@ export async function toggleManagedUserStatus(actor: ApiCurrentUser, userIdValue
       },
       afterJson: {
         status: nextStatus,
+      },
+      metadataJson: {
+        sessionsRevoked: nextStatus === "disabled",
       },
     })
 
@@ -1216,8 +1437,15 @@ export async function resetManagedUserPassword(actor: ApiCurrentUser, userIdValu
       },
       data: {
         passwordHash,
+        // 管理员下发的是一次性临时密码；
+        // 用户下次登录后必须先完成自助改密，避免长期继续使用临时口令。
+        passwordResetRequired: true,
       },
     })
+
+    // 重置密码属于高风险治理动作，必须同步吊销用户所有旧会话，
+    // 否则旧登录态仍然有效，管理员下发的临时密码就失去控制意义。
+    await revokeAllUserSessionsByUserId(userId, tx)
 
     await writeOperationLog(tx, {
       actor,
@@ -1226,6 +1454,9 @@ export async function resetManagedUserPassword(actor: ApiCurrentUser, userIdValu
       entityId: userId,
       afterJson: {
         reset: true,
+      },
+      metadataJson: {
+        sessionsRevoked: true,
       },
     })
   })
@@ -1304,6 +1535,8 @@ export async function approveApprovalRequest(actor: ApiCurrentUser, userIdValue:
         userId,
       },
       data: {
+        // 审批通过时统一回收为 author，确保历史脏数据和越权注册请求都无法借审批完成提权。
+        role: "author",
         status: "active",
         approvedBy: actor.userId,
         approvedAt: now,
@@ -1330,9 +1563,11 @@ export async function approveApprovalRequest(actor: ApiCurrentUser, userIdValue:
       entityType: "user",
       entityId: userId,
       beforeJson: {
+        role: existing.role,
         status: existing.status,
       },
       afterJson: {
+        role: "author",
         status: "active",
       },
     })
@@ -1492,122 +1727,136 @@ export async function createBinding(actor: ApiCurrentUser, input: BindingInput) 
     })
   }
 
-  const result = await prisma.$transaction(async (tx) => {
-    const editor = await ensureUserByRole(tx, editorId, "editor")
-    const author = await ensureUserByRole(tx, authorId, "author")
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const editor = await ensureUserByRole(tx, editorId, "editor")
+      const author = await ensureUserByRole(tx, authorId, "author")
 
-    const active = await tx.editorAuthorBinding.findFirst({
-      where: {
-        editorId,
-        authorId,
-        status: "active",
-      },
-      select: {
-        bindingId: true,
-      },
-    })
-
-    if (active) {
-      throw new ApiError({
-        status: 409,
-        code: "BINDING_EXISTS",
-        message: "该绑定关系已存在",
+      const active = await tx.editorAuthorBinding.findFirst({
+        where: {
+          editorId,
+          authorId,
+          status: "active",
+        },
+        select: {
+          bindingId: true,
+        },
       })
-    }
 
-    const authorActiveBinding = await tx.editorAuthorBinding.findFirst({
-      where: {
-        authorId,
-        status: "active",
-      },
-      include: {
-        editor: {
-          select: {
-            username: true,
-            displayName: true,
+      if (active) {
+        throw new ApiError({
+          status: 409,
+          code: "BINDING_EXISTS",
+          message: "该绑定关系已存在",
+        })
+      }
+
+      const authorActiveBinding = await tx.editorAuthorBinding.findFirst({
+        where: {
+          authorId,
+          status: "active",
+        },
+        include: {
+          editor: {
+            select: {
+              username: true,
+              displayName: true,
+            },
           },
         },
-      },
-    })
-
-    if (authorActiveBinding) {
-      throw new ApiError({
-        status: 409,
-        code: "AUTHOR_ALREADY_BOUND",
-        message: `作者已绑定给编辑 ${userName(authorActiveBinding.editor)}，请先解绑后再重新分配`,
       })
+
+      if (authorActiveBinding) {
+        throw new ApiError({
+          status: 409,
+          code: "AUTHOR_ALREADY_BOUND",
+          message: `作者已绑定给编辑 ${userName(authorActiveBinding.editor)}，请先解绑后再重新分配`,
+        })
+      }
+
+      const binding = await tx.editorAuthorBinding.create({
+        data: {
+          editorId,
+          authorId,
+          status: "active",
+          boundBy: actor.userId,
+          // 活动绑定唯一键必须由应用层显式写入；
+          // 只有这样数据库唯一约束才能真正兜住“同一作者只能有一条活动绑定”的规则。
+          activePairKey: makeActiveBindingKey(editorId, authorId),
+        },
+        include: {
+          editor: {
+            select: {
+              userId: true,
+              username: true,
+              displayName: true,
+            },
+          },
+          author: {
+            select: {
+              userId: true,
+              username: true,
+              displayName: true,
+            },
+          },
+          boundByUser: {
+            select: {
+              username: true,
+              displayName: true,
+            },
+          },
+        },
+      })
+
+      await tx.notification.createMany({
+        data: [
+          {
+            recipientUserId: editorId,
+            type: "binding_created",
+            title: "新增编辑-作者绑定",
+            body: `管理员为你绑定了作者 ${userName(author)}。`,
+            entityType: "editor_author_binding",
+            entityId: binding.bindingId,
+          },
+          {
+            recipientUserId: authorId,
+            type: "binding_created",
+            title: "新增编辑-作者绑定",
+            body: `管理员为你绑定了编辑 ${userName(editor)}。`,
+            entityType: "editor_author_binding",
+            entityId: binding.bindingId,
+          },
+        ],
+      })
+
+      await writeOperationLog(tx, {
+        actor,
+        action: "admin.binding.create",
+        entityType: "editor_author_binding",
+        entityId: binding.bindingId,
+        afterJson: {
+          editorId: editorId.toString(),
+          authorId: authorId.toString(),
+          status: "active",
+        },
+      })
+
+      return binding
+    })
+
+    return {
+      binding: toBinding(result),
     }
-
-    const binding = await tx.editorAuthorBinding.create({
-      data: {
-        editorId,
-        authorId,
-        status: "active",
-        boundBy: actor.userId,
-        // active_pair_key 在现网库里是 GENERATED ALWAYS 列，这里只写业务字段，交给数据库自动计算。
-      },
-      include: {
-        editor: {
-          select: {
-            userId: true,
-            username: true,
-            displayName: true,
-          },
-        },
-        author: {
-          select: {
-            userId: true,
-            username: true,
-            displayName: true,
-          },
-        },
-        boundByUser: {
-          select: {
-            username: true,
-            displayName: true,
-          },
-        },
-      },
-    })
-
-    await tx.notification.createMany({
-      data: [
+  } catch (error) {
+    throw (
+      translateUniqueConstraintError(error, [
         {
-          recipientUserId: editorId,
-          type: "binding_created",
-          title: "新增编辑-作者绑定",
-          body: `管理员为你绑定了作者 ${userName(author)}。`,
-          entityType: "editor_author_binding",
-          entityId: binding.bindingId,
+          constraintIncludes: ["active_pair_key"],
+          code: "AUTHOR_ALREADY_BOUND",
+          message: "该作者已存在活动绑定，请刷新列表后重试",
         },
-        {
-          recipientUserId: authorId,
-          type: "binding_created",
-          title: "新增编辑-作者绑定",
-          body: `管理员为你绑定了编辑 ${userName(editor)}。`,
-          entityType: "editor_author_binding",
-          entityId: binding.bindingId,
-        },
-      ],
-    })
-
-    await writeOperationLog(tx, {
-      actor,
-      action: "admin.binding.create",
-      entityType: "editor_author_binding",
-      entityId: binding.bindingId,
-      afterJson: {
-        editorId: editorId.toString(),
-        authorId: authorId.toString(),
-        status: "active",
-      },
-    })
-
-    return binding
-  })
-
-  return {
-    binding: toBinding(result),
+      ]) ?? error
+    )
   }
 }
 
@@ -1668,7 +1917,9 @@ export async function unbind(actor: ApiCurrentUser, bindingIdValue: string) {
         status: "inactive",
         unboundBy: actor.userId,
         unboundAt: new Date(),
-        // active_pair_key 会随着 status 变成 inactive 自动回落为 NULL，无需应用层手动赋值。
+        // 解绑后必须显式清空活动绑定唯一键，
+        // 否则同一作者将永远无法再建立新的活动绑定。
+        activePairKey: null,
       },
       include: {
         editor: {
@@ -2050,6 +2301,7 @@ export async function listAuditLogs(actor: ApiCurrentUser, filters: AuditFilters
 
 export async function listGovernanceProjects(actor: ApiCurrentUser, filters: ProjectFilters = {}) {
   ensureAdmin(actor)
+  await syncActiveProjectTimelineStatuses()
 
   const keyword = trimToNull(filters.keyword)
   const stage = trimToNull(filters.stage)
@@ -2119,6 +2371,7 @@ export async function listGovernanceProjects(actor: ApiCurrentUser, filters: Pro
 
 export async function getGovernanceProjectDetail(actor: ApiCurrentUser, projectIdValue: string) {
   ensureAdmin(actor)
+  await syncActiveProjectTimelineStatuses()
 
   const projectId = parseBigIntId(projectIdValue, "项目 ID")
   const project = await prisma.project.findUnique({
@@ -2195,6 +2448,24 @@ export async function updateGovernanceProjectAssignment(
   await prisma.$transaction(async (tx) => {
     const nextEditor = await ensureUserByRole(tx, nextEditorId, "editor")
     const nextAuthor = await ensureUserByRole(tx, nextAuthorId, "author")
+    const activeBinding = await tx.editorAuthorBinding.findFirst({
+      where: {
+        editorId: nextEditorId,
+        authorId: nextAuthorId,
+        status: "active",
+      },
+      select: {
+        bindingId: true,
+      },
+    })
+
+    if (!activeBinding) {
+      throw new ApiError({
+        status: 409,
+        code: "PROJECT_ASSIGNMENT_BINDING_REQUIRED",
+        message: "调整项目归属前，目标编辑与作者必须先建立有效绑定关系",
+      })
+    }
 
     await tx.project.update({
       where: {
@@ -2376,6 +2647,7 @@ export async function transitionGovernanceProject(
   }
 
   const now = new Date()
+  let restoredStage: "synopsis" | "outline" | "chapter" | "release" | null = null
 
   await prisma.$transaction(async (tx) => {
     if (action === "complete") {
@@ -2410,12 +2682,113 @@ export async function transitionGovernanceProject(
         },
       })
     } else {
+      const restorableProject = await tx.project.findUnique({
+        where: {
+          projectId,
+        },
+        include: {
+          docs: {
+            where: {
+              isDeleted: false,
+            },
+            include: {
+              finalRevision: {
+                select: {
+                  revisionId: true,
+                  contentSchemaVersion: true,
+                  contentJson: true,
+                  wordCount: true,
+                  plainText: true,
+                  cleanText: true,
+                  exportText: true,
+                  summary: true,
+                  commentCount: true,
+                  suggestionCount: true,
+                  revisionMarkCount: true,
+                },
+              },
+              latestRevision: {
+                select: {
+                  revisionId: true,
+                  contentSchemaVersion: true,
+                  contentJson: true,
+                  wordCount: true,
+                  plainText: true,
+                  cleanText: true,
+                  exportText: true,
+                  summary: true,
+                  commentCount: true,
+                  suggestionCount: true,
+                  revisionMarkCount: true,
+                },
+              },
+            },
+            orderBy: [{ stageCode: "asc" }, { sortOrder: "asc" }, { chapterNo: "asc" }],
+          },
+        },
+      })
+
+      if (!restorableProject) {
+        throw new ApiError({
+          status: 404,
+          code: "PROJECT_NOT_FOUND",
+          message: "项目不存在",
+        })
+      }
+
+      const synopsisDoc = restorableProject.docs.find((doc) => doc.docType === "synopsis")
+      const outlineDoc = restorableProject.docs.find((doc) => doc.docType === "outline")
+      const chapterDocs = restorableProject.docs.filter((doc) => doc.docType === "chapter")
+      const releaseDoc = restorableProject.docs.find((doc) => doc.docType === "release")
+      const nextStage = stageByProjectDocs({
+        releaseStatus: restorableProject.releaseStatus,
+        hasOutlineDoc: Boolean(outlineDoc),
+        hasChapterDoc: chapterDocs.length > 0,
+        hasReleaseDoc: Boolean(releaseDoc),
+        synopsisApproved: synopsisDoc?.status === "approved",
+        outlineApproved: outlineDoc?.status === "approved",
+      })
+      restoredStage = nextStage
+
+      for (const doc of restorableProject.docs) {
+        await ensureActiveDraftForRestore(tx, {
+          doc: {
+            docId: doc.docId,
+            status: doc.status,
+            chapterNo: doc.chapterNo,
+            activeDraftId: doc.activeDraftId,
+            currentWordCount: doc.currentWordCount,
+            currentPlainText: doc.currentPlainText,
+            currentCleanText: doc.currentCleanText,
+            summary: doc.summary,
+            projectId: restorableProject.projectId,
+            projectAuthorId: restorableProject.authorId,
+            projectEditorId: restorableProject.editorId,
+            finalRevision: doc.finalRevision,
+            latestRevision: doc.latestRevision,
+          },
+          reopenApprovedReleaseDoc: doc.docType === "release" && nextStage === "release" && doc.status === "approved",
+        })
+      }
+
       await tx.project.update({
         where: {
           projectId,
         },
         data: {
           lifecycleStatus: "active",
+          currentStage: nextStage,
+          releaseStatus:
+            nextStage === "release"
+              ? releaseDoc?.status === "approved"
+                ? "unlocked"
+                : restorableProject.releaseStatus === "locked"
+                  ? "unlocked"
+                  : restorableProject.releaseStatus
+              : "locked",
+          completedAt: null,
+          archivedAt: null,
+          cancelledAt: null,
           restoredAt: now,
         },
       })
@@ -2433,7 +2806,12 @@ export async function transitionGovernanceProject(
       },
       afterJson: {
         lifecycleStatus: action === "complete" ? "completed" : action === "restore" ? "active" : action,
-        currentStage: action === "complete" ? "completed" : project.currentStage,
+        currentStage:
+          action === "complete"
+            ? "completed"
+            : action === "restore"
+              ? restoredStage ?? project.currentStage
+              : project.currentStage,
       },
     })
   })
@@ -2443,6 +2821,7 @@ export async function transitionGovernanceProject(
 
 export async function downloadGovernanceProjectFinal(actor: ApiCurrentUser, projectIdValue: string) {
   ensureAdmin(actor)
+  await syncActiveProjectTimelineStatuses()
 
   const projectId = parseBigIntId(projectIdValue, "项目 ID")
   const project = await prisma.project.findUnique({
@@ -2486,7 +2865,16 @@ export async function downloadGovernanceProjectFinal(actor: ApiCurrentUser, proj
   }
 
   return {
-    filename: `${project.title}.md`,
-    content: finalText,
+    filename: `${project.title}.docx`,
+    content: await buildDocxBuffer({
+      title: project.title,
+      sections: [
+        {
+          title: "终稿",
+          body: finalText,
+        },
+      ],
+    }),
+    contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   }
 }

@@ -11,7 +11,6 @@ const registerSchema = z.object({
   username: z.string().trim().min(1, "请输入用户名"),
   password: z.string().min(6, "密码长度不能少于 6 位"),
   confirmPassword: z.string().min(1, "请再次输入密码"),
-  role: z.enum(["author", "editor"]),
   penName: z.string().trim().min(1, "请输入笔名或姓名").optional(),
   name: z.string().trim().min(1, "请输入笔名或姓名").optional(),
   // 注册页现在统一只接受邮箱，手机号不再作为注册入口字段。
@@ -36,7 +35,6 @@ export async function POST(request: NextRequest) {
     const result = await registerPendingUser({
       username: body.username,
       password: body.password,
-      role: body.role,
       name,
       email: body.email,
       biography: body.bio,

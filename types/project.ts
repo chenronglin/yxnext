@@ -183,4 +183,6 @@ export interface ReorderChapterInput {
 // 其中 release 对应页面上的“质检”导出。
 export type ProjectExportScope = "synopsis" | "outline" | "chapters" | "release" | "project"
 
-export type ProjectExportFormat = "markdown"
+// 项目导出默认优先提供 Docx；
+// Markdown 继续保留为扩展格式，便于研发排查或后续外部集成。
+export type ProjectExportFormat = "docx" | "markdown"

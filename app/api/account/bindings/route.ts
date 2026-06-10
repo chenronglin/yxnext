@@ -9,7 +9,9 @@ export const runtime = "nodejs"
 
 export async function GET(request: NextRequest) {
   try {
-    const actor = await requireApiCurrentUser(request)
+    // 个人设置页展示绑定摘要时不应因为“待改密”而完全空白，
+    // 因此读取绑定信息的 GET 接口也需要在这一阶段保持可用。
+    const actor = await requireApiCurrentUser(request, { allowPasswordResetRequired: true })
     const result = await getAccountBindings(actor)
 
     return ok(result)

@@ -6,6 +6,7 @@ import { getAdminDashboard, getAdminReport } from "@/server/modules/admin/admin.
 import { prisma } from "@/server/db/prisma"
 import { ApiError } from "@/server/shared/api-response"
 import type { ApiCurrentUser } from "@/server/shared/current-user"
+import { syncActiveProjectTimelineStatuses } from "@/server/shared/project-stage-timeline"
 import type { BadgeTone, DocStatus } from "@/types/domain"
 import type {
   AuthorDashboardStats,
@@ -110,6 +111,7 @@ function notificationCategory(rawType: string): NotificationCategory {
   if (rawType === "forgot_password_requested") return "forgot_password_request"
   if (rawType === "project_enter_qc") return "enter_qc"
   if (rawType === "project_completed") return "project_done"
+  if (rawType === "stage_warning") return "stage_warning"
   if (rawType === "binding_created" || rawType === "binding_removed" || rawType === "project_assignment_changed") {
     return "binding_change"
   }
@@ -153,6 +155,10 @@ function notificationHref(input: {
     return `/projects/${input.projectId.toString()}/qc`
   }
 
+  if (input.category === "stage_warning" && input.projectId) {
+    return `/projects/${input.projectId.toString()}`
+  }
+
   if (input.category === "project_done" && input.projectId) {
     return `/projects/${input.projectId.toString()}`
   }
@@ -184,6 +190,8 @@ export async function listReviewQueue(actor: ApiCurrentUser) {
       message: "只有编辑或管理员可以查看审稿队列",
     })
   }
+
+  await syncActiveProjectTimelineStatuses()
 
   const docs = await prisma.doc.findMany({
     where: {
@@ -255,6 +263,8 @@ export async function listReviewQueue(actor: ApiCurrentUser) {
 export async function listTodos(actor: ApiCurrentUser) {
   // 待办页现在只展示“有持久化真相源”的任务：
   // 也就是直接来自 todo_items 的记录，不再额外拼接 SI 预发、阶段预警等临时列表项。
+  await syncActiveProjectTimelineStatuses()
+
   const openTodos = await prisma.todoItem.findMany({
     where: {
       recipientUserId: actor.userId,
@@ -342,6 +352,24 @@ export async function listTodos(actor: ApiCurrentUser) {
         href: "/admin/approvals",
       })
     }
+
+    if ((todo.todoType === "stage_due_soon" || todo.todoType === "stage_overdue") && todo.project) {
+      items.push({
+        id: `todo:${todo.todoId.toString()}`,
+        type: todo.todoType === "stage_overdue" ? "overdue" : "warning",
+        title: todo.title,
+        relatedType: "项目阶段",
+        relatedName: todo.project.title,
+        status: todo.todoType === "stage_overdue" ? "已逾期" : "即将到期",
+        statusTone: todo.todoType === "stage_overdue" ? "danger" : "warning",
+        due: toIsoString(todo.dueAt) ?? "—",
+        from: "系统",
+        createdAt: todo.createdAt.toISOString(),
+        read: todo.isRead,
+        readAt: toIsoString(todo.readAt),
+        href: `/projects/${todo.project.projectId.toString()}`,
+      })
+    }
   }
 
   items.sort((left, right) => right.createdAt.localeCompare(left.createdAt))
@@ -370,6 +398,8 @@ export async function markAllTodosRead(actor: ApiCurrentUser) {
 }
 
 export async function listNotifications(actor: ApiCurrentUser) {
+  await syncActiveProjectTimelineStatuses()
+
   const notifications = await prisma.notification.findMany({
     where: {
       recipientUserId: actor.userId,
@@ -758,6 +788,8 @@ async function getAuthorReport(actor: ApiCurrentUser, range: RangeKey): Promise<
 }
 
 export async function getWorkspaceDashboard(actor: ApiCurrentUser, range: RangeKey = "30d"): Promise<WorkspaceDashboardPayload> {
+  await syncActiveProjectTimelineStatuses()
+
   if (actor.role === "admin") {
     return {
       role: "admin",
@@ -779,6 +811,8 @@ export async function getWorkspaceDashboard(actor: ApiCurrentUser, range: RangeK
 }
 
 export async function getWorkspaceReport(actor: ApiCurrentUser, range: RangeKey = "30d"): Promise<WorkspaceReportPayload> {
+  await syncActiveProjectTimelineStatuses()
+
   if (actor.role === "admin") {
     return {
       role: "admin",

@@ -20,6 +20,7 @@ type SessionUserRecord = {
   userId: bigint
   username: string
   email: string
+  passwordResetRequired: boolean
   role: CurrentUser["role"]
   status: CurrentUser["status"]
   displayName: string | null
@@ -30,6 +31,7 @@ type SessionUserRecord = {
 type SessionWriter = {
   userSession: {
     create: typeof prisma.userSession.create
+    updateMany: typeof prisma.userSession.updateMany
   }
 }
 
@@ -43,6 +45,7 @@ export function toCurrentUser(user: SessionUserRecord): CurrentUser {
     status: user.status,
     email: user.email,
     phone: user.phone ?? undefined,
+    passwordResetRequired: user.passwordResetRequired,
   }
 }
 
@@ -116,6 +119,7 @@ export async function getCurrentUserBySessionId(sessionId: string | undefined | 
           userId: true,
           username: true,
           email: true,
+          passwordResetRequired: true,
           role: true,
           status: true,
           displayName: true,
@@ -144,6 +148,20 @@ export async function revokeUserSession(sessionId: string | undefined | null) {
   await prisma.userSession.updateMany({
     where: {
       sessionId,
+      revokedAt: null,
+    },
+    data: {
+      revokedAt: new Date(),
+    },
+  })
+}
+
+// 按用户批量撤销全部活动会话，用于禁用账号、修改密码、管理员重置密码等高风险场景。
+// 这里故意只更新 `revokedAt IS NULL` 的活动会话，既避免重复写放大，也保留历史审计轨迹。
+export async function revokeAllUserSessionsByUserId(userId: bigint, client: SessionWriter = prisma) {
+  await client.userSession.updateMany({
+    where: {
+      userId,
       revokedAt: null,
     },
     data: {

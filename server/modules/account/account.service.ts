@@ -3,6 +3,7 @@ import "server-only"
 import bcrypt from "bcryptjs"
 import { Prisma } from "@prisma/client"
 
+import { revokeAllUserSessionsByUserId } from "@/server/auth/session"
 import { prisma } from "@/server/db/prisma"
 import { ApiError } from "@/server/shared/api-response"
 import type { ApiCurrentUser } from "@/server/shared/current-user"
@@ -260,8 +261,15 @@ export async function changeAccountPassword(actor: ApiCurrentUser, input: Change
       },
       data: {
         passwordHash: nextPasswordHash,
+        // 一旦用户已经亲自完成改密，就要立刻清掉“强制改密”标记；
+        // 否则后续重新登录仍会被系统持续拦截，形成无法退出的死循环。
+        passwordResetRequired: false,
       },
     })
+
+    // 用户主动修改密码后，需要让全部旧会话立刻失效。
+    // 这样才能阻断已泄露设备、共享浏览器或旧 cookie 继续访问账户。
+    await revokeAllUserSessionsByUserId(actor.userId, tx)
 
     await writeOperationLog(tx, {
       actor,
@@ -270,11 +278,15 @@ export async function changeAccountPassword(actor: ApiCurrentUser, input: Change
       afterJson: {
         updated: true,
       },
+      metadataJson: {
+        sessionsRevoked: true,
+      },
     })
   })
 
   return {
     ok: true,
+    reauthRequired: true,
   }
 }
 

@@ -6,5 +6,5 @@ export default async function DocEditorPage({
   params: Promise<{ id: string; docType: string }>
 }) {
   const { id, docType } = await params
-  return <DocEditor projectId={id} docType={docType} />
+  return <DocEditor projectId={id} docRef={docType} />
 }

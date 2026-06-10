@@ -9,7 +9,7 @@ import { requireApiCurrentUser } from "@/server/shared/current-user"
 export const runtime = "nodejs"
 
 const scopeSchema = z.enum(["synopsis", "outline", "chapters", "release", "project"])
-const formatSchema = z.enum(["markdown"])
+const formatSchema = z.enum(["docx", "markdown"])
 
 type ProjectExportRouteContext = {
   params: Promise<{

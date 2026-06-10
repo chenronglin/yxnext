@@ -5,6 +5,12 @@ import { Prisma } from "@prisma/client"
 
 import { prisma } from "@/server/db/prisma"
 import { ApiError } from "@/server/shared/api-response"
+import {
+  makeActiveDocKey,
+  makeEffectivePreissueKey,
+  makeSingleDocKey,
+  translateUniqueConstraintError,
+} from "@/server/shared/invariant-keys"
 import type { ApiCurrentUser } from "@/server/shared/current-user"
 import type { PrereleaseRecord, PrereleaseStatus, SiItem, SiVersion } from "@/types/si"
 
@@ -1118,130 +1124,145 @@ export async function prepublishStoryIdea(actor: ApiCurrentUser, siIdValue: stri
     })
   }
 
-  const records = await prisma.$transaction(async (tx) => {
-    const si = await tx.storyIdea.findUnique({
-      where: {
-        siId,
-      },
-      include: {
-        mainType: true,
-        fitAuthors: true,
-      },
-    })
-
-    if (!si) {
-      throw new ApiError({
-        status: 404,
-        code: "SI_NOT_FOUND",
-        message: "SI 不存在",
-      })
-    }
-
-    ensureCanManageSi(actor, si)
-
-    if (si.status === "converted" || si.status === "archived") {
-      throw new ApiError({
-        status: 409,
-        code: "SI_CANNOT_PREPUBLISH",
-        message: "已转项目或已归档的 SI 不可预发",
-      })
-    }
-
-    await assertBoundAuthors(tx, actor.userId, authorIds)
-
-    const duplicated = await tx.siPreissue.findMany({
-      where: {
-        siId,
-        authorId: {
-          in: authorIds,
-        },
-        status: "preissued",
-      },
-      select: {
-        authorId: true,
-      },
-    })
-
-    if (duplicated.length > 0) {
-      throw new ApiError({
-        status: 409,
-        code: "PREISSUE_DUPLICATED",
-        message: "所选作者中存在有效预发记录，不能重复预发",
-      })
-    }
-
-    const snapshot = makeSnapshot({
-      siId: si.siId,
-      title: si.title,
-      mainTypeId: si.mainTypeId,
-      mainTypeName: si.mainType?.name ?? null,
-      trope: si.trope,
-      fitAuthorIds: si.fitAuthors.map((item) => item.authorId),
-      fitAuthorNote: si.fitAuthorNote,
-      remarks: si.remarks,
-      freshTwist: si.freshTwist,
-      coreSynopsis: si.coreSynopsis,
-    })
-
-    const created: PreissueRecord[] = []
-
-    for (const authorId of authorIds) {
-      const record = await tx.siPreissue.create({
-        data: {
-          siId,
-          siVersionId: si.latestVersionId,
-          editorId: actor.userId,
-          authorId,
-          preissueNote: trimToNull(input.note ?? null),
-          siSnapshotJson: snapshot,
-          status: "preissued",
-        },
-        include: preissueInclude,
-      })
-
-      created.push(record)
-    }
-
-    if (si.status === "draft") {
-      await tx.storyIdea.update({
+  try {
+    const records = await prisma.$transaction(async (tx) => {
+      const si = await tx.storyIdea.findUnique({
         where: {
           siId,
         },
-        data: {
-          status: "preissued",
+        include: {
+          mainType: true,
+          fitAuthors: true,
         },
       })
-    }
 
-    await tx.notification.createMany({
-      data: authorIds.map((authorId) => ({
-        recipientUserId: authorId,
-        type: "si_preissued",
-        title: "收到新的 SI 预发",
-        body: `编辑向你预发了《${si.title}》。`,
+      if (!si) {
+        throw new ApiError({
+          status: 404,
+          code: "SI_NOT_FOUND",
+          message: "SI 不存在",
+        })
+      }
+
+      ensureCanManageSi(actor, si)
+
+      if (si.status === "converted" || si.status === "archived") {
+        throw new ApiError({
+          status: 409,
+          code: "SI_CANNOT_PREPUBLISH",
+          message: "已转项目或已归档的 SI 不可预发",
+        })
+      }
+
+      await assertBoundAuthors(tx, actor.userId, authorIds)
+
+      const duplicated = await tx.siPreissue.findMany({
+        where: {
+          siId,
+          authorId: {
+            in: authorIds,
+          },
+          status: "preissued",
+        },
+        select: {
+          authorId: true,
+        },
+      })
+
+      if (duplicated.length > 0) {
+        throw new ApiError({
+          status: 409,
+          code: "PREISSUE_DUPLICATED",
+          message: "所选作者中存在有效预发记录，不能重复预发",
+        })
+      }
+
+      const snapshot = makeSnapshot({
+        siId: si.siId,
+        title: si.title,
+        mainTypeId: si.mainTypeId,
+        mainTypeName: si.mainType?.name ?? null,
+        trope: si.trope,
+        fitAuthorIds: si.fitAuthors.map((item) => item.authorId),
+        fitAuthorNote: si.fitAuthorNote,
+        remarks: si.remarks,
+        freshTwist: si.freshTwist,
+        coreSynopsis: si.coreSynopsis,
+      })
+
+      const created: PreissueRecord[] = []
+
+      for (const authorId of authorIds) {
+        const record = await tx.siPreissue.create({
+          data: {
+            siId,
+            siVersionId: si.latestVersionId,
+            editorId: actor.userId,
+            authorId,
+            preissueNote: trimToNull(input.note ?? null),
+            siSnapshotJson: snapshot,
+            status: "preissued",
+            // 预发唯一约束需要在“有效记录”写入唯一键；
+            // 这样即使两次请求并发通过前置查询，也会在数据库层被兜住。
+            effectivePairKey: makeEffectivePreissueKey(siId, authorId),
+          },
+          include: preissueInclude,
+        })
+
+        created.push(record)
+      }
+
+      if (si.status === "draft") {
+        await tx.storyIdea.update({
+          where: {
+            siId,
+          },
+          data: {
+            status: "preissued",
+          },
+        })
+      }
+
+      await tx.notification.createMany({
+        data: authorIds.map((authorId) => ({
+          recipientUserId: authorId,
+          type: "si_preissued",
+          title: "收到新的 SI 预发",
+          body: `编辑向你预发了《${si.title}》。`,
+          siId,
+          entityType: "si_preissue",
+          entityId: created.find((item) => item.authorId === authorId)?.preissueId,
+        })),
+      })
+
+      await writeOperationLog(tx, {
+        actor,
+        action: "si.prepublish",
+        entityType: "story_idea",
+        entityId: siId,
         siId,
-        entityType: "si_preissue",
-        entityId: created.find((item) => item.authorId === authorId)?.preissueId,
-      })),
+        afterJson: {
+          authorIds: authorIds.map((id) => id.toString()),
+          preissueIds: created.map((item) => item.preissueId.toString()),
+        },
+      })
+
+      return created
     })
 
-    await writeOperationLog(tx, {
-      actor,
-      action: "si.prepublish",
-      entityType: "story_idea",
-      entityId: siId,
-      siId,
-      afterJson: {
-        authorIds: authorIds.map((id) => id.toString()),
-        preissueIds: created.map((item) => item.preissueId.toString()),
-      },
-    })
-
-    return created
-  })
-
-  return {
-    records: records.map(serializePreissue),
+    return {
+      records: records.map(serializePreissue),
+    }
+  } catch (error) {
+    throw (
+      translateUniqueConstraintError(error, [
+        {
+          constraintIncludes: ["effective_pair_key"],
+          code: "PREISSUE_DUPLICATED",
+          message: "所选作者中存在有效预发记录，不能重复预发",
+        },
+      ]) ?? error
+    )
   }
 }
 
@@ -1291,6 +1312,8 @@ export async function withdrawSiPreissue(actor: ApiCurrentUser, recordIdValue: s
       data: {
         status: "recalled",
         recalledAt: new Date(),
+        // 预发被收回后要释放有效唯一键，否则同一 SI 无法再次预发给同一作者。
+        effectivePairKey: null,
       },
       include: preissueInclude,
     })
@@ -1485,6 +1508,8 @@ export async function convertSiPreissueToProject(actor: ApiCurrentUser, recordId
         lastAction: "author_save",
         lastActorId: existing.authorId,
         lastActionAt: now,
+        // 梗概 Doc 属于“项目内唯一单据”，创建时必须把唯一键写实，交给数据库做最后兜底。
+        singleDocKey: makeSingleDocKey(project.projectId, "synopsis"),
       },
     })
 
@@ -1501,6 +1526,8 @@ export async function convertSiPreissueToProject(actor: ApiCurrentUser, recordId
         exportText: coreSynopsis || null,
         summary: freshTwist || null,
         status: "active",
+        // 当前工作稿唯一键直接复用 docId，保证同一 Doc 同时只能存在一条 active 草稿。
+        activeDocKey: makeActiveDocKey(doc.docId),
       },
     })
 

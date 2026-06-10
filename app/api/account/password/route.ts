@@ -1,6 +1,7 @@
 import { type NextRequest } from "next/server"
 import { z } from "zod"
 
+import { clearSessionCookie } from "@/server/auth/session"
 import { changeAccountPassword } from "@/server/modules/account/account.service"
 import { fail, ok } from "@/server/shared/api-response"
 import { requireApiCurrentUser } from "@/server/shared/current-user"
@@ -26,14 +27,21 @@ const changePasswordSchema = z
 
 export async function POST(request: NextRequest) {
   try {
-    const actor = await requireApiCurrentUser(request)
+    // 强制改密中的用户唯一允许继续访问的业务接口就是当前这个改密入口，
+    // 否则会因为统一鉴权拦截而无法完成“先改密再继续”的闭环。
+    const actor = await requireApiCurrentUser(request, { allowPasswordResetRequired: true })
     const body = changePasswordSchema.parse(await request.json().catch(() => ({})))
     const result = await changeAccountPassword(actor, {
       oldPassword: body.oldPassword,
       newPassword: body.newPassword,
     })
 
-    return ok(result)
+    // 当前密码更新成功后，服务层已经撤销数据库里的全部旧会话；
+    // 这里再主动清掉浏览器 cookie，让当前页面立刻进入重新登录态。
+    const response = ok(result)
+    clearSessionCookie(response)
+
+    return response
   } catch (error) {
     return fail(error)
   }

@@ -9,5 +9,5 @@ export default async function DocCleanPage({
 }) {
   const { id, docType } = await params
   const { rev } = await searchParams
-  return <DocCleanView projectId={id} docType={docType} revisionId={rev} />
+  return <DocCleanView projectId={id} docRef={docType} revisionId={rev} />
 }

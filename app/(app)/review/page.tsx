@@ -1,129 +1,188 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
-import { useRole } from "@/components/role-provider"
+import { useSearchParams } from "next/navigation"
+
 import { PageHeader } from "@/components/page-header"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { StatusBadge } from "@/components/status-badge"
-import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
-import {
-  FileCheck2,
-  FileText,
-  User,
-  Clock,
-  ExternalLink,
-  ChevronRight,
-  ThumbsUp,
-  RotateCcw,
-  Info,
-  CheckCircle,
-  Undo2
-} from "lucide-react"
+import { StatusBadge } from "@/components/status-badge"
+import { useRole } from "@/components/role-provider"
+import { fetchJson } from "@/lib/api"
+import type { DocCurrentView } from "@/types/doc"
+import type { ReviewQueueItem } from "@/types/workbench"
+import { DOC_STATUS_LABELS } from "@/types/domain"
+import { CheckCircle, ChevronRight, Clock, ExternalLink, FileCheck2, Info, RotateCcw, ThumbsUp, User } from "lucide-react"
 
-interface ReviewItem {
-  id: string
-  projectId: string
-  docType: string
-  title: string
-  projectName: string
-  authorName: string
-  words: number
-  submittedAt: string
-  submitNote: string
-  previewText: string
+type ReviewQueueResponse = {
+  items: ReviewQueueItem[]
 }
 
-const INITIAL_REVIEWS: ReviewItem[] = [
-  {
-    id: "rev-1",
-    projectId: "p1",
-    docType: "chapter",
-    title: "第四章 暗巷的修士",
-    projectName: "都市修真：外卖小哥的逆袭",
-    authorName: "苏小白",
-    words: 3680,
-    submittedAt: "2026-06-08 09:30",
-    submitNote: "第四章写完啦，加入了男主在暗巷利用破自行车阵法击退低阶散修的情节，求林大大审核批注！",
-    previewText: "清冷的月光洒在石板路上，陈默推着链条断裂的飞鸽自行车走在狭窄的胡同里。突然，空气骤冷，四周泛起淡淡的灰色大雾。‘道友请留步。’一个沙哑的声音从雾气深处飘出，伴随着不怀好意的灵压压迫感。"
-  },
-  {
-    id: "rev-2",
-    projectId: "p2",
-    docType: "outline",
-    title: "《锦衣探案录》细纲修订版",
-    projectName: "锦衣探案录",
-    authorName: "墨清欢",
-    words: 5200,
-    submittedAt: "2026-06-07 11:20",
-    submitNote: "按照之前的沟通，丰富了前五章银库案的冲突反转，加入了次辅别苑夜探被围的伏笔，请查看。",
-    previewText: "故事围绕锦衣卫百户沈炼展开。沈炼受命调查大明朝银库十万两雪花银离奇失踪案。在夜探别苑过程中，主角撞见次辅别苑的阴谋，并被陷害成为弑臣凶手，踏上流亡路。"
-  },
-  {
-    id: "rev-3",
-    projectId: "p4",
-    docType: "release",
-    title: "《山海食肆》质检 Doc",
-    projectName: "山海食肆",
-    authorName: "江临",
-    words: 28500,
-    submittedAt: "2026-06-05 15:40",
-    submitNote: "已完成所有章节的校对及精细修改，申请质检核验并正式标记项目完结交付。",
-    previewText: "山海食肆座落于人妖两界交汇的忘川渡口。守店人陆羽擅长以山海异兽为食材，烹饪调理人妖执念。第一章：清炖讹兽与谎言的滋味；第二章：爆炒毕方与心火的释怀……"
-  }
-]
+type CurrentDocResponse = DocCurrentView
+
+function docTypeLabel(docType: ReviewQueueItem["docType"]) {
+  if (docType === "synopsis") return "梗概"
+  if (docType === "outline") return "细纲"
+  if (docType === "chapter") return "正文"
+  return "质检"
+}
 
 export default function ReviewWorkbenchPage() {
   const { role } = useRole()
-  const [reviews, setReviews] = useState<ReviewItem[]>(INITIAL_REVIEWS)
-  const [selectedId, setSelectedId] = useState<string>(INITIAL_REVIEWS[0]?.id ?? "")
+  const searchParams = useSearchParams()
+  const [reviews, setReviews] = useState<ReviewQueueItem[]>([])
+  const [selectedId, setSelectedId] = useState("")
+  const [currentDoc, setCurrentDoc] = useState<DocCurrentView | null>(null)
   const [feedback, setFeedback] = useState("")
-  const [toastMessage, setToastMessage] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [actionLoading, setActionLoading] = useState<null | "approve" | "return">(null)
+  const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null)
 
-  const selectedItem = reviews.find((r) => r.id === selectedId)
+  const selectedItem = useMemo(() => reviews.find((item) => item.docId === selectedId) ?? null, [reviews, selectedId])
+  const preferredDocId = searchParams.get("docId")
+  const isAuthorized = role === "editor" || role === "admin"
 
-  // Trigger toast notification
-  const triggerToast = (msg: string) => {
-    setToastMessage(msg)
-    setTimeout(() => setToastMessage(null), 3000)
-  }
+  async function loadQueue(successText?: string) {
+    setLoading(true)
 
-  // Handle Quick Approve
-  const handleApprove = () => {
-    if (!selectedItem) return
-    triggerToast(`【${selectedItem.title}】已快速审核通过！`)
-    const nextReviews = reviews.filter((r) => r.id !== selectedItem.id)
-    setReviews(nextReviews)
-    if (nextReviews.length > 0) {
-      setSelectedId(nextReviews[0].id)
-    } else {
-      setSelectedId("")
+    try {
+      const response = await fetchJson<ReviewQueueResponse>("/api/review")
+      setReviews(response.items)
+
+      const nextSelectedId =
+        response.items.find((item) => item.docId === selectedId)?.docId ??
+        response.items.find((item) => item.docId === preferredDocId)?.docId ??
+        response.items[0]?.docId ??
+        ""
+
+      setSelectedId(nextSelectedId)
+
+      if (successText) {
+        setMessage({
+          type: "success",
+          text: successText,
+        })
+      }
+    } catch (error) {
+      setMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "审稿队列读取失败",
+      })
+    } finally {
+      setLoading(false)
     }
-    setFeedback("")
   }
 
-  // Handle Return for revision
-  const handleReturn = () => {
-    if (!selectedItem) return
-    if (!feedback.trim()) {
-      triggerToast("请在下方输入退回修改的具体批注和意见！")
+  useEffect(() => {
+    void loadQueue()
+  }, [preferredDocId])
+
+  useEffect(() => {
+    if (!selectedId) {
+      setCurrentDoc(null)
       return
     }
-    triggerToast(`【${selectedItem.title}】已退回给作者进行修改。`)
-    const nextReviews = reviews.filter((r) => r.id !== selectedItem.id)
-    setReviews(nextReviews)
-    if (nextReviews.length > 0) {
-      setSelectedId(nextReviews[0].id)
-    } else {
-      setSelectedId("")
+
+    let cancelled = false
+
+    async function loadCurrentDoc() {
+      try {
+        const response = await fetchJson<CurrentDocResponse>(`/api/docs/${selectedId}/current`)
+
+        if (!cancelled) {
+          setCurrentDoc(response)
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setMessage({
+            type: "error",
+            text: error instanceof Error ? error.message : "稿件详情读取失败",
+          })
+          setCurrentDoc(null)
+        }
+      }
     }
-    setFeedback("")
+
+    void loadCurrentDoc()
+
+    return () => {
+      cancelled = true
+    }
+  }, [selectedId])
+
+  async function handleApprove() {
+    if (!selectedItem || !currentDoc || currentDoc.source.kind !== "draft") {
+      return
+    }
+
+    setActionLoading("approve")
+    setMessage(null)
+
+    try {
+      await fetchJson(`/api/docs/${selectedItem.docId}/approve`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          lockVersion: currentDoc.source.lockVersion,
+          approveNote: feedback.trim() || null,
+        }),
+      })
+
+      setFeedback("")
+      await loadQueue(`【${selectedItem.title}】已审核通过`)
+    } catch (error) {
+      setMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "审核通过失败",
+      })
+    } finally {
+      setActionLoading(null)
+    }
   }
 
-  // Simulated role switch warning
-  const isAuthorized = role === "editor" || role === "admin"
+  async function handleReturn() {
+    if (!selectedItem || !currentDoc || currentDoc.source.kind !== "draft") {
+      return
+    }
+
+    if (!feedback.trim()) {
+      setMessage({
+        type: "error",
+        text: "请先填写退回说明",
+      })
+      return
+    }
+
+    setActionLoading("return")
+    setMessage(null)
+
+    try {
+      await fetchJson(`/api/docs/${selectedItem.docId}/return`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          lockVersion: currentDoc.source.lockVersion,
+          returnNote: feedback.trim(),
+        }),
+      })
+
+      setFeedback("")
+      await loadQueue(`【${selectedItem.title}】已退回作者修改`)
+    } catch (error) {
+      setMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "退回失败",
+      })
+    } finally {
+      setActionLoading(null)
+    }
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -133,76 +192,75 @@ export default function ReviewWorkbenchPage() {
         description="聚合编辑辖下所有项目中，作者最新提交审核的梗概、细纲、正文与质检 Doc"
       />
 
-      {/* Toast Alert */}
-      {toastMessage && (
-        <div className="fixed bottom-5 right-5 z-50 flex items-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm text-primary-foreground shadow-lg animate-in fade-in slide-in-from-bottom-5">
-          <CheckCircle className="size-4 shrink-0" />
-          <span>{toastMessage}</span>
+      {message && (
+        <div
+          className={
+            message.type === "error"
+              ? "rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600"
+              : "rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"
+          }
+        >
+          {message.text}
         </div>
       )}
 
-      {/* Role Notice */}
       {!isAuthorized && (
         <div className="flex items-center gap-3.5 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
           <Info className="size-4 shrink-0 text-amber-600" />
-          <div>
-            <span className="font-semibold">角色预览提示：</span>
-            当前登录角色为【作者】。该页面仅供【编辑】和【管理员】使用。已为您模拟切换至编辑（林编辑）的视角进行界面展示。
-          </div>
+          该页面仅供编辑和管理员使用，当前账号没有审稿权限。
         </div>
       )}
 
-      {reviews.length === 0 ? (
-        <Card className="flex flex-col items-center justify-center py-20 text-center gap-4 border-dashed border-2">
+      {loading ? (
+        <Card className="px-4 py-10 text-center text-sm text-muted-foreground">正在加载待审稿件...</Card>
+      ) : reviews.length === 0 ? (
+        <Card className="flex flex-col items-center justify-center gap-4 border-dashed border-2 py-20 text-center">
           <div className="flex size-14 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
             <CheckCircle className="size-7" />
           </div>
           <div className="space-y-1">
             <h3 className="text-base font-medium text-foreground">所有待审稿件已处理完毕</h3>
-            <p className="text-sm text-muted-foreground">干得漂亮！当前没有任何待审核的梗概、细纲、正文或质检 Doc。</p>
+            <p className="text-sm text-muted-foreground">当前没有任何待审核的梗概、细纲、正文或质检 Doc。</p>
           </div>
         </Card>
       ) : (
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-          {/* 左侧：待审稿件列表 (1/3 宽) */}
           <div className="flex flex-col gap-3 lg:col-span-1">
-            <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground px-1 py-1">
+            <div className="px-1 py-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               待审稿件 ({reviews.length})
             </div>
-            
             <div className="flex flex-col gap-3">
               {reviews.map((item) => {
-                const active = item.id === selectedId
+                const active = item.docId === selectedId
+
                 return (
                   <Card
-                    key={item.id}
-                    className={`flex flex-col gap-3 p-4 cursor-pointer border transition-all hover:border-primary/50 hover:shadow-xs ${
+                    key={item.docId}
+                    className={`cursor-pointer border p-4 transition-all hover:border-primary/50 hover:shadow-xs ${
                       active ? "border-primary bg-primary/5 ring-1 ring-primary/30" : "border-border bg-card"
                     }`}
                     onClick={() => {
-                      setSelectedId(item.id)
+                      setSelectedId(item.docId)
                       setFeedback("")
                     }}
                   >
                     <div className="flex flex-col gap-1">
-                      <span className="text-xs text-muted-foreground truncate">{item.projectName}</span>
-                      <h3 className="text-sm font-semibold text-foreground truncate">{item.title}</h3>
+                      <span className="truncate text-xs text-muted-foreground">{item.projectTitle}</span>
+                      <h3 className="text-sm font-semibold text-foreground">{item.title}</h3>
                     </div>
-                    
-                    <div className="flex items-center justify-between text-xs text-muted-foreground">
+                    <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
                       <span className="flex items-center gap-1">
                         <User className="size-3" />
                         {item.authorName}
                       </span>
                       <span>{item.words} 字</span>
                     </div>
-
-                    <div className="flex items-center justify-between border-t border-border/40 pt-2.5 mt-0.5 text-[11px] text-muted-foreground">
+                    <div className="mt-2 flex items-center justify-between border-t border-border/40 pt-2.5 text-[11px] text-muted-foreground">
                       <span className="flex items-center gap-1">
                         <Clock className="size-3" />
-                        提交：{item.submittedAt.split(" ")[1]}
+                        {item.submittedAt ?? "—"}
                       </span>
-                      <ChevronRight className={`size-4 transition-transform ${active ? "text-primary translate-x-1" : "text-muted-foreground"}`} />
+                      <ChevronRight className={`size-4 transition-transform ${active ? "translate-x-1 text-primary" : ""}`} />
                     </div>
                   </Card>
                 )
@@ -210,17 +268,15 @@ export default function ReviewWorkbenchPage() {
             </div>
           </div>
 
-          {/* 右侧：审稿与对比详情 (2/3 宽) */}
           {selectedItem && (
-            <Card className="flex flex-col lg:col-span-2 p-5 border border-border bg-card shadow-sm gap-5">
-              {/* 头部信息 */}
+            <Card className="flex flex-col gap-5 border border-border bg-card p-5 shadow-sm lg:col-span-2">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                 <div className="space-y-1">
-                  <span className="text-xs text-muted-foreground">{selectedItem.projectName}</span>
+                  <span className="text-xs text-muted-foreground">{selectedItem.projectTitle}</span>
                   <h2 className="text-lg font-bold text-foreground">{selectedItem.title}</h2>
                 </div>
-                <Button asChild size="sm" variant="outline" className="bg-transparent self-start sm:self-auto">
-                  <Link href={`/projects/${selectedItem.projectId}/docs/${selectedItem.docType}`}>
+                <Button asChild size="sm" variant="outline" className="self-start bg-transparent sm:self-auto">
+                  <Link href={`/projects/${selectedItem.projectId}/docs/${selectedItem.docId}`}>
                     <ExternalLink className="mr-1.5 size-3.5" />
                     进入详细审稿流
                   </Link>
@@ -228,6 +284,10 @@ export default function ReviewWorkbenchPage() {
               </div>
 
               <div className="grid grid-cols-2 gap-4 rounded-lg bg-muted/40 p-3 text-xs sm:grid-cols-4">
+                <div>
+                  <p className="text-muted-foreground">稿件类型</p>
+                  <p className="mt-1 font-semibold text-foreground">{docTypeLabel(selectedItem.docType)}</p>
+                </div>
                 <div>
                   <p className="text-muted-foreground">提交作者</p>
                   <p className="mt-1 font-semibold text-foreground">{selectedItem.authorName}</p>
@@ -237,65 +297,57 @@ export default function ReviewWorkbenchPage() {
                   <p className="mt-1 font-semibold text-foreground">{selectedItem.words} 字</p>
                 </div>
                 <div>
-                  <p className="text-muted-foreground">提交时间</p>
-                  <p className="mt-1 font-semibold text-foreground">{selectedItem.submittedAt}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">状态</p>
-                  <p className="mt-0.5">
-                    <StatusBadge label="待审核" tone="warning" />
-                  </p>
+                  <p className="text-muted-foreground">当前状态</p>
+                  <p className="mt-1 font-semibold text-foreground">{currentDoc ? DOC_STATUS_LABELS[currentDoc.doc.status] : "加载中"}</p>
                 </div>
               </div>
 
-              {/* 作者留言 */}
-              <div className="rounded-lg border border-border bg-muted/20 px-4 py-3 text-xs leading-relaxed text-foreground">
-                <span className="font-semibold text-primary block mb-1">💬 作者留言：</span>
-                {selectedItem.submitNote}
-              </div>
+              <div className="grid gap-5 lg:grid-cols-2">
+                <section className="flex flex-col gap-3">
+                  <h3 className="text-sm font-semibold text-foreground">提交说明</h3>
+                  <Card className="bg-muted/30 p-4 text-sm text-foreground/90">{selectedItem.submitNote || "作者未填写提交说明。"}</Card>
+                  <h3 className="text-sm font-semibold text-foreground">当前稿件预览</h3>
+                  <Card className="min-h-40 bg-card p-4 text-sm leading-7 text-foreground/90">{selectedItem.previewText || "暂无正文预览。"}</Card>
+                </section>
 
-              <Separator />
+                <section className="flex flex-col gap-3">
+                  <h3 className="text-sm font-semibold text-foreground">上一轮有效内容</h3>
+                  <Card className="min-h-40 bg-muted/20 p-4 text-sm leading-7 text-foreground/80">
+                    {selectedItem.previousPreviewText || "上一轮历史版本不存在，或当前提交为该 Doc 的第一轮内容。"}
+                  </Card>
 
-              {/* 审稿工作台只展示当前提交内容预览；历史版本改为只读回看，不再提供差异对比。 */}
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-semibold text-foreground">当前提交内容预览</h3>
-                  <span className="text-[11px] text-muted-foreground">历史版本仅支持只读回看</span>
-                </div>
-
-                <div className="rounded-lg border border-border bg-background p-3 space-y-2">
-                  <span className="text-[11px] font-medium text-primary block border-b border-primary/20 pb-1.5">最新待审版本</span>
-                  <p className="text-xs text-foreground leading-relaxed">
-                    {selectedItem.previewText}
-                  </p>
-                </div>
-              </div>
-
-              <Separator />
-
-              {/* 快捷处理区 */}
-              <div className="space-y-4">
-                <h3 className="text-sm font-semibold text-foreground">快捷审核处理</h3>
-                <div className="space-y-2">
+                  <h3 className="text-sm font-semibold text-foreground">审核反馈</h3>
                   <Textarea
-                    placeholder="输入退回修改的批注意见，或者同意通过的寄语..."
+                    rows={6}
                     value={feedback}
-                    onChange={(e) => setFeedback(e.target.value)}
-                    className="border-border bg-background text-sm min-h-[70px]"
+                    onChange={(event) => setFeedback(event.target.value)}
+                    placeholder="退回时必填；通过时可选填写整体审核说明。"
+                    disabled={!currentDoc?.permissions.canApprove && !currentDoc?.permissions.canReturn}
                   />
-                  <p className="text-[10px] text-muted-foreground">批注字数将同步记录在章节 Doc 的最后一次修改记录中。</p>
-                </div>
+                </section>
+              </div>
 
-                <div className="flex flex-wrap gap-2.5">
-                  <Button variant="outline" className="bg-transparent text-red-600 border-red-200 hover:bg-red-50" onClick={handleReturn}>
-                    <Undo2 className="mr-1.5 size-4" />
-                    退回修改
-                  </Button>
-                  <Button className="ml-auto" onClick={handleApprove}>
-                    <ThumbsUp className="mr-1.5 size-4" />
-                    审核通过
-                  </Button>
-                </div>
+              <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
+                <Button
+                  variant="outline"
+                  className="bg-transparent"
+                  disabled={!currentDoc?.permissions.canReturn || actionLoading !== null}
+                  onClick={() => void handleReturn()}
+                >
+                  <RotateCcw className="mr-1.5 size-4" />
+                  {actionLoading === "return" ? "退回中..." : "退回作者修改"}
+                </Button>
+                <Button
+                  className="bg-emerald-600 text-white hover:bg-emerald-700"
+                  disabled={!currentDoc?.permissions.canApprove || actionLoading !== null}
+                  onClick={() => void handleApprove()}
+                >
+                  <ThumbsUp className="mr-1.5 size-4" />
+                  {actionLoading === "approve" ? "通过中..." : "审核通过"}
+                </Button>
+                <span className="ml-auto text-xs text-muted-foreground">
+                  {currentDoc?.source.kind === "draft" ? `lock_version v${currentDoc.source.lockVersion}` : "当前稿件不是可审核草稿"}
+                </span>
               </div>
             </Card>
           )}

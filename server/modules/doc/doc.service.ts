@@ -6,6 +6,12 @@ import { Prisma } from "@prisma/client"
 
 import { prisma } from "@/server/db/prisma"
 import { ApiError } from "@/server/shared/api-response"
+import {
+  makeActiveDocKey,
+  makeSingleDocKey,
+  translateUniqueConstraintError,
+} from "@/server/shared/invariant-keys"
+import { syncActiveProjectTimelineStatuses } from "@/server/shared/project-stage-timeline"
 import type { ApiCurrentUser } from "@/server/shared/current-user"
 import type {
   DocCurrentView,
@@ -452,6 +458,36 @@ function normalizeSavePayload(input: SaveDocInput) {
   }
 }
 
+function assertCleanTextConsistency(input: {
+  plainText: string
+  cleanText: string | null
+  commentCount: number
+  suggestionCount: number
+  revisionMarkCount: number
+}) {
+  const plainText = input.plainText.trim()
+  const cleanText = input.cleanText?.trim() ?? ""
+  const hasCollaborationMarks = input.commentCount > 0 || input.suggestionCount > 0 || input.revisionMarkCount > 0
+
+  // Clean 正文是“移除协作标记后的正文视图”，不是把 plainText 原样再传一份。
+  // 当稿件里已经存在批注、建议或修订标记时，前端必须显式提交清洗后的正文结果。
+  if (hasCollaborationMarks && plainText && !cleanText) {
+    throw new ApiError({
+      status: 400,
+      code: "DOC_CLEAN_TEXT_REQUIRED",
+      message: "当前稿件包含协作标记，提交时必须同时提供 Clean 正文",
+    })
+  }
+
+  if (hasCollaborationMarks && plainText && cleanText === plainText) {
+    throw new ApiError({
+      status: 400,
+      code: "DOC_CLEAN_TEXT_NOT_CLEANED",
+      message: "当前稿件包含协作标记，Clean 正文不能直接等同于未清洗正文",
+    })
+  }
+}
+
 function toDocMeta(doc: WorkflowDocRecord): DocMeta {
   return {
     docId: doc.docId.toString(),
@@ -838,6 +874,7 @@ async function sealDraftWithOptimisticLock(
     data: {
       status: "sealed",
       sealedAt: now,
+      activeDocKey: null,
     },
   })
 
@@ -924,6 +961,7 @@ async function createActiveDraft(
       suggestionCount: input.suggestionCount,
       revisionMarkCount: input.revisionMarkCount,
       status: "active",
+      activeDocKey: makeActiveDocKey(input.docId),
     },
     select: activeDraftSelect,
   })
@@ -962,6 +1000,7 @@ async function ensureOutlineDocForProject(tx: TxClient, doc: WorkflowDocRecord, 
       lastActionAt: null,
       createdAt: now,
       updatedAt: now,
+      singleDocKey: makeSingleDocKey(doc.project.projectId, "outline"),
     },
     select: {
       docId: true,
@@ -1121,6 +1160,8 @@ async function advanceProjectAfterApprove(tx: TxClient, doc: WorkflowDocRecord, 
 }
 
 export async function getCurrentDocView(actor: ApiCurrentUser, docIdValue: string): Promise<DocCurrentView> {
+  await syncActiveProjectTimelineStatuses()
+
   const docId = parseBigIntId(docIdValue, "Doc ID")
   const doc = await findVisibleDocOrThrow(prisma, actor, docId)
 
@@ -1128,6 +1169,8 @@ export async function getCurrentDocView(actor: ApiCurrentUser, docIdValue: strin
 }
 
 export async function listDocRevisions(actor: ApiCurrentUser, docIdValue: string): Promise<DocRevisionListResponse> {
+  await syncActiveProjectTimelineStatuses()
+
   const docId = parseBigIntId(docIdValue, "Doc ID")
   const doc = await findVisibleDocOrThrow(prisma, actor, docId)
 
@@ -1153,6 +1196,8 @@ export async function getDocRevisionDetail(
   docIdValue: string,
   revisionIdValue: string,
 ): Promise<DocRevisionDetail> {
+  await syncActiveProjectTimelineStatuses()
+
   const docId = parseBigIntId(docIdValue, "Doc ID")
   const revisionId = parseBigIntId(revisionIdValue, "Revision ID")
   const doc = await findVisibleDocOrThrow(prisma, actor, docId)
@@ -1211,6 +1256,14 @@ export async function saveDocDraft(
   const docId = parseBigIntId(docIdValue, "Doc ID")
   const payload = normalizeSavePayload(input)
   const now = new Date()
+
+  assertCleanTextConsistency({
+    plainText: payload.plainText,
+    cleanText: payload.cleanText,
+    commentCount: payload.commentCount,
+    suggestionCount: payload.suggestionCount,
+    revisionMarkCount: payload.revisionMarkCount,
+  })
 
   await prisma.$transaction(async (tx) => {
     const doc = await findVisibleDocOrThrow(tx, actor, docId)
@@ -1306,115 +1359,127 @@ export async function submitDoc(
   const submitNote = trimToNull(input.submitNote ?? null)
   const now = new Date()
 
-  await prisma.$transaction(async (tx) => {
-    const doc = await findVisibleDocOrThrow(tx, actor, docId)
-    assertProjectWritable(doc)
-    assertSaveGate(doc)
-    assertSubmitGate(doc)
-    const activeDraft = assertEditableByOwner(doc, actor)
+  try {
+    await prisma.$transaction(async (tx) => {
+      const doc = await findVisibleDocOrThrow(tx, actor, docId)
+      assertProjectWritable(doc)
+      assertSaveGate(doc)
+      assertSubmitGate(doc)
+      const activeDraft = assertEditableByOwner(doc, actor)
 
-    if (actor.role !== "author" || doc.holderRole !== "author") {
-      throw new ApiError({
-        status: 403,
-        code: "DOC_SUBMIT_FORBIDDEN",
-        message: "只有当前持有作者稿件的作者本人可以提交审核",
+      if (actor.role !== "author" || doc.holderRole !== "author") {
+        throw new ApiError({
+          status: 403,
+          code: "DOC_SUBMIT_FORBIDDEN",
+          message: "只有当前持有作者稿件的作者本人可以提交审核",
+        })
+      }
+
+      if (doc.status !== "draft" && doc.status !== "rejected") {
+        throw new ApiError({
+          status: 409,
+          code: "DOC_SUBMIT_STATE_INVALID",
+          message: "当前 Doc 状态不能提交审核",
+        })
+      }
+
+      await sealDraftWithOptimisticLock(tx, activeDraft.draftId, input.lockVersion, now)
+
+      const revision = await createRevisionFromDraft(tx, {
+        doc,
+        activeDraft,
+        actor,
+        action: "author_submit",
+        handoffNote: submitNote,
       })
-    }
 
-    if (doc.status !== "draft" && doc.status !== "rejected") {
-      throw new ApiError({
-        status: 409,
-        code: "DOC_SUBMIT_STATE_INVALID",
-        message: "当前 Doc 状态不能提交审核",
-      })
-    }
-
-    await sealDraftWithOptimisticLock(tx, activeDraft.draftId, input.lockVersion, now)
-
-    const revision = await createRevisionFromDraft(tx, {
-      doc,
-      activeDraft,
-      actor,
-      action: "author_submit",
-      handoffNote: submitNote,
-    })
-
-    const nextDraft = await createActiveDraft(tx, {
-      docId: doc.docId,
-      ownerRole: "editor",
-      ownerUserId: doc.project.editorId,
-      baseRevisionId: revision.revisionId,
-      contentSchemaVersion: activeDraft.contentSchemaVersion,
-      contentJson: asInputJson(activeDraft.contentJson),
-      wordCount: activeDraft.wordCount,
-      plainText: activeDraft.plainText,
-      cleanText: activeDraft.cleanText,
-      exportText: activeDraft.exportText,
-      summary: activeDraft.summary,
-      commentCount: activeDraft.commentCount,
-      suggestionCount: activeDraft.suggestionCount,
-      revisionMarkCount: activeDraft.revisionMarkCount,
-    })
-
-    await tx.doc.update({
-      where: {
+      const nextDraft = await createActiveDraft(tx, {
         docId: doc.docId,
-      },
-      data: {
-        status: "submitted",
-        holderRole: "editor",
-        activeDraftId: nextDraft.draftId,
-        latestRevisionId: revision.revisionId,
-        currentWordCount: activeDraft.wordCount,
-        currentPlainText: activeDraft.plainText,
-        currentCleanText: activeDraft.cleanText,
+        ownerRole: "editor",
+        ownerUserId: doc.project.editorId,
+        baseRevisionId: revision.revisionId,
+        contentSchemaVersion: activeDraft.contentSchemaVersion,
+        contentJson: asInputJson(activeDraft.contentJson),
+        wordCount: activeDraft.wordCount,
+        plainText: activeDraft.plainText,
+        cleanText: activeDraft.cleanText,
+        exportText: activeDraft.exportText,
         summary: activeDraft.summary,
-        lastAction: "author_submit",
-        lastActorId: actor.userId,
-        lastActionAt: now,
-        lastHandoffNote: submitNote,
-        submittedAt: now,
-      },
-    })
+        commentCount: activeDraft.commentCount,
+        suggestionCount: activeDraft.suggestionCount,
+        revisionMarkCount: activeDraft.revisionMarkCount,
+      })
 
-    await closeTodoByOpenKey(tx, makeReturnTodoKey(doc.docId), now)
-    await upsertReviewTodo(tx, doc, now)
+      await tx.doc.update({
+        where: {
+          docId: doc.docId,
+        },
+        data: {
+          status: "submitted",
+          holderRole: "editor",
+          activeDraftId: nextDraft.draftId,
+          latestRevisionId: revision.revisionId,
+          currentWordCount: activeDraft.wordCount,
+          currentPlainText: activeDraft.plainText,
+          currentCleanText: activeDraft.cleanText,
+          summary: activeDraft.summary,
+          lastAction: "author_submit",
+          lastActorId: actor.userId,
+          lastActionAt: now,
+          lastHandoffNote: submitNote,
+          submittedAt: now,
+        },
+      })
 
-    await createNotification(tx, {
-      recipientUserId: doc.project.editorId,
-      type: "doc_submitted_for_review",
-      title: "Doc 已提交待审",
-      body: `作者已提交《${doc.project.title}》的 ${doc.title}，请及时审核。`,
-      projectId: doc.project.projectId,
-      docId: doc.docId,
-      entityId: doc.docId,
-    })
+      await closeTodoByOpenKey(tx, makeReturnTodoKey(doc.docId), now)
+      await upsertReviewTodo(tx, doc, now)
 
-    await writeOperationLog(tx, {
-      actor,
-      action: "doc.submit",
-      entityType: "doc",
-      entityId: doc.docId,
-      projectId: doc.project.projectId,
-      docId: doc.docId,
-      beforeJson: {
-        status: doc.status,
-        holderRole: doc.holderRole,
-        activeDraftId: doc.activeDraftId?.toString() ?? null,
-      },
-      afterJson: {
-        status: "submitted",
-        holderRole: "editor",
-        activeDraftId: nextDraft.draftId.toString(),
-        latestRevisionId: revision.revisionId.toString(),
-      },
-      metadataJson: {
-        submitNote,
-        sealedDraftId: activeDraft.draftId.toString(),
-        revisionId: revision.revisionId.toString(),
-      },
+      await createNotification(tx, {
+        recipientUserId: doc.project.editorId,
+        type: "doc_submitted_for_review",
+        title: "Doc 已提交待审",
+        body: `作者已提交《${doc.project.title}》的 ${doc.title}，请及时审核。`,
+        projectId: doc.project.projectId,
+        docId: doc.docId,
+        entityId: doc.docId,
+      })
+
+      await writeOperationLog(tx, {
+        actor,
+        action: "doc.submit",
+        entityType: "doc",
+        entityId: doc.docId,
+        projectId: doc.project.projectId,
+        docId: doc.docId,
+        beforeJson: {
+          status: doc.status,
+          holderRole: doc.holderRole,
+          activeDraftId: doc.activeDraftId?.toString() ?? null,
+        },
+        afterJson: {
+          status: "submitted",
+          holderRole: "editor",
+          activeDraftId: nextDraft.draftId.toString(),
+          latestRevisionId: revision.revisionId.toString(),
+        },
+        metadataJson: {
+          submitNote,
+          sealedDraftId: activeDraft.draftId.toString(),
+          revisionId: revision.revisionId.toString(),
+        },
+      })
     })
-  })
+  } catch (error) {
+    throw (
+      translateUniqueConstraintError(error, [
+        {
+          constraintIncludes: ["active_doc_key"],
+          code: "DOC_ACTIVE_DRAFT_CONFLICT",
+          message: "当前 Doc 的活动草稿已在其他操作中切换，请刷新后重试",
+        },
+      ]) ?? error
+    )
+  }
 
   return getCurrentDocView(actor, docIdValue)
 }
@@ -1436,98 +1501,110 @@ export async function returnDocToAuthor(
     })
   }
 
-  await prisma.$transaction(async (tx) => {
-    const doc = await findVisibleDocOrThrow(tx, actor, docId)
-    assertProjectWritable(doc)
-    assertReviewer(actor, doc)
-    const activeDraft = assertReviewableState(doc)
+  try {
+    await prisma.$transaction(async (tx) => {
+      const doc = await findVisibleDocOrThrow(tx, actor, docId)
+      assertProjectWritable(doc)
+      assertReviewer(actor, doc)
+      const activeDraft = assertReviewableState(doc)
 
-    await sealDraftWithOptimisticLock(tx, activeDraft.draftId, input.lockVersion, now)
+      await sealDraftWithOptimisticLock(tx, activeDraft.draftId, input.lockVersion, now)
 
-    const revision = await createRevisionFromDraft(tx, {
-      doc,
-      activeDraft,
-      actor,
-      action: "editor_reject",
-      handoffNote: returnNote,
-    })
+      const revision = await createRevisionFromDraft(tx, {
+        doc,
+        activeDraft,
+        actor,
+        action: "editor_reject",
+        handoffNote: returnNote,
+      })
 
-    const nextDraft = await createActiveDraft(tx, {
-      docId: doc.docId,
-      ownerRole: "author",
-      ownerUserId: doc.project.authorId,
-      baseRevisionId: revision.revisionId,
-      contentSchemaVersion: activeDraft.contentSchemaVersion,
-      contentJson: asInputJson(activeDraft.contentJson),
-      wordCount: activeDraft.wordCount,
-      plainText: activeDraft.plainText,
-      cleanText: activeDraft.cleanText,
-      exportText: activeDraft.exportText,
-      summary: activeDraft.summary,
-      commentCount: activeDraft.commentCount,
-      suggestionCount: activeDraft.suggestionCount,
-      revisionMarkCount: activeDraft.revisionMarkCount,
-    })
-
-    await tx.doc.update({
-      where: {
+      const nextDraft = await createActiveDraft(tx, {
         docId: doc.docId,
-      },
-      data: {
-        status: "rejected",
-        holderRole: "author",
-        activeDraftId: nextDraft.draftId,
-        latestRevisionId: revision.revisionId,
-        currentWordCount: activeDraft.wordCount,
-        currentPlainText: activeDraft.plainText,
-        currentCleanText: activeDraft.cleanText,
+        ownerRole: "author",
+        ownerUserId: doc.project.authorId,
+        baseRevisionId: revision.revisionId,
+        contentSchemaVersion: activeDraft.contentSchemaVersion,
+        contentJson: asInputJson(activeDraft.contentJson),
+        wordCount: activeDraft.wordCount,
+        plainText: activeDraft.plainText,
+        cleanText: activeDraft.cleanText,
+        exportText: activeDraft.exportText,
         summary: activeDraft.summary,
-        lastAction: "editor_reject",
-        lastActorId: actor.userId,
-        lastActionAt: now,
-        lastHandoffNote: returnNote,
-        reviewedAt: now,
-      },
-    })
+        commentCount: activeDraft.commentCount,
+        suggestionCount: activeDraft.suggestionCount,
+        revisionMarkCount: activeDraft.revisionMarkCount,
+      })
 
-    await closeTodoByOpenKey(tx, makeReviewTodoKey(doc.docId), now)
-    await upsertReturnTodo(tx, doc, now)
+      await tx.doc.update({
+        where: {
+          docId: doc.docId,
+        },
+        data: {
+          status: "rejected",
+          holderRole: "author",
+          activeDraftId: nextDraft.draftId,
+          latestRevisionId: revision.revisionId,
+          currentWordCount: activeDraft.wordCount,
+          currentPlainText: activeDraft.plainText,
+          currentCleanText: activeDraft.cleanText,
+          summary: activeDraft.summary,
+          lastAction: "editor_reject",
+          lastActorId: actor.userId,
+          lastActionAt: now,
+          lastHandoffNote: returnNote,
+          reviewedAt: now,
+        },
+      })
 
-    await createNotification(tx, {
-      recipientUserId: doc.project.authorId,
-      type: "doc_returned",
-      title: "Doc 已退回待改",
-      body: `编辑已退回《${doc.project.title}》的 ${doc.title}，请根据意见修改后重新提交。`,
-      projectId: doc.project.projectId,
-      docId: doc.docId,
-      entityId: doc.docId,
-    })
+      await closeTodoByOpenKey(tx, makeReviewTodoKey(doc.docId), now)
+      await upsertReturnTodo(tx, doc, now)
 
-    await writeOperationLog(tx, {
-      actor,
-      action: "doc.return",
-      entityType: "doc",
-      entityId: doc.docId,
-      projectId: doc.project.projectId,
-      docId: doc.docId,
-      beforeJson: {
-        status: doc.status,
-        holderRole: doc.holderRole,
-        activeDraftId: doc.activeDraftId?.toString() ?? null,
-      },
-      afterJson: {
-        status: "rejected",
-        holderRole: "author",
-        activeDraftId: nextDraft.draftId.toString(),
-        latestRevisionId: revision.revisionId.toString(),
-      },
-      metadataJson: {
-        returnNote,
-        sealedDraftId: activeDraft.draftId.toString(),
-        revisionId: revision.revisionId.toString(),
-      },
+      await createNotification(tx, {
+        recipientUserId: doc.project.authorId,
+        type: "doc_returned",
+        title: "Doc 已退回待改",
+        body: `编辑已退回《${doc.project.title}》的 ${doc.title}，请根据意见修改后重新提交。`,
+        projectId: doc.project.projectId,
+        docId: doc.docId,
+        entityId: doc.docId,
+      })
+
+      await writeOperationLog(tx, {
+        actor,
+        action: "doc.return",
+        entityType: "doc",
+        entityId: doc.docId,
+        projectId: doc.project.projectId,
+        docId: doc.docId,
+        beforeJson: {
+          status: doc.status,
+          holderRole: doc.holderRole,
+          activeDraftId: doc.activeDraftId?.toString() ?? null,
+        },
+        afterJson: {
+          status: "rejected",
+          holderRole: "author",
+          activeDraftId: nextDraft.draftId.toString(),
+          latestRevisionId: revision.revisionId.toString(),
+        },
+        metadataJson: {
+          returnNote,
+          sealedDraftId: activeDraft.draftId.toString(),
+          revisionId: revision.revisionId.toString(),
+        },
+      })
     })
-  })
+  } catch (error) {
+    throw (
+      translateUniqueConstraintError(error, [
+        {
+          constraintIncludes: ["active_doc_key"],
+          code: "DOC_ACTIVE_DRAFT_CONFLICT",
+          message: "当前 Doc 的活动草稿已在其他操作中切换，请刷新后重试",
+        },
+      ]) ?? error
+    )
+  }
 
   return getCurrentDocView(actor, docIdValue)
 }
@@ -1541,90 +1618,107 @@ export async function approveDoc(
   const approveNote = trimToNull(input.approveNote ?? null)
   const now = new Date()
 
-  await prisma.$transaction(async (tx) => {
-    const doc = await findVisibleDocOrThrow(tx, actor, docId)
-    assertProjectWritable(doc)
-    assertReviewer(actor, doc)
-    const activeDraft = assertReviewableState(doc)
+  try {
+    await prisma.$transaction(async (tx) => {
+      const doc = await findVisibleDocOrThrow(tx, actor, docId)
+      assertProjectWritable(doc)
+      assertReviewer(actor, doc)
+      const activeDraft = assertReviewableState(doc)
 
-    await sealDraftWithOptimisticLock(tx, activeDraft.draftId, input.lockVersion, now)
+      await sealDraftWithOptimisticLock(tx, activeDraft.draftId, input.lockVersion, now)
 
-    const revision = await createRevisionFromDraft(tx, {
-      doc,
-      activeDraft,
-      actor,
-      action: "editor_approve",
-      handoffNote: approveNote,
-    })
+      const revision = await createRevisionFromDraft(tx, {
+        doc,
+        activeDraft,
+        actor,
+        action: "editor_approve",
+        handoffNote: approveNote,
+      })
 
-    await tx.doc.update({
-      where: {
+      await tx.doc.update({
+        where: {
+          docId: doc.docId,
+        },
+        data: {
+          status: "approved",
+          holderRole: "none",
+          activeDraftId: null,
+          latestRevisionId: revision.revisionId,
+          finalRevisionId: revision.revisionId,
+          currentWordCount: activeDraft.wordCount,
+          currentPlainText: activeDraft.plainText,
+          currentCleanText: activeDraft.cleanText,
+          summary: activeDraft.summary,
+          lastAction: "editor_approve",
+          lastActorId: actor.userId,
+          lastActionAt: now,
+          lastHandoffNote: approveNote,
+          reviewedAt: now,
+          approvedAt: now,
+        },
+      })
+
+      const stageAdvanceResult = await advanceProjectAfterApprove(tx, doc, now)
+
+      await closeAllDocTodos(tx, doc.docId, now)
+
+      await createNotification(tx, {
+        recipientUserId: doc.project.authorId,
+        type: "doc_approved",
+        title: "Doc 审核通过",
+        body: `《${doc.project.title}》的 ${doc.title} 已审核通过。`,
+        projectId: doc.project.projectId,
         docId: doc.docId,
-      },
-      data: {
-        status: "approved",
-        holderRole: "none",
-        activeDraftId: null,
-        latestRevisionId: revision.revisionId,
-        finalRevisionId: revision.revisionId,
-        currentWordCount: activeDraft.wordCount,
-        currentPlainText: activeDraft.plainText,
-        currentCleanText: activeDraft.cleanText,
-        summary: activeDraft.summary,
-        lastAction: "editor_approve",
-        lastActorId: actor.userId,
-        lastActionAt: now,
-        lastHandoffNote: approveNote,
-        reviewedAt: now,
-        approvedAt: now,
-      },
+        entityId: doc.docId,
+      })
+
+      await writeOperationLog(tx, {
+        actor,
+        action: "doc.approve",
+        entityType: "doc",
+        entityId: doc.docId,
+        projectId: doc.project.projectId,
+        docId: doc.docId,
+        beforeJson: {
+          status: doc.status,
+          holderRole: doc.holderRole,
+          activeDraftId: doc.activeDraftId?.toString() ?? null,
+          finalRevisionId: doc.finalRevisionId?.toString() ?? null,
+          projectStage: doc.project.currentStage,
+          releaseStatus: doc.project.releaseStatus,
+        },
+        afterJson: {
+          status: "approved",
+          holderRole: "none",
+          activeDraftId: null,
+          finalRevisionId: revision.revisionId.toString(),
+          projectStage: stageAdvanceResult.nextProjectStage,
+          releaseStatus: stageAdvanceResult.releaseStatus ?? doc.project.releaseStatus,
+        },
+        metadataJson: {
+          approveNote,
+          sealedDraftId: activeDraft.draftId.toString(),
+          revisionId: revision.revisionId.toString(),
+          stageAdvanceResult,
+        },
+      })
     })
-
-    const stageAdvanceResult = await advanceProjectAfterApprove(tx, doc, now)
-
-    await closeAllDocTodos(tx, doc.docId, now)
-
-    await createNotification(tx, {
-      recipientUserId: doc.project.authorId,
-      type: "doc_approved",
-      title: "Doc 审核通过",
-      body: `《${doc.project.title}》的 ${doc.title} 已审核通过。`,
-      projectId: doc.project.projectId,
-      docId: doc.docId,
-      entityId: doc.docId,
-    })
-
-    await writeOperationLog(tx, {
-      actor,
-      action: "doc.approve",
-      entityType: "doc",
-      entityId: doc.docId,
-      projectId: doc.project.projectId,
-      docId: doc.docId,
-      beforeJson: {
-        status: doc.status,
-        holderRole: doc.holderRole,
-        activeDraftId: doc.activeDraftId?.toString() ?? null,
-        finalRevisionId: doc.finalRevisionId?.toString() ?? null,
-        projectStage: doc.project.currentStage,
-        releaseStatus: doc.project.releaseStatus,
-      },
-      afterJson: {
-        status: "approved",
-        holderRole: "none",
-        activeDraftId: null,
-        finalRevisionId: revision.revisionId.toString(),
-        projectStage: stageAdvanceResult.nextProjectStage,
-        releaseStatus: stageAdvanceResult.releaseStatus ?? doc.project.releaseStatus,
-      },
-      metadataJson: {
-        approveNote,
-        sealedDraftId: activeDraft.draftId.toString(),
-        revisionId: revision.revisionId.toString(),
-        stageAdvanceResult,
-      },
-    })
-  })
+  } catch (error) {
+    throw (
+      translateUniqueConstraintError(error, [
+        {
+          constraintIncludes: ["single_doc_key"],
+          code: "DOC_SINGLE_STAGE_CONFLICT",
+          message: "阶段单据已在其他操作中创建，请刷新后重试",
+        },
+        {
+          constraintIncludes: ["active_doc_key"],
+          code: "DOC_ACTIVE_DRAFT_CONFLICT",
+          message: "当前 Doc 的活动草稿已在其他操作中切换，请刷新后重试",
+        },
+      ]) ?? error
+    )
+  }
 
   return getCurrentDocView(actor, docIdValue)
 }

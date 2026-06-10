@@ -7,7 +7,11 @@ __v0_jsx-dev-runtime.ts
 .vercel/
 
 # Environment variables
-.env*.local
+# 本地真实凭据文件一律不再进入版本库；
+# 只允许提交不含敏感值的 `.env.example` 作为字段模板。
+.env
+.env.*
+!.env.example
 
 # Common ignores
 node_modules

@@ -9,7 +9,6 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { fetchJson } from "@/lib/api"
 
 export default function RegisterPage() {
@@ -19,7 +18,6 @@ export default function RegisterPage() {
     email: "",
     password: "",
     confirm: "",
-    role: "author",
     penName: "",
     bio: "",
   })
@@ -56,7 +54,6 @@ export default function RegisterPage() {
           email: form.email,
           password: form.password,
           confirmPassword: form.confirm,
-          role: form.role,
           penName: form.penName,
           bio: form.bio,
         }),
@@ -133,15 +130,7 @@ export default function RegisterPage() {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="flex flex-col gap-2">
               <Label>申请角色</Label>
-              <Select value={form.role} onValueChange={(v) => update("role", v)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="author">作者</SelectItem>
-                  <SelectItem value="editor">编辑</SelectItem>
-                </SelectContent>
-              </Select>
+              <Input value="作者（固定）" disabled />
             </div>
             <div className="flex flex-col gap-2">
               <Label htmlFor="penName">
@@ -150,6 +139,10 @@ export default function RegisterPage() {
               <Input id="penName" value={form.penName} onChange={(e) => update("penName", e.target.value)} />
             </div>
           </div>
+
+          <p className="text-xs leading-5 text-muted-foreground">
+            为避免外部注册直接申请编辑权限，公开注册入口当前只接受作者申请；编辑账号需由管理员在后台创建或后续治理调整。
+          </p>
 
           <div className="flex flex-col gap-2">
             <Label htmlFor="bio">个人简介</Label>

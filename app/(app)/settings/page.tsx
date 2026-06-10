@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
 
 import { useRole } from "@/components/role-provider"
 import { ROLE_LABELS } from "@/types/domain"
@@ -24,6 +25,7 @@ type BindingsResponse = {
 }
 
 export default function SettingsPage() {
+  const router = useRouter()
   const { user, role } = useRole()
   const [profile, setProfile] = useState<AccountProfile | null>(null)
   const [bindings, setBindings] = useState<AccountBindingInfo | null>(null)
@@ -112,7 +114,7 @@ export default function SettingsPage() {
     setMessage(null)
 
     try {
-      await fetchJson("/api/account/password", {
+      const response = await fetchJson<{ ok: true; reauthRequired?: boolean }>("/api/account/password", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -125,6 +127,15 @@ export default function SettingsPage() {
         newPassword: "",
         confirmPassword: "",
       })
+
+      // 改密成功后，后端已经撤销全部旧会话并清除了当前 cookie。
+      // 前端这里立即跳回登录页，避免用户继续停留在一个即将失效的页面状态里。
+      if (response.reauthRequired) {
+        router.replace("/login")
+        router.refresh()
+        return
+      }
+
       setMessage({
         type: "success",
         text: "密码已更新",
@@ -144,6 +155,12 @@ export default function SettingsPage() {
   return (
     <div className="flex flex-col gap-6">
       <PageHeader breadcrumb={["个人设置"]} title="个人设置" description="维护个人信息、修改密码与查看绑定关系" />
+
+      {user.passwordResetRequired && (
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          管理员已重置你的密码。继续使用系统前，请先完成一次新密码设置。
+        </div>
+      )}
 
       {message && (
         <div

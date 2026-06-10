@@ -6,5 +6,5 @@ export default async function DocVersionsPage({
   params: Promise<{ id: string; docType: string }>
 }) {
   const { id, docType } = await params
-  return <DocVersionList projectId={id} docType={docType} />
+  return <DocVersionList projectId={id} docRef={docType} />
 }

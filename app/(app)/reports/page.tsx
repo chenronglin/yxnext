@@ -14,6 +14,7 @@ import { StatCard } from "@/components/stat-card"
 import { useRole } from "@/components/role-provider"
 import { fetchJson } from "@/lib/api"
 import type { AdminReportStats } from "@/types/admin"
+import type { WorkspaceReportPayload } from "@/types/workbench"
 import {
   Users,
   FolderKanban,
@@ -76,8 +77,8 @@ export default function ReportsPage() {
       />
 
       {role === "admin" && <AdminReport range={range} />}
-      {role === "editor" && <EditorReport />}
-      {role === "author" && <AuthorReport />}
+      {role === "editor" && <EditorReport range={range} />}
+      {role === "author" && <AuthorReport range={range} />}
     </div>
   )
 }
@@ -181,46 +182,88 @@ function AdminReport({ range }: { range: RangeKey }) {
   )
 }
 
-function EditorReport() {
+function EditorReport({ range }: { range: RangeKey }) {
+  const [stats, setStats] = useState<Extract<WorkspaceReportPayload, { role: "editor" }>["stats"] | null>(null)
+  const [message, setMessage] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadReport() {
+      try {
+        const response = await fetchJson<WorkspaceReportPayload>(`/api/reports?range=${range}`)
+
+        if (!cancelled && response.role === "editor") {
+          setStats(response.stats)
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setMessage(error instanceof Error ? error.message : "编辑报表读取失败")
+        }
+      }
+    }
+
+    void loadReport()
+
+    return () => {
+      cancelled = true
+    }
+  }, [range])
+
   return (
     <div className="flex flex-col gap-6">
+      {message && <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">{message}</div>}
       <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
-        <StatCard label="负责项目数" value={5} icon={FolderKanban} href="/projects" />
-        <StatCard label="待审核 Doc" value={4} icon={FileText} tone="warning" href="/todos" />
-        <StatCard label="退回 Doc" value={2} icon={RotateCcw} />
-        <StatCard label="即将到期项目" value={1} icon={Clock} tone="warning" />
-        <StatCard label="已逾期项目" value={1} icon={AlertTriangle} tone="danger" />
+        <StatCard label="负责项目数" value={stats?.projectTotal ?? "..."} icon={FolderKanban} href="/projects" />
+        <StatCard label="待审核 Doc" value={stats?.pendingReviewDocTotal ?? "..."} icon={FileText} tone="warning" href="/review" />
+        <StatCard label="退回 Doc" value={stats?.returnedDocTotal ?? "..."} icon={RotateCcw} />
+        <StatCard label="即将到期项目" value={stats?.dueSoonProjectTotal ?? "..."} icon={Clock} tone="warning" />
+        <StatCard label="已逾期项目" value={stats?.overdueProjectTotal ?? "..."} icon={AlertTriangle} tone="danger" />
       </div>
-      <RankCard
-        title="最近处理记录"
-        rows={[
-          { name: "审核通过 · 第三章", value: "06-09 10:20" },
-          { name: "退回 · 第五章", value: "06-08 18:45" },
-          { name: "解锁质检 · 山海食肆", value: "05-30 09:00" },
-        ]}
-      />
+      <RankCard title="最近处理记录" rows={stats?.recentActivities ?? []} />
     </div>
   )
 }
 
-function AuthorReport() {
+function AuthorReport({ range }: { range: RangeKey }) {
+  const [stats, setStats] = useState<Extract<WorkspaceReportPayload, { role: "author" }>["stats"] | null>(null)
+  const [message, setMessage] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadReport() {
+      try {
+        const response = await fetchJson<WorkspaceReportPayload>(`/api/reports?range=${range}`)
+
+        if (!cancelled && response.role === "author") {
+          setStats(response.stats)
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setMessage(error instanceof Error ? error.message : "作者报表读取失败")
+        }
+      }
+    }
+
+    void loadReport()
+
+    return () => {
+      cancelled = true
+    }
+  }, [range])
+
   return (
     <div className="flex flex-col gap-6">
+      {message && <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">{message}</div>}
       <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
-        <StatCard label="我的项目数" value={2} icon={FolderKanban} href="/projects" />
-        <StatCard label="待修改/待提交 Doc" value={3} icon={FileText} tone="warning" href="/todos" />
-        <StatCard label="待处理退回稿" value={1} icon={RotateCcw} tone="warning" />
-        <StatCard label="最近提交次数" value={12} icon={PenLine} />
-        <StatCard label="项目累计字数" value="32.4 万" icon={PenLine} />
+        <StatCard label="我的项目数" value={stats?.projectTotal ?? "..."} icon={FolderKanban} href="/projects" />
+        <StatCard label="待修改/待提交 Doc" value={stats?.draftOrReturnedDocTotal ?? "..."} icon={FileText} tone="warning" href="/todos" />
+        <StatCard label="待处理退回稿" value={stats?.returnedDocTotal ?? "..."} icon={RotateCcw} tone="warning" />
+        <StatCard label="最近提交次数" value={stats?.recentSubmitCount ?? "..."} icon={PenLine} />
+        <StatCard label="项目累计字数" value={stats ? `${(stats.totalWordCount / 10000).toFixed(1)} 万` : "..."} icon={PenLine} />
       </div>
-      <RankCard
-        title="最近提交记录"
-        rows={[
-          { name: "提交 · 第四章", value: "06-08 09:30" },
-          { name: "提交 · 第三章", value: "06-04 21:10" },
-          { name: "提交 · 细纲", value: "05-30 15:00" },
-        ]}
-      />
+      <RankCard title="最近提交记录" rows={stats?.recentSubmissions ?? []} />
     </div>
   )
 }

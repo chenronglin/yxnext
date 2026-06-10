@@ -59,7 +59,6 @@ describe("auth.service", () => {
     const result = await registerPendingUser({
       username: "writer_a",
       name: "作者甲",
-      role: "author",
       email: "writer@example.com",
       biography: "擅长都市奇幻",
       password: "secret123",
@@ -75,6 +74,7 @@ describe("auth.service", () => {
         data: expect.objectContaining({
           email: "writer@example.com",
           biography: "擅长都市奇幻",
+          role: "author",
           status: "pending",
         }),
       }),
@@ -89,6 +89,24 @@ describe("auth.service", () => {
             readAt: null,
           }),
         ]),
+      }),
+    )
+  })
+
+  it("公开注册入口即使不再传入角色，也只会创建作者申请", async () => {
+    await registerPendingUser({
+      username: "writer_b",
+      name: "作者乙",
+      email: "writer-b@example.com",
+      password: "secret123",
+    })
+
+    expect(mockTx.user.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          role: "author",
+          status: "pending",
+        }),
       }),
     )
   })

@@ -4,6 +4,14 @@ import { Prisma } from "@prisma/client"
 
 import { prisma } from "@/server/db/prisma"
 import { ApiError } from "@/server/shared/api-response"
+import {
+  makeActiveDocKey,
+  makeChapterOrderKey,
+  makeSingleDocKey,
+  translateUniqueConstraintError,
+} from "@/server/shared/invariant-keys"
+import { syncActiveProjectTimelineStatuses } from "@/server/shared/project-stage-timeline"
+import { buildDocxBuffer } from "@/server/shared/docx-export"
 import type { ApiCurrentUser } from "@/server/shared/current-user"
 import type { DocStatus, HolderRole, ProjectLifecycle, ProjectStage, StagePlanStatus } from "@/types/domain"
 import type {
@@ -283,6 +291,18 @@ function assertEditorOrAdmin(actor: ApiCurrentUser, project: ProjectRecord) {
   })
 }
 
+function assertChapterStructureEditable(project: ProjectRecord) {
+  // 正文章节一旦进入质检协作阶段，就不允许继续新增、删除或重排。
+  // 否则 Release Doc 的来源章节集合会和项目结构发生漂移，导出与审计都会失真。
+  if (project.currentStage === "release" || project.releaseStatus !== "locked") {
+    throw new ApiError({
+      status: 409,
+      code: "PROJECT_CHAPTER_STRUCTURE_LOCKED",
+      message: "项目已进入质检阶段，不能再调整正文章节结构",
+    })
+  }
+}
+
 function toStagePlan(plan: ProjectRecord["stagePlans"][number]): StagePlan {
   const stage = stageCodeToUiStage[plan.stageCode] as Exclude<ProjectStage, "completed">
 
@@ -507,6 +527,13 @@ function makeMarkdownSection(title: string, body: string) {
   return `# ${title}\n\n${body.trim()}\n`
 }
 
+function makeDocxSection(title: string, body: string) {
+  return {
+    title,
+    body: body.trim(),
+  }
+}
+
 async function createActiveDraft(
   tx: TxClient,
   input: {
@@ -543,6 +570,7 @@ async function createActiveDraft(
       suggestionCount: input.suggestionCount,
       revisionMarkCount: input.revisionMarkCount,
       status: "active",
+      activeDocKey: makeActiveDocKey(input.docId),
     },
     select: {
       draftId: true,
@@ -645,6 +673,8 @@ async function unlockStagePlan(tx: TxClient, projectId: bigint, stageCode: "rele
 }
 
 export async function listMyProjects(actor: ApiCurrentUser, filters: ProjectListFilters = {}) {
+  await syncActiveProjectTimelineStatuses()
+
   const keyword = trimToNull(filters.keyword)
   const stage = trimToNull(filters.stage)
   const lifecycle = trimToNull(filters.lifecycle)
@@ -704,6 +734,8 @@ export async function listMyProjects(actor: ApiCurrentUser, filters: ProjectList
 }
 
 export async function getProjectDetail(actor: ApiCurrentUser, projectIdValue: string) {
+  await syncActiveProjectTimelineStatuses()
+
   const projectId = parseBigIntId(projectIdValue, "项目 ID")
   const project = await findVisibleProjectOrThrow(prisma, actor, projectId)
 
@@ -713,6 +745,8 @@ export async function getProjectDetail(actor: ApiCurrentUser, projectIdValue: st
 }
 
 export async function getProjectDocDirectory(actor: ApiCurrentUser, projectIdValue: string) {
+  await syncActiveProjectTimelineStatuses()
+
   const projectId = parseBigIntId(projectIdValue, "项目 ID")
   const project = await findVisibleProjectOrThrow(prisma, actor, projectId)
 
@@ -724,6 +758,8 @@ export async function getProjectDocDirectory(actor: ApiCurrentUser, projectIdVal
 }
 
 export async function listProjectChapters(actor: ApiCurrentUser, projectIdValue: string) {
+  await syncActiveProjectTimelineStatuses()
+
   const projectId = parseBigIntId(projectIdValue, "项目 ID")
   const project = await findVisibleProjectOrThrow(prisma, actor, projectId)
   const chapterDocs = project.docs.filter((doc) => doc.docType === "chapter").map(toChapterDoc)
@@ -761,86 +797,106 @@ export async function createProjectChapter(actor: ApiCurrentUser, projectIdValue
     })
   }
 
-  await prisma.$transaction(async (tx) => {
-    const project = await findVisibleProjectOrThrow(tx, actor, projectId)
-    assertProjectWritable(project)
-    assertCollaboratorCanManageProject(actor, project)
+  try {
+    await prisma.$transaction(async (tx) => {
+      const project = await findVisibleProjectOrThrow(tx, actor, projectId)
+      assertProjectWritable(project)
+      assertCollaboratorCanManageProject(actor, project)
+      assertChapterStructureEditable(project)
 
-    const chapterDocs = project.docs.filter((doc) => doc.docType === "chapter")
-    const nextSortOrder = chapterDocs.reduce((max, doc) => Math.max(max, doc.sortOrder), 0) + 1
+      const chapterDocs = project.docs.filter((doc) => doc.docType === "chapter")
+      const nextSortOrder = chapterDocs.reduce((max, doc) => Math.max(max, doc.sortOrder), 0) + 1
 
-    if (chapterNo !== null && chapterDocs.some((doc) => doc.chapterNo === chapterNo)) {
-      throw new ApiError({
-        status: 409,
-        code: "CHAPTER_NO_CONFLICT",
-        message: "该章节号已存在，请调整后重试",
+      if (chapterNo !== null && chapterDocs.some((doc) => doc.chapterNo === chapterNo)) {
+        throw new ApiError({
+          status: 409,
+          code: "CHAPTER_NO_CONFLICT",
+          message: "该章节号已存在，请调整后重试",
+        })
+      }
+
+      const doc = await tx.doc.create({
+        data: {
+          projectId: project.projectId,
+          docType: "chapter",
+          stageCode: "chapter",
+          title,
+          chapterNo,
+          sortOrder: nextSortOrder,
+          status: "draft",
+          holderRole: "author",
+          currentWordCount: 0,
+          currentPlainText: null,
+          currentCleanText: null,
+          summary: null,
+          lastAction: null,
+          lastActorId: null,
+          lastActionAt: null,
+          lastHandoffNote: null,
+          // 章节排序唯一键要跟着 sortOrder 一起写入，避免同项目出现重复排序值。
+          chapterOrderKey: makeChapterOrderKey(project.projectId, nextSortOrder),
+        },
+        select: {
+          docId: true,
+        },
       })
-    }
 
-    const doc = await tx.doc.create({
-      data: {
-        projectId: project.projectId,
-        docType: "chapter",
-        stageCode: "chapter",
-        title,
-        chapterNo,
-        sortOrder: nextSortOrder,
-        status: "draft",
-        holderRole: "author",
-        currentWordCount: 0,
-        currentPlainText: null,
-        currentCleanText: null,
-        summary: null,
-        lastAction: null,
-        lastActorId: null,
-        lastActionAt: null,
-        lastHandoffNote: null,
-      },
-      select: {
-        docId: true,
-      },
-    })
-
-    const draft = await createActiveDraft(tx, {
-      docId: doc.docId,
-      ownerRole: "author",
-      ownerUserId: project.authorId,
-      baseRevisionId: null,
-      contentSchemaVersion: DEFAULT_CONTENT_SCHEMA_VERSION,
-      contentJson: EMPTY_DOC_CONTENT,
-      wordCount: 0,
-      plainText: null,
-      cleanText: null,
-      exportText: null,
-      summary: null,
-      commentCount: 0,
-      suggestionCount: 0,
-      revisionMarkCount: 0,
-    })
-
-    await tx.doc.update({
-      where: {
+      const draft = await createActiveDraft(tx, {
         docId: doc.docId,
-      },
-      data: {
-        activeDraftId: draft.draftId,
-      },
-    })
+        ownerRole: "author",
+        ownerUserId: project.authorId,
+        baseRevisionId: null,
+        contentSchemaVersion: DEFAULT_CONTENT_SCHEMA_VERSION,
+        contentJson: EMPTY_DOC_CONTENT,
+        wordCount: 0,
+        plainText: null,
+        cleanText: null,
+        exportText: null,
+        summary: null,
+        commentCount: 0,
+        suggestionCount: 0,
+        revisionMarkCount: 0,
+      })
 
-    await writeOperationLog(tx, {
-      actor,
-      action: "project.chapter.create",
-      entityType: "doc",
-      entityId: doc.docId,
-      projectId: project.projectId,
-      docId: doc.docId,
-      afterJson: {
-        title,
-        chapterNo,
-        sortOrder: nextSortOrder,
-      },
+      await tx.doc.update({
+        where: {
+          docId: doc.docId,
+        },
+        data: {
+          activeDraftId: draft.draftId,
+        },
+      })
+
+      await writeOperationLog(tx, {
+        actor,
+        action: "project.chapter.create",
+        entityType: "doc",
+        entityId: doc.docId,
+        projectId: project.projectId,
+        docId: doc.docId,
+        afterJson: {
+          title,
+          chapterNo,
+          sortOrder: nextSortOrder,
+        },
+      })
     })
-  })
+  } catch (error) {
+    throw (
+      translateUniqueConstraintError(error, [
+        {
+          constraintIncludes: ["chapter_order_key"],
+          code: "CHAPTER_ORDER_CONFLICT",
+          message: "章节排序已在其他操作中变化，请刷新后重试",
+        },
+        {
+          constraintIncludes: ["active_doc_key"],
+          code: "DOC_ACTIVE_DRAFT_CONFLICT",
+          message: "当前章节已存在活动草稿，请刷新后重试",
+        },
+      ]) ?? error
+    )
+  }
 
   return getProjectDetail(actor, projectIdValue)
 }
@@ -857,54 +913,81 @@ export async function reorderProjectChapters(actor: ApiCurrentUser, projectIdVal
     })
   }
 
-  await prisma.$transaction(async (tx) => {
-    const project = await findVisibleProjectOrThrow(tx, actor, projectId)
-    assertProjectWritable(project)
-    assertCollaboratorCanManageProject(actor, project)
+  try {
+    await prisma.$transaction(async (tx) => {
+      const project = await findVisibleProjectOrThrow(tx, actor, projectId)
+      assertProjectWritable(project)
+      assertCollaboratorCanManageProject(actor, project)
+      assertChapterStructureEditable(project)
 
-    const chapterDocs = project.docs.filter((doc) => doc.docType === "chapter")
+      const chapterDocs = project.docs.filter((doc) => doc.docType === "chapter")
 
-    if (chapterDocs.length !== orderedDocIds.length) {
-      throw new ApiError({
-        status: 400,
-        code: "CHAPTER_ORDER_SIZE_MISMATCH",
-        message: "排序数量与当前章节数量不一致",
-      })
-    }
+      if (chapterDocs.length !== orderedDocIds.length) {
+        throw new ApiError({
+          status: 400,
+          code: "CHAPTER_ORDER_SIZE_MISMATCH",
+          message: "排序数量与当前章节数量不一致",
+        })
+      }
 
-    const chapterIdSet = new Set(chapterDocs.map((doc) => doc.docId.toString()))
-    const orderedIdSet = new Set(orderedDocIds.map((docId) => docId.toString()))
+      const chapterIdSet = new Set(chapterDocs.map((doc) => doc.docId.toString()))
+      const orderedIdSet = new Set(orderedDocIds.map((docId) => docId.toString()))
 
-    if (chapterIdSet.size !== orderedIdSet.size || [...chapterIdSet].some((id) => !orderedIdSet.has(id))) {
-      throw new ApiError({
-        status: 400,
-        code: "CHAPTER_ORDER_INVALID",
-        message: "排序列表与当前项目章节不匹配",
-      })
-    }
+      if (chapterIdSet.size !== orderedIdSet.size || [...chapterIdSet].some((id) => !orderedIdSet.has(id))) {
+        throw new ApiError({
+          status: 400,
+          code: "CHAPTER_ORDER_INVALID",
+          message: "排序列表与当前项目章节不匹配",
+        })
+      }
 
-    for (const [index, docId] of orderedDocIds.entries()) {
-      await tx.doc.update({
+      // 重排时先整体释放旧的 chapterOrderKey，再写入新的排序和值，
+      // 避免两个章节互换顺序时因为唯一键暂时碰撞而中途失败。
+      await tx.doc.updateMany({
         where: {
-          docId,
+          projectId: project.projectId,
+          docType: "chapter",
+          isDeleted: false,
         },
         data: {
-          sortOrder: index + 1,
+          chapterOrderKey: null,
         },
       })
-    }
 
-    await writeOperationLog(tx, {
-      actor,
-      action: "project.chapter.reorder",
-      entityType: "project",
-      entityId: project.projectId,
-      projectId: project.projectId,
-      afterJson: {
-        orderedDocIds: orderedDocIds.map((docId) => docId.toString()),
-      },
+      for (const [index, docId] of orderedDocIds.entries()) {
+        await tx.doc.update({
+          where: {
+            docId,
+          },
+          data: {
+            sortOrder: index + 1,
+            chapterOrderKey: makeChapterOrderKey(project.projectId, index + 1),
+          },
+        })
+      }
+
+      await writeOperationLog(tx, {
+        actor,
+        action: "project.chapter.reorder",
+        entityType: "project",
+        entityId: project.projectId,
+        projectId: project.projectId,
+        afterJson: {
+          orderedDocIds: orderedDocIds.map((docId) => docId.toString()),
+        },
+      })
     })
-  })
+  } catch (error) {
+    throw (
+      translateUniqueConstraintError(error, [
+        {
+          constraintIncludes: ["chapter_order_key"],
+          code: "CHAPTER_ORDER_CONFLICT",
+          message: "章节排序已在其他操作中变化，请刷新后重试",
+        },
+      ]) ?? error
+    )
+  }
 
   return getProjectDetail(actor, projectIdValue)
 }
@@ -921,6 +1004,7 @@ export async function deleteProjectChapter(
     const project = await findVisibleProjectOrThrow(tx, actor, projectId)
     assertProjectWritable(project)
     assertCollaboratorCanManageProject(actor, project)
+    assertChapterStructureEditable(project)
 
     const chapterDoc = project.docs.find((doc) => doc.docId === docId && doc.docType === "chapter")
 
@@ -973,6 +1057,7 @@ export async function deleteProjectChapter(
         isDeleted: true,
         holderRole: "none",
         activeDraftId: null,
+        chapterOrderKey: null,
       },
     })
 
@@ -1001,18 +1086,19 @@ export async function unlockProjectQc(actor: ApiCurrentUser, projectIdValue: str
   const projectId = parseBigIntId(projectIdValue, "项目 ID")
   const now = new Date()
 
-  await prisma.$transaction(async (tx) => {
-    const project = await findVisibleProjectOrThrow(tx, actor, projectId)
-    assertProjectWritable(project)
-    assertEditorOrAdmin(actor, project)
+  try {
+    await prisma.$transaction(async (tx) => {
+      const project = await findVisibleProjectOrThrow(tx, actor, projectId)
+      assertProjectWritable(project)
+      assertEditorOrAdmin(actor, project)
 
-    if (project.releaseStatus !== "locked") {
-      throw new ApiError({
-        status: 409,
-        code: "PROJECT_QC_ALREADY_UNLOCKED",
-        message: "质检已解锁，无需重复操作",
-      })
-    }
+      if (project.releaseStatus !== "locked") {
+        throw new ApiError({
+          status: 409,
+          code: "PROJECT_QC_ALREADY_UNLOCKED",
+          message: "质检已解锁，无需重复操作",
+        })
+      }
 
     const chapterDocs = project.docs
       .filter((doc) => doc.docType === "chapter")
@@ -1065,6 +1151,8 @@ export async function unlockProjectQc(actor: ApiCurrentUser, projectIdValue: str
           lastAction: "author_save",
           lastActorId: project.authorId,
           lastActionAt: now,
+          // 质检 Doc 也是项目内唯一单据，必须把唯一键一并写入数据库。
+          singleDocKey: makeSingleDocKey(project.projectId, "release"),
         },
         select: {
           docId: true,
@@ -1120,6 +1208,7 @@ export async function unlockProjectQc(actor: ApiCurrentUser, projectIdValue: str
             suggestionCount: 0,
             revisionMarkCount: 0,
             status: "active",
+            activeDocKey: makeActiveDocKey(existingReleaseDoc.docId),
           },
         })
       } else {
@@ -1160,6 +1249,7 @@ export async function unlockProjectQc(actor: ApiCurrentUser, projectIdValue: str
           currentWordCount: releaseWordCount,
           currentPlainText: releaseText || null,
           currentCleanText: releaseText || null,
+          singleDocKey: makeSingleDocKey(project.projectId, "release"),
           lastAction: "author_save",
           lastActorId: project.authorId,
           lastActionAt: now,
@@ -1209,19 +1299,35 @@ export async function unlockProjectQc(actor: ApiCurrentUser, projectIdValue: str
       docId: releaseDocId,
     })
 
-    await writeOperationLog(tx, {
-      actor,
-      action: "project.qc.unlock",
-      entityType: "project",
-      entityId: project.projectId,
-      projectId: project.projectId,
-      afterJson: {
-        releaseStatus: "unlocked",
-        releaseDocId: releaseDocId.toString(),
-        chapterCount: chapterDocs.length,
-      },
+      await writeOperationLog(tx, {
+        actor,
+        action: "project.qc.unlock",
+        entityType: "project",
+        entityId: project.projectId,
+        projectId: project.projectId,
+        afterJson: {
+          releaseStatus: "unlocked",
+          releaseDocId: releaseDocId.toString(),
+          chapterCount: chapterDocs.length,
+        },
+      })
     })
-  })
+  } catch (error) {
+    throw (
+      translateUniqueConstraintError(error, [
+        {
+          constraintIncludes: ["single_doc_key"],
+          code: "RELEASE_DOC_EXISTS",
+          message: "质检 Doc 已在其他操作中创建，请刷新后重试",
+        },
+        {
+          constraintIncludes: ["active_doc_key"],
+          code: "DOC_ACTIVE_DRAFT_CONFLICT",
+          message: "质检稿件已在其他操作中生成活动草稿，请刷新后重试",
+        },
+      ]) ?? error
+    )
+  }
 
   return getProjectDetail(actor, projectIdValue)
 }
@@ -1300,17 +1406,11 @@ export async function exportProjectContent(
   scope: ProjectExportScope,
   format: ProjectExportFormat = "markdown",
 ) {
+  await syncActiveProjectTimelineStatuses()
+
   const projectId = parseBigIntId(projectIdValue, "项目 ID")
   const project = await findVisibleProjectOrThrow(prisma, actor, projectId)
   assertEditorOrAdmin(actor, project)
-
-  if (format !== "markdown") {
-    throw new ApiError({
-      status: 400,
-      code: "PROJECT_EXPORT_FORMAT_UNSUPPORTED",
-      message: "当前后端仅支持 Markdown 导出",
-    })
-  }
 
   const synopsisDoc = project.docs.find((doc) => doc.docType === "synopsis")
   const outlineDoc = project.docs.find((doc) => doc.docType === "outline")
@@ -1327,6 +1427,17 @@ export async function exportProjectContent(
         code: "PROJECT_EXPORT_SOURCE_MISSING",
         message: "梗概 Doc 暂无可导出的有效内容",
       })
+    }
+
+    if (format === "docx") {
+      return {
+        filename: `${project.title}-梗概.docx`,
+        content: await buildDocxBuffer({
+          title: `${project.title} - 梗概`,
+          sections: [makeDocxSection("梗概", body)],
+        }),
+        contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      }
     }
 
     return {
@@ -1346,6 +1457,17 @@ export async function exportProjectContent(
       })
     }
 
+    if (format === "docx") {
+      return {
+        filename: `${project.title}-细纲.docx`,
+        content: await buildDocxBuffer({
+          title: `${project.title} - 细纲`,
+          sections: [makeDocxSection("细纲", body)],
+        }),
+        contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      }
+    }
+
     return {
       filename: `${project.title}-细纲.md`,
       content: makeMarkdownSection("细纲", body),
@@ -1360,6 +1482,24 @@ export async function exportProjectContent(
         code: "PROJECT_EXPORT_SOURCE_MISSING",
         message: "当前项目还没有可导出的已通过正文章节",
       })
+    }
+
+    const sections = chapterDocs
+      .map((doc) => {
+        const body = pickRevisionExportText(doc)
+        return body?.trim() ? makeDocxSection(doc.title, body) : null
+      })
+      .filter((item): item is ReturnType<typeof makeDocxSection> => Boolean(item))
+
+    if (format === "docx") {
+      return {
+        filename: `${project.title}-正文合集.docx`,
+        content: await buildDocxBuffer({
+          title: `${project.title} - 正文合集`,
+          sections,
+        }),
+        contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      }
     }
 
     const content = chapterDocs
@@ -1387,6 +1527,17 @@ export async function exportProjectContent(
       })
     }
 
+    if (format === "docx") {
+      return {
+        filename: `${project.title}-质检.docx`,
+        content: await buildDocxBuffer({
+          title: `${project.title} - 质检`,
+          sections: [makeDocxSection("质检", body)],
+        }),
+        contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      }
+    }
+
     return {
       filename: `${project.title}-质检.md`,
       content: makeMarkdownSection("质检", body),
@@ -1409,6 +1560,17 @@ export async function exportProjectContent(
       code: "PROJECT_FINAL_NOT_READY",
       message: "当前项目还没有可导出的终稿内容",
     })
+  }
+
+  if (format === "docx") {
+    return {
+      filename: `${project.title}.docx`,
+      content: await buildDocxBuffer({
+        title: project.title,
+        sections: [makeDocxSection("终稿", finalBody)],
+      }),
+      contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    }
   }
 
   return {

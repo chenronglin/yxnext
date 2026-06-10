@@ -23,7 +23,7 @@ export async function GET(request: NextRequest, context: DownloadFinalRouteConte
     return new Response(result.content, {
       status: 200,
       headers: {
-        "Content-Type": "text/markdown; charset=utf-8",
+        "Content-Type": result.contentType,
         "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(result.filename)}`,
       },
     })
