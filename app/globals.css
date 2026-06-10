@@ -106,6 +106,14 @@
   --shadow-spread: 0px;
   --shadow-opacity: 0.05;
   --shadow-color: #000000;
+  --revision-inserted: #15803d;
+  --revision-deleted: #dc2626;
+  --revision-original: #ca8a04;
+  --novel-highlight-default: #ffffff;
+  --novel-highlight-yellow: #fef3c7;
+  --novel-highlight-blue: #dbeafe;
+  --novel-highlight-green: #dcfce7;
+  --novel-highlight-pink: #fce7f3;
 }
 
 .dark {
@@ -147,6 +155,14 @@
   --shadow-spread: 0px;
   --shadow-opacity: 0.05;
   --shadow-color: #000000;
+  --revision-inserted: #4ade80;
+  --revision-deleted: #f87171;
+  --revision-original: #fbbf24;
+  --novel-highlight-default: #171717;
+  --novel-highlight-yellow: #5c4b1a;
+  --novel-highlight-blue: #1a3d5c;
+  --novel-highlight-green: #1a5c20;
+  --novel-highlight-pink: #5c1a3a;
 }
 
 @layer base {
@@ -158,5 +174,108 @@
   }
   html {
     @apply font-sans;
+  }
+}
+
+@layer components {
+  /* Tiptap 文档画布使用独立 class，避免影响项目里其它富文本或普通 article。 */
+  .novel-prosemirror {
+    min-height: 620px;
+    padding: 4.75rem 2rem 3rem;
+    color: var(--foreground);
+    line-height: 1.9;
+  }
+
+  @media (min-width: 640px) {
+    .novel-prosemirror {
+      padding-inline: 4rem;
+    }
+  }
+
+  .novel-prosemirror > * {
+    border-radius: var(--radius);
+    margin-block: 0.35rem;
+    padding: 0.25rem 0.4rem;
+    transition: background-color 0.16s ease, box-shadow 0.16s ease;
+  }
+
+  .novel-prosemirror > *:hover,
+  .novel-prosemirror > *.is-active-block {
+    background: color-mix(in srgb, var(--muted) 72%, transparent);
+  }
+
+  .novel-prosemirror p {
+    min-height: 1.9em;
+    font-size: 15px;
+  }
+
+  .novel-prosemirror h1,
+  .novel-prosemirror h2,
+  .novel-prosemirror h3 {
+    color: var(--foreground);
+    font-weight: 650;
+    line-height: 1.45;
+  }
+
+  .novel-prosemirror h1 {
+    font-size: 1.6rem;
+    margin-top: 0.8rem;
+  }
+
+  .novel-prosemirror h2 {
+    font-size: 1.35rem;
+    margin-top: 0.65rem;
+  }
+
+  .novel-prosemirror h3 {
+    font-size: 1.1rem;
+    margin-top: 0.5rem;
+  }
+
+  .novel-prosemirror .is-editor-empty:first-child::before,
+  .novel-prosemirror .is-empty::before {
+    content: attr(data-placeholder);
+    float: left;
+    height: 0;
+    color: var(--muted-foreground);
+    pointer-events: none;
+  }
+
+  .novel-prosemirror span[data-comment-id] {
+    background-image: linear-gradient(#facc15, #facc15);
+    background-position: 0 calc(100% - 0.03em);
+    background-repeat: repeat-x;
+    background-size: 100% 2px;
+    cursor: help;
+  }
+
+  .novel-prosemirror span[data-revision-role='inserted'] {
+    color: var(--revision-inserted);
+    text-decoration-line: underline;
+    text-decoration-thickness: 1.5px;
+    text-underline-offset: 0.16em;
+  }
+
+  .novel-prosemirror span[data-revision-kind='delete'][data-revision-role='deleted'] {
+    color: var(--revision-deleted);
+    text-decoration-line: line-through;
+    text-decoration-thickness: 1.5px;
+  }
+
+  .novel-prosemirror span[data-revision-kind='replace'][data-revision-role='original'] {
+    color: var(--revision-original);
+    text-decoration-line: line-through;
+    text-decoration-thickness: 1.5px;
+  }
+
+  .novel-prosemirror .is-discussion-active {
+    border-radius: 0.25rem;
+    background-color: rgb(254 240 138 / 0.42);
+    box-shadow: 0 0 0 2px rgb(250 204 21 / 0.3);
+  }
+
+  .novel-prosemirror .ProseMirror-selectednode {
+    outline: none;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 28%, transparent);
   }
 }

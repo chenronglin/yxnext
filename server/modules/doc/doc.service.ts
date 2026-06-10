@@ -12,6 +12,7 @@ import {
   translateUniqueConstraintError,
 } from "@/server/shared/invariant-keys"
 import { syncActiveProjectTimelineStatuses } from "@/server/shared/project-stage-timeline"
+import { createNovelDocV1, isNovelDocV1 } from "@/lib/novel-doc"
 import type { ApiCurrentUser } from "@/server/shared/current-user"
 import type {
   DocCurrentView,
@@ -71,12 +72,6 @@ const STAGE_ORDER = ["synopsis", "outline", "chapter", "release"] as const
 
 // 新建空白稿件时沿用当前项目的文档 schema 版本；v1 先固定为 1。
 const DEFAULT_CONTENT_SCHEMA_VERSION = 1
-
-// 空白文档保持最小 Tiptap 根结构，保证后续前端编辑器可直接接管。
-const EMPTY_DOC_CONTENT: Prisma.InputJsonObject = {
-  type: "doc",
-  content: [],
-}
 
 const userSummarySelect = {
   userId: true,
@@ -441,11 +436,27 @@ function assertSubmitGate(doc: WorkflowDocRecord) {
 }
 
 function normalizeSavePayload(input: SaveDocInput) {
+  if (input.contentSchemaVersion !== undefined && input.contentSchemaVersion !== DEFAULT_CONTENT_SCHEMA_VERSION) {
+    throw new ApiError({
+      status: 400,
+      code: "DOC_CONTENT_SCHEMA_UNSUPPORTED",
+      message: "当前保存接口只支持 Novel Editor Tiptap JSON v1",
+    })
+  }
+
+  if (!isNovelDocV1(input.contentJson)) {
+    throw new ApiError({
+      status: 400,
+      code: "DOC_CONTENT_SCHEMA_UNSUPPORTED",
+      message: "contentJson 必须是 Novel Editor Tiptap JSON v1",
+    })
+  }
+
   const cleanText = input.cleanText ?? input.plainText
   const exportText = input.exportText ?? cleanText ?? input.plainText
 
   return {
-    contentSchemaVersion: input.contentSchemaVersion ?? DEFAULT_CONTENT_SCHEMA_VERSION,
+    contentSchemaVersion: DEFAULT_CONTENT_SCHEMA_VERSION,
     contentJson: input.contentJson as Prisma.InputJsonObject,
     wordCount: input.wordCount,
     plainText: input.plainText,
@@ -479,13 +490,6 @@ function assertCleanTextConsistency(input: {
     })
   }
 
-  if (hasCollaborationMarks && plainText && cleanText === plainText) {
-    throw new ApiError({
-      status: 400,
-      code: "DOC_CLEAN_TEXT_NOT_CLEANED",
-      message: "当前稿件包含协作标记，Clean 正文不能直接等同于未清洗正文",
-    })
-  }
 }
 
 function toDocMeta(doc: WorkflowDocRecord): DocMeta {
@@ -1013,7 +1017,13 @@ async function ensureOutlineDocForProject(tx: TxClient, doc: WorkflowDocRecord, 
     ownerUserId: doc.project.authorId,
     baseRevisionId: null,
     contentSchemaVersion: DEFAULT_CONTENT_SCHEMA_VERSION,
-    contentJson: EMPTY_DOC_CONTENT,
+    contentJson: createNovelDocV1({
+      docId: outlineDoc.docId,
+      docType: "outline",
+      title: "细纲",
+      createdAt: now,
+      updatedAt: now,
+    }) as unknown as Prisma.InputJsonObject,
     wordCount: 0,
     plainText: null,
     cleanText: null,

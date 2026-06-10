@@ -12,6 +12,7 @@ import { buildDocxBuffer } from "@/server/shared/docx-export"
 import { makeActiveBindingKey, makeActiveDocKey, translateUniqueConstraintError } from "@/server/shared/invariant-keys"
 import { syncActiveProjectTimelineStatuses } from "@/server/shared/project-stage-timeline"
 import { assertRole } from "@/server/shared/current-user"
+import { createNovelDocV1, textToNovelParagraphs } from "@/lib/novel-doc"
 import type { ApiCurrentUser } from "@/server/shared/current-user"
 import type {
   AdminReportStats,
@@ -262,6 +263,8 @@ async function ensureActiveDraftForRestore(
   input: {
     doc: {
       docId: bigint
+      docType: "synopsis" | "outline" | "chapter" | "release"
+      title: string
       status: "draft" | "submitted" | "rejected" | "approved"
       chapterNo: number | null
       activeDraftId: bigint | null
@@ -344,6 +347,15 @@ async function ensureActiveDraftForRestore(
   const sourceRevision = input.doc.latestRevision ?? input.doc.finalRevision
   const nextOwnerRole = input.reopenApprovedReleaseDoc ? "author" : draftOwnerRoleByDocStatus(input.doc.status)
   const nextOwnerUserId = nextOwnerRole === "editor" ? input.doc.projectEditorId : input.doc.projectAuthorId
+  const fallbackNow = new Date()
+  const fallbackContentJson = createNovelDocV1({
+    docId: input.doc.docId,
+    docType: input.doc.docType,
+    title: input.doc.title,
+    createdAt: fallbackNow,
+    updatedAt: fallbackNow,
+    content: textToNovelParagraphs(input.doc.currentPlainText),
+  })
 
   const createdDraft = await tx.docCurrentDraft.create({
     data: {
@@ -352,20 +364,7 @@ async function ensureActiveDraftForRestore(
       ownerUserId: nextOwnerUserId,
       baseRevisionId: sourceRevision?.revisionId ?? null,
       contentSchemaVersion: sourceRevision?.contentSchemaVersion ?? 1,
-      contentJson: (sourceRevision?.contentJson ??
-        ({
-          type: "doc",
-          content: input.doc.currentPlainText
-            ? input.doc.currentPlainText
-                .split(/\n{2,}/)
-                .map((segment) => segment.trim())
-                .filter(Boolean)
-                .map((segment) => ({
-                  type: "paragraph",
-                  content: [{ type: "text", text: segment }],
-                }))
-            : [],
-        })) as Prisma.InputJsonValue,
+      contentJson: (sourceRevision?.contentJson ?? fallbackContentJson) as unknown as Prisma.InputJsonValue,
       wordCount: sourceRevision?.wordCount ?? input.doc.currentWordCount,
       plainText: sourceRevision?.plainText ?? input.doc.currentPlainText,
       cleanText: sourceRevision?.cleanText ?? input.doc.currentCleanText,
@@ -2754,6 +2753,8 @@ export async function transitionGovernanceProject(
         await ensureActiveDraftForRestore(tx, {
           doc: {
             docId: doc.docId,
+            docType: doc.docType,
+            title: doc.title,
             status: doc.status,
             chapterNo: doc.chapterNo,
             activeDraftId: doc.activeDraftId,

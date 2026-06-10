@@ -1,0 +1,299 @@
+"use client"
+
+import { EditorContent, useEditor } from "@tiptap/react"
+import { BubbleMenu } from "@tiptap/react/menus"
+import type { Editor } from "@tiptap/core"
+import { Bold, Eraser, Heading1, Heading2, Heading3, Italic, MessageSquarePlus, Pilcrow, Quote, Save, Strikethrough, Trash2, UnderlineIcon } from "lucide-react"
+import { useEffect, useMemo, useRef, useState } from "react"
+
+import { addCommentToRange, createNovelEditorExtensions, insertEditSuggestionAfterSelection, isRevisionTrackingEnabled } from "@/components/doc/tiptap/extensions"
+import { Button } from "@/components/ui/button"
+import {
+  deriveNovelDocProjection,
+  type NovelCreatedBy,
+  type NovelDocJson,
+  type NovelDocProjection,
+} from "@/lib/novel-doc"
+import { cn } from "@/lib/utils"
+
+export type SaveState = "idle" | "dirty" | "saving" | "saved" | "error" | "conflict" | "readonly"
+
+type NovelTiptapEditorProps = {
+  value: NovelDocJson
+  editable: boolean
+  trackChanges: boolean
+  createdBy: NovelCreatedBy
+  saveState: SaveState
+  onChange: (json: NovelDocJson, projection: NovelDocProjection) => void
+  onReady?: (editor: Editor | null) => void
+}
+
+type PendingComment = {
+  from: number
+  to: number
+}
+
+function stringifyContent(value: NovelDocJson) {
+  // 受控 value 只用于判断外部内容是否真的变化，避免 setContent 打断用户光标。
+  return JSON.stringify(value)
+}
+
+function statusLabel(saveState: SaveState) {
+  if (saveState === "dirty") return "未保存"
+  if (saveState === "saving") return "保存中"
+  if (saveState === "saved") return "已保存"
+  if (saveState === "error") return "保存失败"
+  if (saveState === "conflict") return "保存冲突"
+  if (saveState === "readonly") return "只读"
+  return "待编辑"
+}
+
+function statusTone(saveState: SaveState) {
+  if (saveState === "dirty") return "border-amber-200 bg-amber-50 text-amber-700"
+  if (saveState === "saving") return "border-blue-200 bg-blue-50 text-blue-700"
+  if (saveState === "saved") return "border-emerald-200 bg-emerald-50 text-emerald-700"
+  if (saveState === "error" || saveState === "conflict") return "border-red-200 bg-red-50 text-red-600"
+  return "border-border bg-muted text-muted-foreground"
+}
+
+function ToolbarButton({
+  active,
+  title,
+  children,
+  onClick,
+}: {
+  active?: boolean
+  title: string
+  children: React.ReactNode
+  onClick: () => void
+}) {
+  return (
+    <button
+      className={cn(
+        "inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        active && "bg-primary/10 text-primary",
+      )}
+      type="button"
+      title={title}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={onClick}
+    >
+      {children}
+    </button>
+  )
+}
+
+function SelectionBubble({
+  editor,
+  createdBy,
+}: {
+  editor: Editor
+  createdBy: NovelCreatedBy
+}) {
+  const [pendingComment, setPendingComment] = useState<PendingComment | null>(null)
+  const [commentDraft, setCommentDraft] = useState("")
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const revisionTracking = isRevisionTrackingEnabled(editor)
+
+  useEffect(() => {
+    if (pendingComment) {
+      textareaRef.current?.focus()
+    }
+  }, [pendingComment])
+
+  function closeCommentDialog() {
+    setPendingComment(null)
+    setCommentDraft("")
+  }
+
+  function saveComment() {
+    if (!pendingComment || !commentDraft.trim()) {
+      return
+    }
+
+    const saved = addCommentToRange(editor, {
+      ...pendingComment,
+      body: commentDraft,
+      createdBy,
+    })
+
+    if (saved) {
+      closeCommentDialog()
+    }
+  }
+
+  return (
+    <>
+      <BubbleMenu
+        editor={editor}
+        options={{ placement: "top" }}
+        shouldShow={({ editor: currentEditor, state }) => currentEditor.isEditable && !state.selection.empty}
+      >
+        <div className="flex max-w-[92vw] items-center gap-1 rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg">
+          <ToolbarButton
+            title="批注"
+            onClick={() => {
+              const { from, to } = editor.state.selection
+              setPendingComment({ from, to })
+            }}
+          >
+            <MessageSquarePlus className="size-4 text-amber-600" />
+          </ToolbarButton>
+          <ToolbarButton title="段落建议" onClick={() => insertEditSuggestionAfterSelection(editor, createdBy)}>
+            <Quote className="size-4 text-amber-600" />
+          </ToolbarButton>
+          {revisionTracking && (
+            <ToolbarButton title="标记删除" onClick={() => editor.chain().focus().markSelectionAsDeletedRevision().run()}>
+              <Trash2 className="size-4 text-red-600" />
+            </ToolbarButton>
+          )}
+          <span className="mx-1 h-5 w-px bg-border" />
+          <ToolbarButton title="正文" active={editor.isActive("paragraph")} onClick={() => editor.chain().focus().setParagraph().run()}>
+            <Pilcrow className="size-4" />
+          </ToolbarButton>
+          <ToolbarButton title="一级标题" active={editor.isActive("heading", { level: 1 })} onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}>
+            <Heading1 className="size-4" />
+          </ToolbarButton>
+          <ToolbarButton title="二级标题" active={editor.isActive("heading", { level: 2 })} onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}>
+            <Heading2 className="size-4" />
+          </ToolbarButton>
+          <ToolbarButton title="三级标题" active={editor.isActive("heading", { level: 3 })} onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}>
+            <Heading3 className="size-4" />
+          </ToolbarButton>
+          <span className="mx-1 h-5 w-px bg-border" />
+          <ToolbarButton title="加粗" active={editor.isActive("bold")} onClick={() => editor.chain().focus().toggleBold().run()}>
+            <Bold className="size-4" />
+          </ToolbarButton>
+          <ToolbarButton title="斜体" active={editor.isActive("italic")} onClick={() => editor.chain().focus().toggleItalic().run()}>
+            <Italic className="size-4" />
+          </ToolbarButton>
+          <ToolbarButton title="下划线" active={editor.isActive("underline")} onClick={() => editor.chain().focus().toggleUnderline().run()}>
+            <UnderlineIcon className="size-4" />
+          </ToolbarButton>
+          <ToolbarButton title="删除线" active={editor.isActive("strike")} onClick={() => editor.chain().focus().toggleStrike().run()}>
+            <Strikethrough className="size-4" />
+          </ToolbarButton>
+          <ToolbarButton title="清除格式" onClick={() => editor.chain().focus().unsetAllMarks().clearNodes().run()}>
+            <Eraser className="size-4" />
+          </ToolbarButton>
+        </div>
+      </BubbleMenu>
+
+      {pendingComment && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              closeCommentDialog()
+            }
+          }}
+        >
+          <div className="w-full max-w-md rounded-lg border border-border bg-popover p-4 text-popover-foreground shadow-xl">
+            <h2 className="text-base font-semibold">添加批注</h2>
+            <textarea
+              ref={textareaRef}
+              className="mt-3 min-h-28 w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm leading-6 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              value={commentDraft}
+              placeholder="输入批注内容"
+              onChange={(event) => setCommentDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  closeCommentDialog()
+                }
+
+                if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                  saveComment()
+                }
+              }}
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={closeCommentDialog}>
+                取消
+              </Button>
+              <Button type="button" disabled={!commentDraft.trim()} onClick={saveComment}>
+                确认
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
+export function NovelTiptapEditor({
+  value,
+  editable,
+  trackChanges,
+  createdBy,
+  saveState,
+  onChange,
+  onReady,
+}: NovelTiptapEditorProps) {
+  const extensions = useMemo(() => createNovelEditorExtensions({ trackChanges, createdBy }), [createdBy, trackChanges])
+  const lastExternalValue = useRef(stringifyContent(value))
+  const editor = useEditor({
+    immediatelyRender: false,
+    editable,
+    extensions,
+    content: value,
+    editorProps: {
+      attributes: {
+        class: "novel-prosemirror focus:outline-none",
+      },
+    },
+    onUpdate({ editor: currentEditor }) {
+      const json = currentEditor.getJSON() as NovelDocJson
+
+      onChange(json, deriveNovelDocProjection(json))
+    },
+  })
+
+  useEffect(() => {
+    onReady?.(editor ?? null)
+
+    return () => onReady?.(null)
+  }, [editor, onReady])
+
+  useEffect(() => {
+    editor?.setEditable(editable)
+  }, [editable, editor])
+
+  useEffect(() => {
+    if (!editor) {
+      return
+    }
+
+    const next = stringifyContent(value)
+
+    if (next === lastExternalValue.current || next === stringifyContent(editor.getJSON() as NovelDocJson)) {
+      lastExternalValue.current = next
+      return
+    }
+
+    lastExternalValue.current = next
+    editor.commands.setContent(value, { emitUpdate: false })
+  }, [editor, value])
+
+  const characters = editor?.storage.characterCount?.characters?.() ?? deriveNovelDocProjection(value).wordCount
+
+  return (
+    <div className="relative min-w-0">
+      <div className="absolute right-4 top-4 z-10 flex flex-wrap justify-end gap-2">
+        <span className={cn("inline-flex h-7 items-center gap-1 rounded-md border px-2 text-xs font-medium", statusTone(saveState))}>
+          <Save className="size-3.5" />
+          {statusLabel(saveState)}
+        </span>
+        <span className="inline-flex h-7 items-center rounded-md border border-border bg-background/90 px-2 text-xs text-muted-foreground">
+          {characters.toLocaleString()} 字
+        </span>
+      </div>
+
+      <div className={cn("rounded-xl border border-border bg-card shadow-sm", !editable && "bg-muted/20")}>
+        <EditorContent editor={editor} />
+      </div>
+
+      {editor && editable && <SelectionBubble editor={editor} createdBy={createdBy} />}
+    </div>
+  )
+}

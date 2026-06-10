@@ -11,6 +11,7 @@ import {
   makeSingleDocKey,
   translateUniqueConstraintError,
 } from "@/server/shared/invariant-keys"
+import { createNovelDocV1, createNovelHeading, textToNovelParagraphs } from "@/lib/novel-doc"
 import type { ApiCurrentUser } from "@/server/shared/current-user"
 import type { PrereleaseRecord, PrereleaseStatus, SiItem, SiVersion } from "@/types/si"
 
@@ -458,33 +459,28 @@ function readSnapshotBigIntArray(snapshot: Prisma.JsonValue, key: string) {
 }
 
 function makeSynopsisDocContent(input: {
+  docId: bigint
   title: string
   freshTwist: string | null
   coreSynopsis: string | null
+  now: Date
 }) {
-  // 这里保留演示 UI 的块状文档形态，后续接真实文档编辑器时只需要替换 contentJson 生成逻辑。
-  return {
-    type: "doc",
+  // SI 转项目是新稿入口，必须直接生成 V1 根 attrs，避免作者打开后落入旧稿只读模式。
+  const synopsisText = input.coreSynopsis || `《${input.title}》梗概待作者完善。`
+  const twistText = input.freshTwist ? `Fresh Twist：${input.freshTwist}` : null
+
+  return createNovelDocV1({
+    docId: input.docId,
+    docType: "synopsis",
+    title: "梗概",
+    createdAt: input.now,
+    updatedAt: input.now,
     content: [
-      {
-        type: "heading",
-        attrs: { level: 1 },
-        content: [{ type: "text", text: "梗概" }],
-      },
-      {
-        type: "paragraph",
-        content: [{ type: "text", text: input.coreSynopsis || `《${input.title}》梗概待作者完善。` }],
-      },
-      ...(input.freshTwist
-        ? [
-            {
-              type: "paragraph",
-              content: [{ type: "text", text: `Fresh Twist：${input.freshTwist}` }],
-            },
-          ]
-        : []),
+      createNovelHeading({ text: "梗概", level: 1 }),
+      ...textToNovelParagraphs(synopsisText),
+      ...(twistText ? textToNovelParagraphs(twistText) : []),
     ],
-  } satisfies Prisma.InputJsonObject
+  }) as unknown as Prisma.InputJsonObject
 }
 
 function countWordsForChineseText(text: string | null) {
@@ -1486,11 +1482,6 @@ export async function convertSiPreissueToProject(actor: ApiCurrentUser, recordId
       }),
     })
 
-    const contentJson = makeSynopsisDocContent({
-      title,
-      freshTwist: freshTwist || null,
-      coreSynopsis: coreSynopsis || null,
-    })
     const wordCount = countWordsForChineseText(coreSynopsis)
 
     const doc = await tx.doc.create({
@@ -1511,6 +1502,14 @@ export async function convertSiPreissueToProject(actor: ApiCurrentUser, recordId
         // 梗概 Doc 属于“项目内唯一单据”，创建时必须把唯一键写实，交给数据库做最后兜底。
         singleDocKey: makeSingleDocKey(project.projectId, "synopsis"),
       },
+    })
+
+    const contentJson = makeSynopsisDocContent({
+      docId: doc.docId,
+      title,
+      freshTwist: freshTwist || null,
+      coreSynopsis: coreSynopsis || null,
+      now,
     })
 
     const draft = await tx.docCurrentDraft.create({

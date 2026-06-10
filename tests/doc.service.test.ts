@@ -59,8 +59,21 @@ vi.mock("@/server/db/prisma", () => ({
 import type { ApiCurrentUser } from "@/server/shared/current-user"
 import type { DocCurrentSource } from "@/types/doc"
 import { getCurrentDocView, saveDocDraft, submitDoc, returnDocToAuthor, approveDoc } from "@/server/modules/doc/doc.service"
+import { createNovelDocV1, createNovelParagraph, type NovelDocJson } from "@/lib/novel-doc"
 
 const FIXED_TIME = new Date("2026-06-09T10:00:00.000Z")
+
+function makeNovelContent(content: NovelDocJson["content"] = []): Record<string, unknown> {
+  // 保存接口现在只接受 Novel Editor Tiptap JSON v1；测试统一从这里构造合法根结构。
+  return createNovelDocV1({
+    docId: 1,
+    docType: "synopsis",
+    title: "梗概",
+    createdAt: FIXED_TIME,
+    updatedAt: FIXED_TIME,
+    content,
+  }) as unknown as Record<string, unknown>
+}
 
 // 所有测试共享一套稳定的当前用户，避免每个断言都去重复拼 BigInt 结构。
 const authorActor: ApiCurrentUser = {
@@ -431,7 +444,7 @@ describe("saveDocDraft", () => {
 
     const result = await saveDocDraft(authorActor, "1", {
       lockVersion: 3,
-      contentJson: { type: "doc", content: [] },
+      contentJson: makeNovelContent(),
       wordCount: 2222,
       plainText: "更新后的正文",
     })
@@ -451,6 +464,80 @@ describe("saveDocDraft", () => {
     expect(result.doc.currentWordCount).toBe(2222)
   })
 
+  it("包含纯批注时允许 cleanText 与 plainText 相同", async () => {
+    const beforeDoc = makeDocRecord({
+      status: "draft",
+      holderRole: "author",
+      activeDraft: makeDraft({ ownerRole: "author", ownerUserId: authorActor.userId, lockVersion: 3 }),
+    })
+    const afterDoc = makeDocRecord({
+      status: "draft",
+      holderRole: "author",
+      activeDraft: makeDraft({ ownerRole: "author", ownerUserId: authorActor.userId, lockVersion: 4 }),
+    })
+    const contentJson = makeNovelContent([
+      {
+        type: "paragraph",
+        attrs: { id: "block_p_1" },
+        content: [
+          {
+            type: "text",
+            text: "这是一段有批注但清稿相同的正文",
+            marks: [
+              {
+                type: "comment",
+                attrs: {
+                  id: "comment_1",
+                  kind: "normal",
+                  body: "仅批注不改变正文",
+                  createdBy: {
+                    userId: editorActor.id,
+                    role: editorActor.role,
+                    nameSnapshot: editorActor.name,
+                  },
+                  createdAt: FIXED_TIME.toISOString(),
+                  updatedAt: null,
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ])
+
+    mockTx.doc.findFirst.mockResolvedValueOnce(beforeDoc)
+    mockPrisma.doc.findFirst.mockResolvedValueOnce(afterDoc)
+
+    await expect(
+      saveDocDraft(authorActor, "1", {
+        lockVersion: 3,
+        contentJson,
+        wordCount: 16,
+        plainText: "这是一段有批注但清稿相同的正文",
+        cleanText: "这是一段有批注但清稿相同的正文",
+        commentCount: 1,
+      }),
+    ).resolves.toMatchObject({
+      doc: expect.objectContaining({ status: "draft" }),
+    })
+  })
+
+  it("拒绝保存缺少 V1 attrs 的旧 contentJson", async () => {
+    await expect(
+      saveDocDraft(authorActor, "1", {
+        lockVersion: 3,
+        contentJson: { type: "doc", content: [] },
+        wordCount: 0,
+        plainText: "",
+      }),
+    ).rejects.toMatchObject({
+      code: "DOC_CONTENT_SCHEMA_UNSUPPORTED",
+      status: 400,
+    })
+
+    expect(mockTx.doc.findFirst).not.toHaveBeenCalled()
+  })
+
   it("非持有人不能保存", async () => {
     mockTx.doc.findFirst.mockResolvedValueOnce(
       makeDocRecord({
@@ -463,7 +550,7 @@ describe("saveDocDraft", () => {
     await expect(
       saveDocDraft(authorActor, "1", {
         lockVersion: 3,
-        contentJson: { type: "doc", content: [] },
+        contentJson: makeNovelContent(),
         wordCount: 100,
         plainText: "正文",
       }),
@@ -480,7 +567,7 @@ describe("saveDocDraft", () => {
     await expect(
       saveDocDraft(authorActor, "1", {
         lockVersion: 99,
-        contentJson: { type: "doc", content: [] },
+        contentJson: makeNovelContent(),
         wordCount: 100,
         plainText: "正文",
       }),
@@ -514,7 +601,7 @@ describe("saveDocDraft", () => {
     await expect(
       saveDocDraft(authorActor, "1", {
         lockVersion: 3,
-        contentJson: { type: "doc", content: [] },
+        contentJson: makeNovelContent(),
         wordCount: 100,
         plainText: "正文",
       }),
@@ -616,7 +703,7 @@ describe("returnDocToAuthor", () => {
     await expect(
       saveDocDraft(adminActor, "1", {
         lockVersion: 3,
-        contentJson: { type: "doc", content: [] },
+        contentJson: makeNovelContent(),
         wordCount: 100,
         plainText: "正文",
       }),

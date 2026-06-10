@@ -1,0 +1,1047 @@
+"use client"
+
+import { Extension, Mark, mergeAttributes, Node as TiptapNode, type Editor, type Extensions } from "@tiptap/core"
+import CharacterCount from "@tiptap/extension-character-count"
+import { Color } from "@tiptap/extension-color"
+import Document from "@tiptap/extension-document"
+import Heading from "@tiptap/extension-heading"
+import Highlight from "@tiptap/extension-highlight"
+import Paragraph from "@tiptap/extension-paragraph"
+import Placeholder from "@tiptap/extension-placeholder"
+import { TextStyle } from "@tiptap/extension-text-style"
+import Underline from "@tiptap/extension-underline"
+import StarterKit from "@tiptap/starter-kit"
+import type { Mark as ProseMirrorMark, Slice } from "@tiptap/pm/model"
+import { Plugin, PluginKey, TextSelection } from "@tiptap/pm/state"
+import type { EditorState, Selection, Transaction } from "@tiptap/pm/state"
+import { Decoration, DecorationSet, type EditorView } from "@tiptap/pm/view"
+import { NodeViewWrapper, ReactNodeViewRenderer } from "@tiptap/react"
+import type { ReactNodeViewProps } from "@tiptap/react"
+import { Check, PencilLine, Trash2 } from "lucide-react"
+import { useEffect, useRef, useState } from "react"
+
+import {
+  createNovelBlockId,
+  createPrefixedId,
+  type NovelCreatedBy,
+  type NovelRevisionKind,
+  type NovelRevisionRole,
+  type NovelSuggestionCategory,
+  type NovelSuggestionPosition,
+} from "@/lib/novel-doc"
+import { cn } from "@/lib/utils"
+
+type RevisionPluginState = {
+  lastId: string | null
+  lastGroupId: string | null
+  lastPos: number | null
+  kind?: NovelRevisionKind
+  role?: NovelRevisionRole
+  from?: number
+  to?: number
+}
+
+type TextRange = {
+  from: number
+  to: number
+}
+
+type CompositionBase = TextRange & {
+  slice: Slice
+}
+
+type RevisionTrackingOptions = {
+  enabled: boolean
+  createdBy: NovelCreatedBy
+}
+
+type RevisionAttributes = {
+  id: string
+  groupId: string
+  kind: NovelRevisionKind
+  role: NovelRevisionRole
+  createdBy: NovelCreatedBy
+  createdAt: string
+}
+
+type CommentAttributes = {
+  id: string
+  kind: "normal" | "delete_hint" | "replace_hint" | "insert_hint"
+  body: string
+  createdBy: NovelCreatedBy
+  createdAt: string
+  updatedAt: string | null
+}
+
+type EditSuggestionAttrs = {
+  id: string
+  anchorBlockId: string
+  position: NovelSuggestionPosition
+  category: NovelSuggestionCategory
+  body: string
+  createdBy: NovelCreatedBy
+  createdAt: string
+  updatedAt: string | null
+}
+
+declare module "@tiptap/core" {
+  interface Commands<ReturnType> {
+    novelRevision: {
+      markSelectionAsDeletedRevision: () => ReturnType
+    }
+  }
+}
+
+const revisionTrackingKey = new PluginKey<RevisionPluginState>("novel-revision-tracking")
+
+const discussionHighlightKey = new PluginKey<{ activeId: string | null }>("novel-discussion-highlight")
+
+function fallbackActor(): NovelCreatedBy {
+  // 这个兜底只用于极端情况下防止 JSON 结构缺字段；正常路径会由 RoleProvider 注入当前用户快照。
+  return {
+    userId: "unknown",
+    role: "editor",
+    nameSnapshot: "未知用户",
+  }
+}
+
+function clampPosition(state: EditorState, pos: number) {
+  return Math.max(0, Math.min(pos, state.doc.content.size))
+}
+
+function normalizeRange(state: EditorState, from: number, to: number): TextRange {
+  return {
+    from: clampPosition(state, Math.min(from, to)),
+    to: clampPosition(state, Math.max(from, to)),
+  }
+}
+
+function rangeFromSelection(state: EditorState, selection: Selection): TextRange {
+  return normalizeRange(state, selection.from, selection.to)
+}
+
+function rangeContainsText(state: EditorState, range: TextRange) {
+  let hasText = false
+
+  state.doc.nodesBetween(range.from, range.to, (node) => {
+    if (node.isText && Boolean(node.text)) {
+      hasText = true
+      return false
+    }
+
+    return !hasText
+  })
+
+  return hasText
+}
+
+function getTypingMarks(state: EditorState) {
+  // 用户输入时保留加粗、颜色等普通格式，但去掉旧 revision mark，避免新输入继承旧修订身份。
+  const marks = state.storedMarks ?? state.selection.$from.marks()
+
+  return marks.filter((mark) => mark.type.name !== "revision")
+}
+
+function isRevisionMark(mark: ProseMirrorMark): mark is ProseMirrorMark & { attrs: RevisionAttributes } {
+  return mark.type.name === "revision"
+}
+
+function isInsertedRevisionMark(mark: ProseMirrorMark): mark is ProseMirrorMark & { attrs: RevisionAttributes } {
+  return isRevisionMark(mark) && mark.attrs.role === "inserted" && (mark.attrs.kind === "insert" || mark.attrs.kind === "replace")
+}
+
+function findMergeableInsertedRevision(state: EditorState, pos: number) {
+  if (pos <= 0 || pos > state.doc.content.size) {
+    return null
+  }
+
+  return state.doc.resolve(pos).nodeBefore?.marks.find(isInsertedRevisionMark)?.attrs ?? null
+}
+
+function makeRevisionAttrs(
+  options: RevisionTrackingOptions,
+  kind: NovelRevisionKind,
+  role: NovelRevisionRole,
+  groupId = createPrefixedId("revision_group"),
+): RevisionAttributes {
+  return {
+    id: createPrefixedId("revision"),
+    groupId,
+    kind,
+    role,
+    createdBy: options.createdBy ?? fallbackActor(),
+    createdAt: new Date().toISOString(),
+  }
+}
+
+function getRevisionMarkType(state: EditorState) {
+  return state.schema.marks.revision
+}
+
+function createRevisionMark(state: EditorState, attrs: RevisionAttributes) {
+  return getRevisionMarkType(state)?.create(attrs) ?? null
+}
+
+export function resolveInsertedRevision(
+  state: EditorState,
+  from: number,
+  options: RevisionTrackingOptions,
+  allowMerge: boolean,
+  isReplacement: boolean,
+) {
+  // inserted 修订的复用只看“文档邻接”：光标左侧如果紧贴一个 role="inserted" 的修订，
+  // 就直接复用它的完整 attrs。这里不能依赖 plugin state，因为 state 只描述最近一次事务，
+  // 光标移动、组合输入和异步事务都可能让它变成易失信息。
+  if (allowMerge) {
+    const existing = findMergeableInsertedRevision(state, from)
+
+    if (existing) {
+      return existing
+    }
+  }
+
+  return makeRevisionAttrs(options, isReplacement ? "replace" : "insert", "inserted")
+}
+
+function createMarkedText(state: EditorState, text: string, revisionMark: ProseMirrorMark) {
+  return state.schema.text(text, revisionMark.addToSet(getTypingMarks(state)))
+}
+
+function applyInsertedText(
+  view: EditorView,
+  text: string,
+  range: TextRange,
+  options: RevisionTrackingOptions,
+  inputOptions: { allowMerge: boolean; forceReplace?: boolean } = { allowMerge: true },
+) {
+  if (!options.enabled || !text) {
+    return false
+  }
+
+  const { state } = view
+  const isReplacement = inputOptions.forceReplace === true || range.from !== range.to
+  const insertedAttrs = resolveInsertedRevision(state, range.from, options, !isReplacement && inputOptions.allowMerge, isReplacement)
+  const insertedKind = insertedAttrs.kind
+  const insertedMark = createRevisionMark(state, insertedAttrs)
+
+  if (!insertedMark) {
+    return false
+  }
+
+  const tr = state.tr
+  const textNode = createMarkedText(state, text, insertedMark)
+
+  tr.insert(range.from, textNode)
+
+  const insertedTo = range.from + textNode.nodeSize
+
+  if (isReplacement && rangeContainsText(state, range)) {
+    const originalMark = createRevisionMark(
+      state,
+      makeRevisionAttrs(options, insertedKind, "original", insertedAttrs.groupId),
+    )
+
+    if (!originalMark) {
+      return false
+    }
+
+    const originalFrom = tr.mapping.map(range.from, 1)
+    const originalTo = tr.mapping.map(range.to, 1)
+
+    tr.addMark(originalFrom, originalTo, originalMark)
+  }
+
+  tr.setSelection(TextSelection.create(tr.doc, insertedTo))
+  tr.setMeta(revisionTrackingKey, {
+    lastId: insertedAttrs.id,
+    lastGroupId: insertedAttrs.groupId,
+    lastPos: insertedTo,
+    kind: insertedKind,
+    role: "inserted",
+    from: range.from,
+    to: insertedTo,
+  })
+
+  view.dispatch(tr.scrollIntoView())
+  return true
+}
+
+function markDeletedRange(
+  state: EditorState,
+  range: TextRange,
+  options: RevisionTrackingOptions,
+  dispatch?: (tr: Transaction) => void,
+) {
+  if (!options.enabled || range.from === range.to || !rangeContainsText(state, range)) {
+    return false
+  }
+
+  const pluginState = revisionTrackingKey.getState(state)
+  const canReuseLastGroup = pluginState?.lastGroupId && (range.from === pluginState.lastPos || range.to === pluginState.lastPos)
+  const attrs = makeRevisionAttrs(options, "delete", "deleted", canReuseLastGroup ? pluginState.lastGroupId! : undefined)
+  const mark = createRevisionMark(state, attrs)
+
+  if (!mark) {
+    return false
+  }
+
+  const tr = state.tr.addMark(range.from, range.to, mark)
+
+  tr.setSelection(TextSelection.create(tr.doc, range.from))
+  tr.setMeta(revisionTrackingKey, {
+    lastId: attrs.id,
+    lastGroupId: attrs.groupId,
+    lastPos: range.from,
+  })
+  dispatch?.(tr.scrollIntoView())
+
+  return true
+}
+
+function plainTextFromClipboard(event: ClipboardEvent) {
+  if (!event.clipboardData || event.clipboardData.files.length > 0) {
+    return null
+  }
+
+  return event.clipboardData.getData("text/plain")
+}
+
+function domSelectionFromRoot(view: EditorView) {
+  const root = view.root
+
+  return "getSelection" in root ? root.getSelection() : document.getSelection()
+}
+
+function posFromDOM(view: EditorView, node: Node | null, offset: number, bias: number) {
+  if (!node) {
+    return null
+  }
+
+  try {
+    return view.posAtDOM(node, offset, bias)
+  } catch {
+    return null
+  }
+}
+
+function rangeFromDOMSelection(view: EditorView) {
+  const selection = domSelectionFromRoot(view)
+
+  if (!selection?.anchorNode || !selection.focusNode) {
+    return null
+  }
+
+  const anchor = posFromDOM(view, selection.anchorNode, selection.anchorOffset, -1)
+  const head = posFromDOM(view, selection.focusNode, selection.focusOffset, 1)
+
+  if (anchor == null || head == null) {
+    return null
+  }
+
+  return normalizeRange(view.state, anchor, head)
+}
+
+function captureRange(view: EditorView): TextRange {
+  return rangeFromDOMSelection(view) ?? rangeFromSelection(view.state, view.state.selection)
+}
+
+function finalizeComposition(view: EditorView, base: CompositionBase, options: RevisionTrackingOptions) {
+  const { state } = view
+  const insertedRange = normalizeRange(state, base.from, state.selection.from)
+
+  if (!options.enabled || insertedRange.from === insertedRange.to) {
+    return
+  }
+
+  const isReplacement = base.from !== base.to
+  const insertedAttrs = resolveInsertedRevision(state, insertedRange.from, options, !isReplacement, isReplacement)
+  const insertedKind = insertedAttrs.kind
+  const insertedMark = createRevisionMark(state, insertedAttrs)
+
+  if (!insertedMark) {
+    return
+  }
+
+  const tr = state.tr.addMark(insertedRange.from, insertedRange.to, insertedMark)
+
+  if (isReplacement && base.slice.size > 0) {
+    const originalMark = createRevisionMark(state, makeRevisionAttrs(options, insertedKind, "original", insertedAttrs.groupId))
+
+    if (!originalMark) {
+      return
+    }
+
+    const originalFrom = insertedRange.to
+    const originalTo = originalFrom + base.slice.size
+
+    tr.replace(originalFrom, originalFrom, base.slice)
+    tr.addMark(originalFrom, originalTo, originalMark)
+  }
+
+  const cursorPos = insertedRange.to
+
+  tr.setSelection(TextSelection.create(tr.doc, cursorPos))
+  tr.setMeta(revisionTrackingKey, {
+    lastId: insertedAttrs.id,
+    lastGroupId: insertedAttrs.groupId,
+    lastPos: cursorPos,
+    kind: insertedKind,
+    role: "inserted",
+    from: insertedRange.from,
+    to: cursorPos,
+  })
+  view.dispatch(tr.scrollIntoView())
+}
+
+export const NovelDocument = Document.extend({
+  addAttributes() {
+    return {
+      schemaVersion: { default: 1 },
+      docId: { default: null },
+      docType: { default: null },
+      title: { default: null },
+      createdAt: { default: null },
+      updatedAt: { default: null },
+    }
+  },
+})
+
+export const NovelParagraph = Paragraph.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      id: {
+        default: null,
+        parseHTML: (element) => element.getAttribute("data-block-id"),
+        renderHTML: (attrs) => (attrs.id ? { "data-block-id": attrs.id } : {}),
+      },
+    }
+  },
+})
+
+export const NovelHeading = Heading.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      id: {
+        default: null,
+        parseHTML: (element) => element.getAttribute("data-block-id"),
+        renderHTML: (attrs) => (attrs.id ? { "data-block-id": attrs.id } : {}),
+      },
+    }
+  },
+})
+
+export const BlockId = Extension.create({
+  name: "blockId",
+
+  addProseMirrorPlugins() {
+    return [
+      new Plugin({
+        appendTransaction(transactions, _oldState, newState) {
+          if (!transactions.some((transaction) => transaction.docChanged)) {
+            return null
+          }
+
+          const tr = newState.tr
+          let changed = false
+
+          newState.doc.descendants((node, pos) => {
+            if (node.type.name !== "paragraph" && node.type.name !== "heading") {
+              return true
+            }
+
+            if (typeof node.attrs.id === "string" && node.attrs.id) {
+              return true
+            }
+
+            const id = node.type.name === "heading" ? createNovelBlockId("h") : createNovelBlockId("p")
+
+            tr.setNodeMarkup(pos, undefined, { ...node.attrs, id })
+            changed = true
+            return true
+          })
+
+          return changed ? tr : null
+        },
+      }),
+    ]
+  },
+})
+
+export const CommentMark = Mark.create({
+  name: "comment",
+  inclusive: false,
+  excludes: "",
+
+  addAttributes() {
+    return {
+      id: { default: null },
+      kind: { default: "normal" },
+      body: { default: "" },
+      createdBy: { default: null },
+      createdAt: { default: null },
+      updatedAt: { default: null },
+    }
+  },
+
+  parseHTML() {
+    return [{ tag: "span[data-comment-id]" }]
+  },
+
+  renderHTML({ HTMLAttributes }) {
+    return [
+      "span",
+      mergeAttributes(HTMLAttributes, {
+        "data-comment-id": HTMLAttributes.id,
+        "data-comment-kind": HTMLAttributes.kind,
+        title: HTMLAttributes.body,
+      }),
+      0,
+    ]
+  },
+})
+
+export function addCommentToRange(
+  editor: Editor,
+  input: { from: number; to: number; body: string; createdBy: NovelCreatedBy },
+) {
+  const body = input.body.trim()
+  const range = normalizeRange(editor.state, input.from, input.to)
+
+  if (!body || range.from === range.to) {
+    return false
+  }
+
+  const markType = editor.state.schema.marks.comment
+
+  if (!markType) {
+    return false
+  }
+
+  const attrs: CommentAttributes = {
+    id: createPrefixedId("comment"),
+    kind: "normal",
+    body,
+    createdBy: input.createdBy,
+    createdAt: new Date().toISOString(),
+    updatedAt: null,
+  }
+  const tr = editor.state.tr.addMark(range.from, range.to, markType.create(attrs))
+
+  tr.setSelection(TextSelection.create(tr.doc, range.to))
+  editor.view.dispatch(tr.scrollIntoView())
+  editor.view.focus()
+  return true
+}
+
+export const RevisionMark = Mark.create<RevisionTrackingOptions>({
+  name: "revision",
+  inclusive: false,
+  excludes: "revision",
+
+  addOptions() {
+    return {
+      enabled: false,
+      createdBy: fallbackActor(),
+    }
+  },
+
+  addAttributes() {
+    return {
+      id: { default: null },
+      groupId: { default: null },
+      kind: { default: null },
+      role: { default: null },
+      createdBy: { default: null },
+      createdAt: { default: null },
+    }
+  },
+
+  parseHTML() {
+    return [{ tag: "span[data-revision-id]" }]
+  },
+
+  renderHTML({ HTMLAttributes }) {
+    return [
+      "span",
+      mergeAttributes(HTMLAttributes, {
+        "data-revision-id": HTMLAttributes.id,
+        "data-revision-group-id": HTMLAttributes.groupId,
+        "data-revision-kind": HTMLAttributes.kind,
+        "data-revision-role": HTMLAttributes.role,
+      }),
+      0,
+    ]
+  },
+
+  addCommands() {
+    return {
+      markSelectionAsDeletedRevision:
+        () =>
+        ({ state, dispatch }) =>
+          markDeletedRange(state, rangeFromSelection(state, state.selection), this.options, dispatch),
+    }
+  },
+
+  addProseMirrorPlugins() {
+    let isComposing = false
+    let compositionBase: CompositionBase | null = null
+    let compositionTimer: ReturnType<typeof setTimeout> | null = null
+
+    return [
+      new Plugin<RevisionPluginState>({
+        key: revisionTrackingKey,
+        state: {
+          init: () => ({ lastId: null, lastGroupId: null, lastPos: null }),
+          apply(transaction, value, _oldState, newState) {
+            const meta = transaction.getMeta(revisionTrackingKey) as RevisionPluginState | undefined
+
+            if (meta) {
+              return meta
+            }
+
+            if (transaction.selectionSet && !transaction.docChanged) {
+              return { lastId: null, lastGroupId: null, lastPos: null }
+            }
+
+            if (transaction.docChanged) {
+              return { ...value, lastPos: newState.selection.from }
+            }
+
+            return value
+          },
+        },
+        props: {
+          handleTextInput: (view, from, to, text) => {
+            if (isComposing || view.composing) {
+              return false
+            }
+
+            return applyInsertedText(view, text, normalizeRange(view.state, from, to), this.options)
+          },
+          handlePaste: (view, event) => {
+            if (isComposing || view.composing) {
+              return false
+            }
+
+            const text = plainTextFromClipboard(event)
+
+            return text
+              ? applyInsertedText(view, text, rangeFromSelection(view.state, view.state.selection), this.options, {
+                  allowMerge: false,
+                })
+              : false
+          },
+          handleKeyDown: (view, event) => {
+            if (!this.options.enabled || (event.key !== "Backspace" && event.key !== "Delete")) {
+              return false
+            }
+
+            const { state } = view
+            const range = rangeFromSelection(state, state.selection)
+            const targetRange =
+              range.from !== range.to
+                ? range
+                : event.key === "Backspace"
+                  ? normalizeRange(state, state.selection.from - 1, state.selection.from)
+                  : normalizeRange(state, state.selection.from, state.selection.from + 1)
+
+            return markDeletedRange(state, targetRange, this.options, view.dispatch)
+          },
+          handleDOMEvents: {
+            compositionstart: (view) => {
+              if (!this.options.enabled) {
+                return false
+              }
+
+              const range = captureRange(view)
+
+              isComposing = true
+              compositionBase = {
+                ...range,
+                slice: view.state.doc.slice(range.from, range.to),
+              }
+
+              if (compositionTimer) {
+                clearTimeout(compositionTimer)
+                compositionTimer = null
+              }
+
+              return false
+            },
+            compositionend: (view) => {
+              if (!this.options.enabled || !compositionBase) {
+                isComposing = false
+                return false
+              }
+
+              const base = compositionBase
+
+              compositionTimer = setTimeout(() => {
+                isComposing = false
+                finalizeComposition(view, base, this.options)
+
+                if (compositionBase === base) {
+                  compositionBase = null
+                }
+              }, 0)
+
+              return false
+            },
+          },
+        },
+      }),
+    ]
+  },
+})
+
+function getSelectionTopLevelBlock(editor: Editor) {
+  const { selection } = editor.state
+  const { $to } = selection
+
+  if ($to.depth < 1) {
+    return {
+      insertPosition: selection.to,
+      anchorBlockId: createNovelBlockId("p"),
+    }
+  }
+
+  const block = $to.node(1)
+  const existingId = typeof block.attrs.id === "string" ? block.attrs.id : createNovelBlockId("p")
+
+  return {
+    insertPosition: $to.after(1),
+    anchorBlockId: existingId,
+  }
+}
+
+export function insertEditSuggestionAfterSelection(editor: Editor, createdBy: NovelCreatedBy) {
+  if (editor.state.selection.empty) {
+    return false
+  }
+
+  const { insertPosition, anchorBlockId } = getSelectionTopLevelBlock(editor)
+
+  return editor
+    .chain()
+    .focus()
+    .insertContentAt(insertPosition, {
+      type: "editSuggestion",
+      attrs: {
+        id: createPrefixedId("suggestion"),
+        anchorBlockId,
+        position: "after",
+        category: "other",
+        body: "",
+        createdBy,
+        createdAt: new Date().toISOString(),
+        updatedAt: null,
+      } satisfies EditSuggestionAttrs,
+    })
+    .run()
+}
+
+function EditSuggestionView({ node, updateAttributes, deleteNode }: ReactNodeViewProps) {
+  const attrs = node.attrs as EditSuggestionAttrs
+  const [body, setBody] = useState(attrs.body ?? "")
+  const [category, setCategory] = useState<NovelSuggestionCategory>((attrs.category as NovelSuggestionCategory) ?? "other")
+  const [editing, setEditing] = useState(!attrs.body)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  useEffect(() => {
+    if (editing) {
+      textareaRef.current?.focus()
+    }
+  }, [editing])
+
+  function saveSuggestion() {
+    const nextBody = body.trim()
+
+    if (!nextBody) {
+      return
+    }
+
+    updateAttributes({
+      body: nextBody,
+      category,
+      updatedAt: new Date().toISOString(),
+    })
+    setEditing(false)
+  }
+
+  return (
+    <NodeViewWrapper
+      as="section"
+      className="my-5 rounded-lg border border-amber-200 bg-amber-50/80 p-4 text-sm shadow-xs"
+      contentEditable={false}
+      data-edit-suggestion-card=""
+    >
+      <div className="flex items-center justify-between gap-3 border-b border-amber-200/70 pb-3">
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <span className="font-medium text-amber-800">段落建议</span>
+          <span className="truncate text-xs text-amber-700/75">{attrs.createdBy?.nameSnapshot ?? "未知用户"}</span>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          {!editing && (
+            <button
+              className="inline-flex size-7 items-center justify-center rounded-md text-amber-700 hover:bg-amber-100"
+              type="button"
+              onClick={() => setEditing(true)}
+              title="修改建议"
+            >
+              <PencilLine className="size-4" />
+            </button>
+          )}
+          <button
+            className="inline-flex size-7 items-center justify-center rounded-md text-red-500 hover:bg-red-50"
+            type="button"
+            onClick={deleteNode}
+            title="删除建议"
+          >
+            <Trash2 className="size-4" />
+          </button>
+        </div>
+      </div>
+
+      {editing ? (
+        <div className="pt-3">
+          <select
+            className="mb-2 h-8 rounded-md border border-amber-200 bg-white px-2 text-xs text-amber-900 outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
+            value={category}
+            onChange={(event) => setCategory(event.target.value as NovelSuggestionCategory)}
+          >
+            <option value="structure">结构</option>
+            <option value="logic">逻辑</option>
+            <option value="rhythm">节奏</option>
+            <option value="expression">表达</option>
+            <option value="plot">情节</option>
+            <option value="character">角色</option>
+            <option value="worldbuilding">设定</option>
+            <option value="continuity">连续性</option>
+            <option value="other">其他</option>
+          </select>
+          <textarea
+            ref={textareaRef}
+            className="min-h-24 w-full resize-y rounded-md border border-amber-200 bg-white px-3 py-2 leading-6 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
+            value={body}
+            placeholder="输入段落级编辑建议"
+            onChange={(event) => setBody(event.target.value)}
+            onKeyDown={(event) => {
+              if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                saveSuggestion()
+              }
+            }}
+          />
+          <div className="mt-3 flex justify-end">
+            <button
+              className="inline-flex h-8 items-center gap-1 rounded-md bg-amber-500 px-3 text-sm font-medium text-white hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-60"
+              type="button"
+              disabled={!body.trim()}
+              onClick={saveSuggestion}
+            >
+              <Check className="size-4" />
+              保存建议
+            </button>
+          </div>
+        </div>
+      ) : (
+        <p className="whitespace-pre-wrap pt-3 leading-7 text-amber-950/80">{attrs.body}</p>
+      )}
+    </NodeViewWrapper>
+  )
+}
+
+export const EditSuggestion = TiptapNode.create({
+  name: "editSuggestion",
+  group: "block",
+  atom: true,
+  selectable: false,
+  draggable: false,
+
+  addAttributes() {
+    return {
+      id: { default: null },
+      anchorBlockId: { default: null },
+      position: { default: "after" },
+      category: { default: "other" },
+      body: { default: "" },
+      createdBy: { default: null },
+      createdAt: { default: null },
+      updatedAt: { default: null },
+    }
+  },
+
+  parseHTML() {
+    return [{ tag: "section[data-edit-suggestion]" }]
+  },
+
+  renderHTML({ HTMLAttributes }) {
+    return [
+      "section",
+      mergeAttributes(HTMLAttributes, {
+        "data-edit-suggestion": "",
+      }),
+      ["strong", {}, "段落建议"],
+      ["p", {}, HTMLAttributes.body ?? ""],
+    ]
+  },
+
+  addNodeView() {
+    return ReactNodeViewRenderer(EditSuggestionView)
+  },
+})
+
+export const ActiveBlock = Extension.create({
+  name: "activeBlock",
+
+  addProseMirrorPlugins() {
+    const activeBlockKey = new PluginKey<boolean>("novel-active-block")
+
+    return [
+      new Plugin<boolean>({
+        key: activeBlockKey,
+        state: {
+          init: () => false,
+          apply(transaction, value) {
+            const meta = transaction.getMeta(activeBlockKey)
+
+            return typeof meta === "boolean" ? meta : value
+          },
+        },
+        props: {
+          decorations(state) {
+            const focused = activeBlockKey.getState(state)
+            const { $from } = state.selection
+
+            if (!focused || $from.depth < 1) {
+              return null
+            }
+
+            return DecorationSet.create(state.doc, [
+              Decoration.node($from.before(1), $from.after(1), {
+                class: "is-active-block",
+              }),
+            ])
+          },
+          handleDOMEvents: {
+            focus: (view) => {
+              view.dispatch(view.state.tr.setMeta(activeBlockKey, true))
+              return false
+            },
+            blur: (view) => {
+              view.dispatch(view.state.tr.setMeta(activeBlockKey, false))
+              return false
+            },
+          },
+        },
+      }),
+    ]
+  },
+})
+
+export function setActiveDiscussion(editor: Editor, id: string | null) {
+  const current = discussionHighlightKey.getState(editor.state)?.activeId ?? null
+
+  if (current !== id) {
+    editor.view.dispatch(editor.state.tr.setMeta(discussionHighlightKey, { activeId: id }))
+  }
+}
+
+export const DiscussionHighlight = Extension.create({
+  name: "discussionHighlight",
+
+  addProseMirrorPlugins() {
+    return [
+      new Plugin<{ activeId: string | null }>({
+        key: discussionHighlightKey,
+        state: {
+          init: () => ({ activeId: null }),
+          apply(transaction, value) {
+            return transaction.getMeta(discussionHighlightKey) ?? value
+          },
+        },
+        props: {
+          decorations(state) {
+            const activeId = discussionHighlightKey.getState(state)?.activeId
+
+            if (!activeId) {
+              return null
+            }
+
+            const decorations: Decoration[] = []
+
+            state.doc.descendants((node, pos) => {
+              if (!node.isText) {
+                return
+              }
+
+              const matched = node.marks.some(
+                (mark) =>
+                  (mark.type.name === "comment" || mark.type.name === "revision") &&
+                  mark.attrs.id === activeId,
+              )
+
+              if (matched) {
+                decorations.push(Decoration.inline(pos, pos + node.nodeSize, { class: "is-discussion-active" }))
+              }
+            })
+
+            return DecorationSet.create(state.doc, decorations)
+          },
+        },
+      }),
+    ]
+  },
+})
+
+const PlaceholderExtension = Placeholder.configure({
+  placeholder: ({ node }) => (node.type.name === "heading" ? "输入标题" : "开始写作"),
+  includeChildren: true,
+})
+
+const HighlightExtension = Highlight.configure({
+  multicolor: true,
+})
+
+export function createNovelEditorExtensions(input: {
+  trackChanges: boolean
+  createdBy: NovelCreatedBy
+}): Extensions {
+  return [
+    NovelDocument,
+    NovelParagraph,
+    NovelHeading.configure({ levels: [1, 2, 3] }),
+    StarterKit.configure({
+      document: false,
+      paragraph: false,
+      heading: false,
+    }),
+    Underline,
+    TextStyle,
+    Color,
+    HighlightExtension,
+    CharacterCount,
+    PlaceholderExtension,
+    BlockId,
+    ActiveBlock,
+    CommentMark,
+    RevisionMark.configure({
+      enabled: input.trackChanges,
+      createdBy: input.createdBy,
+    }),
+    EditSuggestion,
+    DiscussionHighlight,
+  ]
+}
+
+export function isRevisionTrackingEnabled(editor: Editor | null) {
+  return Boolean(editor?.extensionManager.extensions.find((extension) => extension.name === "revision")?.options.enabled)
+}
+
+export function discussionButtonClass(active: boolean) {
+  return cn(
+    "inline-flex h-8 items-center justify-center rounded-md px-2 text-xs font-medium transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+    active ? "bg-primary/10 text-primary" : "text-muted-foreground",
+  )
+}

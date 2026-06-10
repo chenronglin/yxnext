@@ -12,6 +12,7 @@ import {
 } from "@/server/shared/invariant-keys"
 import { syncActiveProjectTimelineStatuses } from "@/server/shared/project-stage-timeline"
 import { buildDocxBuffer } from "@/server/shared/docx-export"
+import { createNovelDocV1, createNovelHeading, textToNovelParagraphs } from "@/lib/novel-doc"
 import type { ApiCurrentUser } from "@/server/shared/current-user"
 import type { DocStatus, HolderRole, ProjectLifecycle, ProjectStage, StagePlanStatus } from "@/types/domain"
 import type {
@@ -49,12 +50,8 @@ const stageCodeToUiStage: Record<"synopsis" | "outline" | "chapter" | "release",
 // 阶段计划只覆盖四个协作阶段；“完成”是项目生命周期状态，不出现在阶段计划表里。
 const editableStageOrder: Array<Exclude<ProjectStage, "completed">> = ["synopsis", "outline", "chapter", "release"]
 
-// 新建 Doc 草稿时沿用当前项目统一的最小文档根结构，保证前端编辑器后续可以直接接管。
+// 新建 Doc 草稿时固定生成 Novel Editor Tiptap JSON v1，旧的无 attrs 根结构不再用于新稿。
 const DEFAULT_CONTENT_SCHEMA_VERSION = 1
-const EMPTY_DOC_CONTENT: Prisma.InputJsonObject = {
-  type: "doc",
-  content: [],
-}
 
 const userSummarySelect = {
   userId: true,
@@ -474,22 +471,28 @@ function toProjectDetail(project: ProjectRecord): ProjectDetail {
   }
 }
 
-function textToParagraphNodes(text: string) {
-  // 质检初稿只需要一个可被编辑器识别的最小正文结构；
-  // 这里按空行切段，既能保留章节内容，又不会让导入逻辑依赖前端富文本节点实现。
-  return text
-    .split(/\n{2,}/)
-    .map((segment) => segment.trim())
-    .filter(Boolean)
-    .map((segment) => ({
-      type: "paragraph",
-      content: [{ type: "text", text: segment }],
-    }))
+function makeEmptyDocContent(input: {
+  docId: bigint
+  docType: "synopsis" | "outline" | "chapter" | "release"
+  title: string
+  now: Date
+}) {
+  return createNovelDocV1({
+    docId: input.docId,
+    docType: input.docType,
+    title: input.title,
+    createdAt: input.now,
+    updatedAt: input.now,
+  }) as unknown as Prisma.InputJsonObject
 }
 
-function makeReleaseDocContent(chapters: ChapterRecord[]) {
-  return {
-    type: "doc",
+function makeReleaseDocContent(chapters: ChapterRecord[], input: { docId: bigint; now: Date }) {
+  return createNovelDocV1({
+    docId: input.docId,
+    docType: "release",
+    title: "质检",
+    createdAt: input.now,
+    updatedAt: input.now,
     content: chapters.flatMap((chapter) => {
       const body =
         chapter.finalRevision?.cleanText ??
@@ -499,15 +502,11 @@ function makeReleaseDocContent(chapters: ChapterRecord[]) {
         ""
 
       return [
-        {
-          type: "heading",
-          attrs: { level: 1 },
-          content: [{ type: "text", text: chapter.title }],
-        },
-        ...textToParagraphNodes(body),
+        createNovelHeading({ text: chapter.title, level: 1 }),
+        ...textToNovelParagraphs(body),
       ]
     }),
-  } satisfies Prisma.InputJsonObject
+  }) as unknown as Prisma.InputJsonObject
 }
 
 function pickRevisionExportText(doc: ChapterRecord | null | undefined) {
@@ -780,6 +779,7 @@ export async function createProjectChapter(actor: ApiCurrentUser, projectIdValue
   const projectId = parseBigIntId(projectIdValue, "项目 ID")
   const title = trimToNull(input.title)
   const chapterNo = input.chapterNo ?? null
+  const now = new Date()
 
   if (!title) {
     throw new ApiError({
@@ -847,7 +847,12 @@ export async function createProjectChapter(actor: ApiCurrentUser, projectIdValue
         ownerUserId: project.authorId,
         baseRevisionId: null,
         contentSchemaVersion: DEFAULT_CONTENT_SCHEMA_VERSION,
-        contentJson: EMPTY_DOC_CONTENT,
+        contentJson: makeEmptyDocContent({
+          docId: doc.docId,
+          docType: "chapter",
+          title,
+          now,
+        }),
         wordCount: 0,
         plainText: null,
         cleanText: null,
@@ -1126,7 +1131,6 @@ export async function unlockProjectQc(actor: ApiCurrentUser, projectIdValue: str
       .filter((item) => item.trim())
       .join("\n\n")
       .trim()
-    const releaseContent = makeReleaseDocContent(chapterDocs)
     const releaseWordCount = chapterDocs.reduce(
       (sum, doc) => sum + (doc.finalRevision?.wordCount ?? doc.currentWordCount),
       0,
@@ -1159,6 +1163,11 @@ export async function unlockProjectQc(actor: ApiCurrentUser, projectIdValue: str
         },
       })
 
+      const releaseContent = makeReleaseDocContent(chapterDocs, {
+        docId: releaseDoc.docId,
+        now,
+      })
+
       const draft = await createActiveDraft(tx, {
         docId: releaseDoc.docId,
         ownerRole: "author",
@@ -1188,6 +1197,10 @@ export async function unlockProjectQc(actor: ApiCurrentUser, projectIdValue: str
       releaseDocId = releaseDoc.docId
     } else {
       releaseDocId = existingReleaseDoc.docId
+      const releaseContent = makeReleaseDocContent(chapterDocs, {
+        docId: existingReleaseDoc.docId,
+        now,
+      })
 
       if (existingReleaseDoc.activeDraft?.status === "active") {
         await tx.docCurrentDraft.update({
