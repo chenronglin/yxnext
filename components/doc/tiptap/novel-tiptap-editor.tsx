@@ -139,7 +139,7 @@ function SelectionBubble({
           >
             <MessageSquarePlus className="size-4 text-amber-600" />
           </ToolbarButton>
-          <ToolbarButton title="段落建议" onClick={() => insertEditSuggestionAfterSelection(editor, createdBy)}>
+          <ToolbarButton title="编辑建议" onClick={() => insertEditSuggestionAfterSelection(editor, createdBy)}>
             <Quote className="size-4 text-amber-600" />
           </ToolbarButton>
           {revisionTracking && (

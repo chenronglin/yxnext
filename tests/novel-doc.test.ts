@@ -45,7 +45,7 @@ describe("Novel Editor Tiptap JSON v1", () => {
     expect(String(fixed.content[1].attrs?.id)).toMatch(/^block_p_/)
   })
 
-  it("按清稿规则计算正文、字数和协作标记计数", () => {
+  it("按清稿规则计算正文、字数和批注修订计数", () => {
     const doc = makeDoc([
       {
         type: "paragraph",

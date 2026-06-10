@@ -94,7 +94,7 @@ export function DocCleanView({
       <PageHeader
         breadcrumb={[projectTitle, typeLabel, "阅读模式"]}
         title="阅读模式 · Clean 正文"
-        description="去除全部协作标记后的正文视角"
+        description="去除全部批注修订标记后的正文视角"
         actions={
           <div className="flex flex-wrap gap-2">
             {revisionId ? (

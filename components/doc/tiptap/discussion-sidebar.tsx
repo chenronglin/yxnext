@@ -4,16 +4,16 @@ import type { Editor } from "@tiptap/core"
 import type { Mark as ProseMirrorMark } from "@tiptap/pm/model"
 import { TextSelection } from "@tiptap/pm/state"
 import type { EditorState, Transaction } from "@tiptap/pm/state"
-import { Handshake, MessageSquareText, Minus, Plus, Replace, Trash2 } from "lucide-react"
+import { MessageSquareText, Minus, Plus, Replace, Trash2 } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
 
 import { setActiveDiscussion } from "@/components/doc/tiptap/extensions"
 import { Card } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
 
-type DiscussionSource = "comment" | "revision" | "suggestion"
+type DiscussionSource = "comment" | "revision"
 
-type DiscussionKind = "comment" | "insert" | "delete" | "replace" | "suggestion"
+type DiscussionKind = "comment" | "insert" | "delete" | "replace"
 
 type RevisionRole = "inserted" | "deleted" | "original"
 
@@ -93,7 +93,6 @@ function getRevisionLabel(kind: DiscussionKind) {
   if (kind === "insert") return "新增"
   if (kind === "delete") return "删除"
   if (kind === "replace") return "替换"
-  if (kind === "suggestion") return "建议"
   return "批注"
 }
 
@@ -123,33 +122,8 @@ function addSegment(item: DiscussionItem, segment: DiscussionSegment) {
 function collectDiscussionItems(state: EditorState) {
   const itemsByKey = new Map<string, DiscussionItem>()
 
+  // 右侧面板只承载批注和修订；编辑建议作为编辑区内的块级内容保留在正文画布中，避免和审核标记混在一起。
   state.doc.descendants((node, pos) => {
-    if (node.type.name === "editSuggestion") {
-      const id = asString(node.attrs.id)
-
-      if (!id) {
-        return
-      }
-
-      itemsByKey.set(keyFor("suggestion", id), {
-        key: keyFor("suggestion", id),
-        source: "suggestion",
-        id,
-        kind: "suggestion",
-        label: "建议",
-        from: pos,
-        to: pos + node.nodeSize,
-        quote: asString(node.attrs.body),
-        body: asString(node.attrs.body),
-        actorName:
-          node.attrs.createdBy && typeof node.attrs.createdBy === "object" && "nameSnapshot" in node.attrs.createdBy
-            ? asString((node.attrs.createdBy as { nameSnapshot?: unknown }).nameSnapshot)
-            : "",
-        segments: [],
-      })
-      return
-    }
-
     if (!node.isText || !node.text) {
       return
     }
@@ -285,11 +259,6 @@ function selectDiscussionItem(editor: Editor, item: DiscussionItem) {
 }
 
 function removeDiscussionMark(editor: Editor, item: DiscussionItem) {
-  if (item.source === "suggestion") {
-    editor.chain().focus().deleteRange({ from: item.from, to: item.to }).run()
-    return
-  }
-
   const markName = item.source === "comment" ? "comment" : "revision"
   const tr = editor.state.tr
   let removed = false
@@ -323,7 +292,6 @@ function itemTone(kind: DiscussionKind, active: boolean) {
   }
 
   if (kind === "comment") return cn(base, "border-amber-200 bg-amber-50/45 hover:bg-amber-50")
-  if (kind === "suggestion") return cn(base, "border-yellow-200 bg-yellow-50/45 hover:bg-yellow-50")
   if (kind === "insert") return cn(base, "border-emerald-200 bg-emerald-50/45 hover:bg-emerald-50")
   if (kind === "delete") return cn(base, "border-red-200 bg-red-50/40 hover:bg-red-50")
   return cn(base, "border-orange-200 bg-orange-50/45 hover:bg-orange-50")
@@ -331,14 +299,13 @@ function itemTone(kind: DiscussionKind, active: boolean) {
 
 function badgeTone(kind: DiscussionKind) {
   if (kind === "comment") return "border-amber-200 bg-amber-100 text-amber-800"
-  if (kind === "suggestion") return "border-yellow-200 bg-yellow-100 text-yellow-800"
   if (kind === "insert") return "border-emerald-200 bg-emerald-100 text-emerald-800"
   if (kind === "delete") return "border-red-200 bg-red-100 text-red-700"
   return "border-orange-200 bg-orange-100 text-orange-800"
 }
 
 function KindIcon({ kind }: { kind: DiscussionKind }) {
-  const Icon = kind === "comment" ? MessageSquareText : kind === "suggestion" ? Handshake : kind === "insert" ? Plus : kind === "delete" ? Minus : Replace
+  const Icon = kind === "comment" ? MessageSquareText : kind === "insert" ? Plus : kind === "delete" ? Minus : Replace
 
   return <Icon className="size-3.5" />
 }
@@ -412,8 +379,7 @@ export function DiscussionSidebar({ editor }: { editor: Editor | null }) {
   const summary = useMemo(
     () => ({
       comments: items.filter((item) => item.kind === "comment").length,
-      suggestions: items.filter((item) => item.kind === "suggestion").length,
-      revisions: items.filter((item) => item.kind !== "comment" && item.kind !== "suggestion").length,
+      revisions: items.filter((item) => item.kind !== "comment").length,
     }),
     [items],
   )
@@ -421,17 +387,16 @@ export function DiscussionSidebar({ editor }: { editor: Editor | null }) {
   return (
     <Card className="sticky top-4 max-h-[calc(100vh-6rem)] gap-0 overflow-hidden p-0">
       <div className="border-b border-border px-4 py-3">
-        <h2 className="text-sm font-semibold text-foreground">协作标记</h2>
+        <h2 className="text-sm font-semibold text-foreground">批注修订</h2>
         <p className="mt-1 text-xs text-muted-foreground">
           {summary.comments} 条批注 · {summary.revisions} 条修订
-          {summary.suggestions > 0 ? ` · ${summary.suggestions} 条建议` : ""}
         </p>
       </div>
 
       <div className="max-h-[calc(100vh-12rem)] overflow-y-auto p-3">
         {items.length === 0 ? (
           <div className="rounded-lg border border-dashed border-border p-5 text-center text-sm leading-6 text-muted-foreground">
-            暂无批注、修订或建议。
+            暂无批注或修订。
           </div>
         ) : (
           <div className="grid gap-2.5">

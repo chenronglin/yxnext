@@ -139,7 +139,7 @@ export function DocVersionDetail({
           </Card>
 
           <Card className="p-6">
-            {clean && <p className="mb-4 text-xs text-muted-foreground">当前为 Clean 阅读模式，正文已隐藏协作标记。</p>}
+            {clean && <p className="mb-4 text-xs text-muted-foreground">当前为 Clean 阅读模式，正文已隐藏批注修订标记。</p>}
             <article className="mx-auto flex max-w-3xl flex-col gap-5">
               {bodyText
                 .split(/\n{2,}/)

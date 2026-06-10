@@ -35,10 +35,16 @@ type RevisionPluginState = {
   lastId: string | null
   lastGroupId: string | null
   lastPos: number | null
-  kind?: NovelRevisionKind
-  role?: NovelRevisionRole
-  from?: number
-  to?: number
+}
+
+type RevisionPluginMeta = {
+  id: string
+  groupId: string
+  kind: NovelRevisionKind
+  role: NovelRevisionRole
+  from: number
+  to: number
+  composition?: boolean
 }
 
 type TextRange = {
@@ -48,6 +54,7 @@ type TextRange = {
 
 type CompositionBase = TextRange & {
   slice: Slice
+  existingInsertedAttrs: RevisionAttributes | null
 }
 
 type RevisionTrackingOptions = {
@@ -150,7 +157,12 @@ function isInsertedRevisionMark(mark: ProseMirrorMark): mark is ProseMirrorMark 
   return isRevisionMark(mark) && mark.attrs.role === "inserted" && (mark.attrs.kind === "insert" || mark.attrs.kind === "replace")
 }
 
-function findMergeableInsertedRevision(state: EditorState, pos: number) {
+function hasSameInsertedRevisionIdentity(left: RevisionAttributes, right: RevisionAttributes) {
+  // 同一段 inserted 修订只以 id/kind/role 判断身份；createdBy/createdAt 是审计快照，不参与边界归属判断。
+  return left.id === right.id && left.kind === right.kind && left.role === "inserted" && right.role === "inserted"
+}
+
+export function findMergeableInsertedRevision(state: EditorState, pos: number) {
   if (pos <= 0 || pos > state.doc.content.size) {
     return null
   }
@@ -158,19 +170,77 @@ function findMergeableInsertedRevision(state: EditorState, pos: number) {
   return state.doc.resolve(pos).nodeBefore?.marks.find(isInsertedRevisionMark)?.attrs ?? null
 }
 
+export function findInsertedRevisionAtPosition(state: EditorState, pos: number) {
+  const $pos = state.doc.resolve(clampPosition(state, pos))
+  const before = $pos.nodeBefore?.marks.find(isInsertedRevisionMark)?.attrs ?? null
+  const after = $pos.nodeAfter?.marks.find(isInsertedRevisionMark)?.attrs ?? null
+
+  if (before && after && hasSameInsertedRevisionIdentity(before, after)) {
+    return before
+  }
+
+  // 光标落在 inserted 文本的开头或结尾时，ProseMirror 只会在一侧暴露 mark；仍应视作编辑同一条修订。
+  return before ?? after
+}
+
+export function findInsertedRevisionCoveringRange(state: EditorState, range: TextRange) {
+  if (range.from === range.to) {
+    return findInsertedRevisionAtPosition(state, range.from)
+  }
+
+  let insertedAttrs: RevisionAttributes | null = null
+  let hasText = false
+  let coveredBySameRevision = true
+
+  state.doc.nodesBetween(range.from, range.to, (node) => {
+    if (!node.isText || !node.text) {
+      return coveredBySameRevision
+    }
+
+    hasText = true
+
+    const markAttrs = node.marks.find(isInsertedRevisionMark)?.attrs ?? null
+
+    if (!markAttrs) {
+      coveredBySameRevision = false
+      return false
+    }
+
+    if (!insertedAttrs) {
+      insertedAttrs = markAttrs
+      return true
+    }
+
+    coveredBySameRevision = hasSameInsertedRevisionIdentity(insertedAttrs, markAttrs)
+    return coveredBySameRevision
+  })
+
+  return hasText && coveredBySameRevision ? insertedAttrs : null
+}
+
 function makeRevisionAttrs(
   options: RevisionTrackingOptions,
   kind: NovelRevisionKind,
   role: NovelRevisionRole,
-  groupId = createPrefixedId("revision_group"),
+  groupId?: string | null,
+  id?: string | null,
 ): RevisionAttributes {
   return {
-    id: createPrefixedId("revision"),
-    groupId,
+    id: id ?? createPrefixedId("revision"),
+    groupId: groupId ?? createPrefixedId("revision_group"),
     kind,
     role,
     createdBy: options.createdBy ?? fallbackActor(),
     createdAt: new Date().toISOString(),
+  }
+}
+
+export function makeOriginalRevisionAttrs(insertedAttrs: RevisionAttributes): RevisionAttributes {
+  // 替换修订必须让 inserted/original 共用同一个 id，讨论栏和清稿投影都按 id 聚合。
+  // 这里只改 role，其余 id、kind、groupId、createdBy、createdAt 都沿用 inserted 段。
+  return {
+    ...insertedAttrs,
+    role: "original",
   }
 }
 
@@ -207,7 +277,33 @@ function createMarkedText(state: EditorState, text: string, revisionMark: ProseM
   return state.schema.text(text, revisionMark.addToSet(getTypingMarks(state)))
 }
 
-function applyInsertedText(
+function applyTextWithinInsertedRevision(view: EditorView, text: string, range: TextRange, insertedAttrs: RevisionAttributes) {
+  const { state } = view
+  const insertedMark = createRevisionMark(state, insertedAttrs)
+
+  if (!insertedMark) {
+    return false
+  }
+
+  const textNode = createMarkedText(state, text, insertedMark)
+  const tr = state.tr.replaceWith(range.from, range.to, textNode)
+  const insertedTo = range.from + textNode.nodeSize
+
+  tr.setSelection(TextSelection.create(tr.doc, insertedTo))
+  tr.setMeta(revisionTrackingKey, {
+    id: insertedAttrs.id,
+    groupId: insertedAttrs.groupId,
+    kind: insertedAttrs.kind,
+    role: "inserted",
+    from: range.from,
+    to: insertedTo,
+  } satisfies RevisionPluginMeta)
+
+  view.dispatch(tr.scrollIntoView())
+  return true
+}
+
+export function applyInsertedText(
   view: EditorView,
   text: string,
   range: TextRange,
@@ -219,6 +315,14 @@ function applyInsertedText(
   }
 
   const { state } = view
+  const existingInsertedAttrs = findInsertedRevisionCoveringRange(state, range)
+
+  if (existingInsertedAttrs) {
+    // 已有新增/替换文本内部的再次输入，本质是在修改同一个 inserted 修订。
+    // 这里直接替换原选区并沿用原 attrs，避免生成新的 revision，或把旧 inserted 文本误标成 original。
+    return applyTextWithinInsertedRevision(view, text, range, existingInsertedAttrs)
+  }
+
   const isReplacement = inputOptions.forceReplace === true || range.from !== range.to
   const insertedAttrs = resolveInsertedRevision(state, range.from, options, !isReplacement && inputOptions.allowMerge, isReplacement)
   const insertedKind = insertedAttrs.kind
@@ -236,10 +340,7 @@ function applyInsertedText(
   const insertedTo = range.from + textNode.nodeSize
 
   if (isReplacement && rangeContainsText(state, range)) {
-    const originalMark = createRevisionMark(
-      state,
-      makeRevisionAttrs(options, insertedKind, "original", insertedAttrs.groupId),
-    )
+    const originalMark = createRevisionMark(state, makeOriginalRevisionAttrs(insertedAttrs))
 
     if (!originalMark) {
       return false
@@ -253,14 +354,13 @@ function applyInsertedText(
 
   tr.setSelection(TextSelection.create(tr.doc, insertedTo))
   tr.setMeta(revisionTrackingKey, {
-    lastId: insertedAttrs.id,
-    lastGroupId: insertedAttrs.groupId,
-    lastPos: insertedTo,
+    id: insertedAttrs.id,
+    groupId: insertedAttrs.groupId,
     kind: insertedKind,
     role: "inserted",
     from: range.from,
     to: insertedTo,
-  })
+  } satisfies RevisionPluginMeta)
 
   view.dispatch(tr.scrollIntoView())
   return true
@@ -277,8 +377,14 @@ function markDeletedRange(
   }
 
   const pluginState = revisionTrackingKey.getState(state)
-  const canReuseLastGroup = pluginState?.lastGroupId && (range.from === pluginState.lastPos || range.to === pluginState.lastPos)
-  const attrs = makeRevisionAttrs(options, "delete", "deleted", canReuseLastGroup ? pluginState.lastGroupId! : undefined)
+  const canReuseLastRevision = Boolean(pluginState?.lastId && (range.from === pluginState.lastPos || range.to === pluginState.lastPos))
+  const attrs = makeRevisionAttrs(
+    options,
+    "delete",
+    "deleted",
+    canReuseLastRevision ? pluginState?.lastGroupId : undefined,
+    canReuseLastRevision ? pluginState?.lastId : undefined,
+  )
   const mark = createRevisionMark(state, attrs)
 
   if (!mark) {
@@ -289,10 +395,13 @@ function markDeletedRange(
 
   tr.setSelection(TextSelection.create(tr.doc, range.from))
   tr.setMeta(revisionTrackingKey, {
-    lastId: attrs.id,
-    lastGroupId: attrs.groupId,
-    lastPos: range.from,
-  })
+    id: attrs.id,
+    groupId: attrs.groupId,
+    kind: "delete",
+    role: "deleted",
+    from: range.from,
+    to: range.to,
+  } satisfies RevisionPluginMeta)
   dispatch?.(tr.scrollIntoView())
 
   return true
@@ -320,6 +429,21 @@ function posFromDOM(view: EditorView, node: Node | null, offset: number, bias: n
   try {
     return view.posAtDOM(node, offset, bias)
   } catch {
+    if (node === view.dom) {
+      return offset <= 0 ? 0 : view.state.doc.content.size
+    }
+
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      const childCount = node.childNodes.length
+      const safeOffset = Math.max(0, Math.min(offset, childCount))
+
+      try {
+        return view.posAtDOM(node, safeOffset, bias)
+      } catch {
+        return null
+      }
+    }
+
     return null
   }
 }
@@ -353,6 +477,30 @@ function finalizeComposition(view: EditorView, base: CompositionBase, options: R
     return
   }
 
+  if (base.existingInsertedAttrs) {
+    const insertedMark = createRevisionMark(state, base.existingInsertedAttrs)
+
+    if (!insertedMark) {
+      return
+    }
+
+    const tr = state.tr.addMark(insertedRange.from, insertedRange.to, insertedMark)
+    const cursorPos = insertedRange.to
+
+    tr.setSelection(TextSelection.create(tr.doc, cursorPos))
+    tr.setMeta(revisionTrackingKey, {
+      id: base.existingInsertedAttrs.id,
+      groupId: base.existingInsertedAttrs.groupId,
+      kind: base.existingInsertedAttrs.kind,
+      role: "inserted",
+      from: insertedRange.from,
+      to: cursorPos,
+      composition: true,
+    } satisfies RevisionPluginMeta)
+    view.dispatch(tr.scrollIntoView())
+    return
+  }
+
   const isReplacement = base.from !== base.to
   const insertedAttrs = resolveInsertedRevision(state, insertedRange.from, options, !isReplacement, isReplacement)
   const insertedKind = insertedAttrs.kind
@@ -365,7 +513,7 @@ function finalizeComposition(view: EditorView, base: CompositionBase, options: R
   const tr = state.tr.addMark(insertedRange.from, insertedRange.to, insertedMark)
 
   if (isReplacement && base.slice.size > 0) {
-    const originalMark = createRevisionMark(state, makeRevisionAttrs(options, insertedKind, "original", insertedAttrs.groupId))
+    const originalMark = createRevisionMark(state, makeOriginalRevisionAttrs(insertedAttrs))
 
     if (!originalMark) {
       return
@@ -382,14 +530,14 @@ function finalizeComposition(view: EditorView, base: CompositionBase, options: R
 
   tr.setSelection(TextSelection.create(tr.doc, cursorPos))
   tr.setMeta(revisionTrackingKey, {
-    lastId: insertedAttrs.id,
-    lastGroupId: insertedAttrs.groupId,
-    lastPos: cursorPos,
+    id: insertedAttrs.id,
+    groupId: insertedAttrs.groupId,
     kind: insertedKind,
     role: "inserted",
     from: insertedRange.from,
     to: cursorPos,
-  })
+    composition: true,
+  } satisfies RevisionPluginMeta)
   view.dispatch(tr.scrollIntoView())
 }
 
@@ -595,14 +743,18 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
         state: {
           init: () => ({ lastId: null, lastGroupId: null, lastPos: null }),
           apply(transaction, value, _oldState, newState) {
-            const meta = transaction.getMeta(revisionTrackingKey) as RevisionPluginState | undefined
-
-            if (meta) {
-              return meta
+            if (transaction.selectionSet && !transaction.docChanged && !transaction.getMeta(revisionTrackingKey)) {
+              return { lastId: null, lastGroupId: null, lastPos: null }
             }
 
-            if (transaction.selectionSet && !transaction.docChanged) {
-              return { lastId: null, lastGroupId: null, lastPos: null }
+            const meta = transaction.getMeta(revisionTrackingKey) as RevisionPluginMeta | undefined
+
+            if (meta?.id) {
+              return {
+                lastId: meta.id,
+                lastGroupId: meta.groupId,
+                lastPos: meta.kind === "delete" ? meta.from : meta.to,
+              }
             }
 
             if (transaction.docChanged) {
@@ -661,6 +813,8 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
               compositionBase = {
                 ...range,
                 slice: view.state.doc.slice(range.from, range.to),
+                // compositionend 发生时文档已被浏览器改写，必须在开始时记录是否处在已有 inserted 修订内。
+                existingInsertedAttrs: findInsertedRevisionCoveringRange(view.state, range),
               }
 
               if (compositionTimer) {
@@ -779,7 +933,7 @@ function EditSuggestionView({ node, updateAttributes, deleteNode }: ReactNodeVie
     >
       <div className="flex items-center justify-between gap-3 border-b border-amber-200/70 pb-3">
         <div className="flex min-w-0 flex-col gap-0.5">
-          <span className="font-medium text-amber-800">段落建议</span>
+          <span className="font-medium text-amber-800">编辑建议</span>
           <span className="truncate text-xs text-amber-700/75">{attrs.createdBy?.nameSnapshot ?? "未知用户"}</span>
         </div>
         <div className="flex shrink-0 items-center gap-1">
@@ -825,7 +979,7 @@ function EditSuggestionView({ node, updateAttributes, deleteNode }: ReactNodeVie
             ref={textareaRef}
             className="min-h-24 w-full resize-y rounded-md border border-amber-200 bg-white px-3 py-2 leading-6 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
             value={body}
-            placeholder="输入段落级编辑建议"
+            placeholder="输入编辑建议"
             onChange={(event) => setBody(event.target.value)}
             onKeyDown={(event) => {
               if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
@@ -882,7 +1036,7 @@ export const EditSuggestion = TiptapNode.create({
       mergeAttributes(HTMLAttributes, {
         "data-edit-suggestion": "",
       }),
-      ["strong", {}, "段落建议"],
+      ["strong", {}, "编辑建议"],
       ["p", {}, HTMLAttributes.body ?? ""],
     ]
   },
