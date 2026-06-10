@@ -466,10 +466,22 @@ function rangeFromDOMSelection(view: EditorView) {
 }
 
 function captureRange(view: EditorView): TextRange {
-  return rangeFromDOMSelection(view) ?? rangeFromSelection(view.state, view.state.selection)
+  // 正常情况下优先用 DOM 选区：compositionstart 时浏览器光标可能领先于 ProseMirror 的 state.selection。
+  // 但 view 尚未挂载或 root 不可用时（headless/测试环境）访问 DOM 选区会抛错，此时退回 ProseMirror 选区。
+  try {
+    const domRange = rangeFromDOMSelection(view)
+
+    if (domRange) {
+      return domRange
+    }
+  } catch {
+    // 忽略：交由下方的 ProseMirror 选区兜底
+  }
+
+  return rangeFromSelection(view.state, view.state.selection)
 }
 
-function finalizeComposition(view: EditorView, base: CompositionBase, options: RevisionTrackingOptions) {
+export function finalizeComposition(view: EditorView, base: CompositionBase, options: RevisionTrackingOptions) {
   const { state } = view
   const insertedRange = normalizeRange(state, base.from, state.selection.from)
 
@@ -539,6 +551,85 @@ function finalizeComposition(view: EditorView, base: CompositionBase, options: R
     composition: true,
   } satisfies RevisionPluginMeta)
   view.dispatch(tr.scrollIntoView())
+}
+
+// 输入法（composition）状态机：每个编辑器实例独享一份闭包状态。
+// 抽成工厂有两个目的：一是让 handleTextInput/handlePaste 能共享同一个 isComposing 标志；
+// 二是把“连打丢失修订”的修复逻辑收敛到一处，并可在单测里用假定时器直接驱动验证。
+export function createRevisionCompositionController(getOptions: () => RevisionTrackingOptions) {
+  let isComposing = false
+  let compositionBase: CompositionBase | null = null
+  let compositionTimer: ReturnType<typeof setTimeout> | null = null
+
+  function flushPendingComposition(view: EditorView) {
+    if (!compositionTimer) {
+      return
+    }
+
+    // IME 连打时，上一段 compositionend 排进 setTimeout 的 finalize 可能还没执行。
+    // 旧逻辑在 compositionstart 里直接 clearTimeout 丢弃它，导致上一段输入永远不被标记成修订
+    // （表现为“在新增/替换区域继续输入会丢失之前的修订”）。这里改为先把上一段补打上再开始新一段：
+    // 此刻新 composition 尚未输入字符，文档与选区仍停在上一段末尾，finalizeComposition 的范围计算依旧准确。
+    clearTimeout(compositionTimer)
+    compositionTimer = null
+
+    if (compositionBase) {
+      finalizeComposition(view, compositionBase, getOptions())
+      compositionBase = null
+    }
+  }
+
+  return {
+    // handleTextInput/handlePaste 用它判断是否处在输入法会话中（此时不能再走直接插入路径）。
+    isActive() {
+      return isComposing
+    },
+    handleCompositionStart(view: EditorView) {
+      const options = getOptions()
+
+      if (!options.enabled) {
+        return false
+      }
+
+      flushPendingComposition(view)
+
+      const range = captureRange(view)
+
+      isComposing = true
+      compositionBase = {
+        ...range,
+        slice: view.state.doc.slice(range.from, range.to),
+        // compositionend 发生时文档已被浏览器改写，必须在开始时记录是否处在已有 inserted 修订内。
+        existingInsertedAttrs: findInsertedRevisionCoveringRange(view.state, range),
+      }
+
+      return false
+    },
+    handleCompositionEnd(view: EditorView) {
+      const options = getOptions()
+
+      if (!options.enabled || !compositionBase) {
+        isComposing = false
+        return false
+      }
+
+      const base = compositionBase
+
+      // 仍用 setTimeout(0) 等浏览器把 composition 的最终文本同步进 ProseMirror，再据此计算插入范围。
+      // 与旧逻辑的区别在于：若下一段输入在它执行前到来，会由 flushPendingComposition 先行补打，而不是被丢弃。
+      compositionTimer = setTimeout(() => {
+        isComposing = false
+        compositionTimer = null
+        finalizeComposition(view, base, options)
+
+        if (compositionBase === base) {
+          compositionBase = null
+        }
+      }, 0)
+
+      return false
+    },
+  }
 }
 
 export const NovelDocument = Document.extend({
@@ -733,9 +824,7 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
   },
 
   addProseMirrorPlugins() {
-    let isComposing = false
-    let compositionBase: CompositionBase | null = null
-    let compositionTimer: ReturnType<typeof setTimeout> | null = null
+    const composition = createRevisionCompositionController(() => this.options)
 
     return [
       new Plugin<RevisionPluginState>({
@@ -766,14 +855,14 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
         },
         props: {
           handleTextInput: (view, from, to, text) => {
-            if (isComposing || view.composing) {
+            if (composition.isActive() || view.composing) {
               return false
             }
 
             return applyInsertedText(view, text, normalizeRange(view.state, from, to), this.options)
           },
           handlePaste: (view, event) => {
-            if (isComposing || view.composing) {
+            if (composition.isActive() || view.composing) {
               return false
             }
 
@@ -802,47 +891,8 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
             return markDeletedRange(state, targetRange, this.options, view.dispatch)
           },
           handleDOMEvents: {
-            compositionstart: (view) => {
-              if (!this.options.enabled) {
-                return false
-              }
-
-              const range = captureRange(view)
-
-              isComposing = true
-              compositionBase = {
-                ...range,
-                slice: view.state.doc.slice(range.from, range.to),
-                // compositionend 发生时文档已被浏览器改写，必须在开始时记录是否处在已有 inserted 修订内。
-                existingInsertedAttrs: findInsertedRevisionCoveringRange(view.state, range),
-              }
-
-              if (compositionTimer) {
-                clearTimeout(compositionTimer)
-                compositionTimer = null
-              }
-
-              return false
-            },
-            compositionend: (view) => {
-              if (!this.options.enabled || !compositionBase) {
-                isComposing = false
-                return false
-              }
-
-              const base = compositionBase
-
-              compositionTimer = setTimeout(() => {
-                isComposing = false
-                finalizeComposition(view, base, this.options)
-
-                if (compositionBase === base) {
-                  compositionBase = null
-                }
-              }, 0)
-
-              return false
-            },
+            compositionstart: (view) => composition.handleCompositionStart(view),
+            compositionend: (view) => composition.handleCompositionEnd(view),
           },
         },
       }),
