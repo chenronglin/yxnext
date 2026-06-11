@@ -366,7 +366,7 @@ export function applyInsertedText(
   return true
 }
 
-function markDeletedRange(
+export function markDeletedRange(
   state: EditorState,
   range: TextRange,
   options: RevisionTrackingOptions,
@@ -376,34 +376,81 @@ function markDeletedRange(
     return false
   }
 
-  const pluginState = revisionTrackingKey.getState(state)
-  const canReuseLastRevision = Boolean(pluginState?.lastId && (range.from === pluginState.lastPos || range.to === pluginState.lastPos))
-  const attrs = makeRevisionAttrs(
-    options,
-    "delete",
-    "deleted",
-    canReuseLastRevision ? pluginState?.lastGroupId : undefined,
-    canReuseLastRevision ? pluginState?.lastId : undefined,
-  )
-  const mark = createRevisionMark(state, attrs)
+  const tr = state.tr
+  const segments: { from: number; to: number; isInserted: boolean }[] = []
 
-  if (!mark) {
+  state.doc.nodesBetween(range.from, range.to, (node, pos) => {
+    if (!node.isText) {
+      return true
+    }
+
+    const start = Math.max(range.from, pos)
+    const end = Math.min(range.to, pos + node.nodeSize)
+    if (start < end) {
+      const isInserted = node.marks.some(isInsertedRevisionMark)
+      segments.push({ from: start, to: end, isInserted })
+    }
+    return true
+  })
+
+  if (segments.length === 0) {
     return false
   }
 
-  const tr = state.tr.addMark(range.from, range.to, mark)
+  const pluginState = revisionTrackingKey.getState(state)
+  let lastId = pluginState?.lastId
+  let lastGroupId = pluginState?.lastGroupId
+  let lastPos = pluginState?.lastPos
 
-  tr.setSelection(TextSelection.create(tr.doc, range.from))
-  tr.setMeta(revisionTrackingKey, {
-    id: attrs.id,
-    groupId: attrs.groupId,
-    kind: "delete",
-    role: "deleted",
-    from: range.from,
-    to: range.to,
-  } satisfies RevisionPluginMeta)
+  let hasChanges = false
+  let lastMarkedAttrs: RevisionAttributes | null = null
+
+  // 从右向左处理，避免删除文本导致左侧未处理区段的 position 偏移失效
+  for (let i = segments.length - 1; i >= 0; i--) {
+    const { from, to, isInserted } = segments[i]
+    if (isInserted) {
+      tr.delete(from, to)
+      hasChanges = true
+    } else {
+      const canReuseLastRevision = Boolean(lastId && (from === lastPos || to === lastPos))
+      const attrs = makeRevisionAttrs(
+        options,
+        "delete",
+        "deleted",
+        canReuseLastRevision ? lastGroupId : undefined,
+        canReuseLastRevision ? lastId : undefined,
+      )
+      const mark = createRevisionMark(state, attrs)
+      if (mark) {
+        tr.addMark(from, to, mark)
+        lastId = attrs.id
+        lastGroupId = attrs.groupId
+        lastPos = from
+        lastMarkedAttrs = attrs
+        hasChanges = true
+      }
+    }
+  }
+
+  if (!hasChanges) {
+    return false
+  }
+
+  const resolvedFrom = tr.mapping.map(range.from)
+  tr.setSelection(TextSelection.create(tr.doc, resolvedFrom))
+
+  if (lastMarkedAttrs) {
+    tr.setMeta(revisionTrackingKey, {
+      id: lastMarkedAttrs.id,
+      groupId: lastMarkedAttrs.groupId,
+      kind: "delete",
+      role: "deleted",
+      from: resolvedFrom,
+      to: tr.mapping.map(range.to),
+    } satisfies RevisionPluginMeta)
+  }
+
   dispatch?.(tr.scrollIntoView())
-
   return true
 }
 
@@ -715,12 +762,44 @@ export const CommentMark = Mark.create({
 
   addAttributes() {
     return {
-      id: { default: null },
-      kind: { default: "normal" },
-      body: { default: "" },
-      createdBy: { default: null },
-      createdAt: { default: null },
-      updatedAt: { default: null },
+      id: {
+        default: null,
+        parseHTML: (element) => element.getAttribute("data-comment-id"),
+        renderHTML: (attributes) => (attributes.id ? { "data-comment-id": attributes.id } : {}),
+      },
+      kind: {
+        default: "normal",
+        parseHTML: (element) => element.getAttribute("data-comment-kind") || "normal",
+        renderHTML: (attributes) => (attributes.kind ? { "data-comment-kind": attributes.kind } : {}),
+      },
+      body: {
+        default: "",
+        parseHTML: (element) => element.getAttribute("data-comment-body") || element.getAttribute("title") || "",
+        renderHTML: (attributes) => (attributes.body ? { "data-comment-body": attributes.body, title: attributes.body } : {}),
+      },
+      createdBy: {
+        default: null,
+        parseHTML: (element) => {
+          const val = element.getAttribute("data-comment-created-by")
+          if (!val) return null
+          try {
+            return JSON.parse(val)
+          } catch {
+            return null
+          }
+        },
+        renderHTML: (attrs) => (attrs.createdBy ? { "data-comment-created-by": JSON.stringify(attrs.createdBy) } : {}),
+      },
+      createdAt: {
+        default: null,
+        parseHTML: (element) => element.getAttribute("data-comment-created-at"),
+        renderHTML: (attrs) => (attrs.createdAt ? { "data-comment-created-at": attrs.createdAt } : {}),
+      },
+      updatedAt: {
+        default: null,
+        parseHTML: (element) => element.getAttribute("data-comment-updated-at"),
+        renderHTML: (attrs) => (attrs.updatedAt ? { "data-comment-updated-at": attrs.updatedAt } : {}),
+      },
     }
   },
 
@@ -729,15 +808,7 @@ export const CommentMark = Mark.create({
   },
 
   renderHTML({ HTMLAttributes }) {
-    return [
-      "span",
-      mergeAttributes(HTMLAttributes, {
-        "data-comment-id": HTMLAttributes.id,
-        "data-comment-kind": HTMLAttributes.kind,
-        title: HTMLAttributes.body,
-      }),
-      0,
-    ]
+    return ["span", mergeAttributes(HTMLAttributes), 0]
   },
 })
 
@@ -788,12 +859,44 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
 
   addAttributes() {
     return {
-      id: { default: null },
-      groupId: { default: null },
-      kind: { default: null },
-      role: { default: null },
-      createdBy: { default: null },
-      createdAt: { default: null },
+      id: {
+        default: null,
+        parseHTML: (element) => element.getAttribute("data-revision-id"),
+        renderHTML: (attributes) => (attributes.id ? { "data-revision-id": attributes.id } : {}),
+      },
+      groupId: {
+        default: null,
+        parseHTML: (element) => element.getAttribute("data-revision-group-id"),
+        renderHTML: (attributes) => (attributes.groupId ? { "data-revision-group-id": attributes.groupId } : {}),
+      },
+      kind: {
+        default: null,
+        parseHTML: (element) => element.getAttribute("data-revision-kind"),
+        renderHTML: (attributes) => (attributes.kind ? { "data-revision-kind": attributes.kind } : {}),
+      },
+      role: {
+        default: null,
+        parseHTML: (element) => element.getAttribute("data-revision-role"),
+        renderHTML: (attributes) => (attributes.role ? { "data-revision-role": attributes.role } : {}),
+      },
+      createdBy: {
+        default: null,
+        parseHTML: (element) => {
+          const val = element.getAttribute("data-revision-created-by")
+          if (!val) return null
+          try {
+            return JSON.parse(val)
+          } catch {
+            return null
+          }
+        },
+        renderHTML: (attributes) => (attributes.createdBy ? { "data-revision-created-by": JSON.stringify(attributes.createdBy) } : {}),
+      },
+      createdAt: {
+        default: null,
+        parseHTML: (element) => element.getAttribute("data-revision-created-at"),
+        renderHTML: (attributes) => (attributes.createdAt ? { "data-revision-created-at": attributes.createdAt } : {}),
+      },
     }
   },
 
@@ -802,16 +905,7 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
   },
 
   renderHTML({ HTMLAttributes }) {
-    return [
-      "span",
-      mergeAttributes(HTMLAttributes, {
-        "data-revision-id": HTMLAttributes.id,
-        "data-revision-group-id": HTMLAttributes.groupId,
-        "data-revision-kind": HTMLAttributes.kind,
-        "data-revision-role": HTMLAttributes.role,
-      }),
-      0,
-    ]
+    return ["span", mergeAttributes(HTMLAttributes), 0]
   },
 
   addCommands() {

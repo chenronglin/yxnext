@@ -10,6 +10,7 @@ import {
   findMergeableInsertedRevision,
   makeOriginalRevisionAttrs,
   resolveInsertedRevision,
+  markDeletedRange,
 } from "@/components/doc/tiptap/extensions"
 import type { NovelCreatedBy } from "@/lib/novel-doc"
 
@@ -371,5 +372,104 @@ describe("makeOriginalRevisionAttrs", () => {
       ...insertedAttrs,
       role: "original",
     })
+  })
+})
+
+describe("markDeletedRange", () => {
+  function dispatchDeletedRange(state: EditorState, range: { from: number; to: number }) {
+    let dispatched: Transaction | undefined
+    const view = {
+      state,
+      dispatch: (tr: Transaction) => {
+        dispatched = tr
+      },
+    } as unknown as EditorView
+
+    const applied = markDeletedRange(state, range, { enabled: true, createdBy: CREATED_BY }, view.dispatch)
+
+    return { applied, doc: dispatched?.doc, tr: dispatched }
+  }
+
+  it("deleting inserted text directly removes it from document without delete mark", () => {
+    const insertedAttrs = {
+      id: "rev-1",
+      groupId: "rev-group-1",
+      kind: "insert",
+      role: "inserted",
+      createdBy: CREATED_BY,
+      createdAt: "2026-06-10T10:00:00.000Z",
+    }
+    const doc = schema.nodes.doc.create(null, [
+      schema.nodes.paragraph.create(null, [
+        schema.text("原文"),
+        schema.text("新增内容", [makeRevisionMark(insertedAttrs)]),
+      ]),
+    ])
+    // The inserted text "新增内容" is from pos 3 to 7.
+    // Let's delete a character "内" at pos 5 to 6.
+    const state = makeState(doc)
+    const result = dispatchDeletedRange(state, { from: 5, to: 6 })
+
+    expect(result.applied).toBe(true)
+    expect(result.doc).not.toBeUndefined()
+    
+    // Check document text
+    expect(result.doc?.textContent).toBe("原文新增容")
+    
+    // Check revision marks - there should be no deleted mark, only the inserted mark on "新增容"
+    const revs = collectRevisionText(result.doc!)
+    expect(revs).toHaveLength(1)
+    expect(revs[0]).toMatchObject({
+      text: "新增容",
+      id: "rev-1",
+      kind: "insert",
+      role: "inserted",
+    })
+  })
+
+  it("deleting a mixed range containing both original and inserted text deletes inserted directly and marks original as deleted", () => {
+    const insertedAttrs = {
+      id: "rev-1",
+      groupId: "rev-group-1",
+      kind: "insert",
+      role: "inserted",
+      createdBy: CREATED_BY,
+      createdAt: "2026-06-10T10:00:00.000Z",
+    }
+    const doc = schema.nodes.doc.create(null, [
+      schema.nodes.paragraph.create(null, [
+        schema.text("原文"),
+        schema.text("新增", [makeRevisionMark(insertedAttrs)]),
+      ]),
+    ])
+    // Text: "原文新增", positions:
+    // "原文" is 1 to 3.
+    // "新增" is 3 to 5.
+    // Let's delete from pos 2 to 4 (covers "文" and "新").
+    const state = makeState(doc)
+    const result = dispatchDeletedRange(state, { from: 2, to: 4 })
+
+    expect(result.applied).toBe(true)
+    expect(result.doc).not.toBeUndefined()
+
+    // "新" (inserted) is deleted directly.
+    // "文" (original) is marked as deleted.
+    // Text remaining in document: "原文增", with "文" having deleted mark, and "增" having inserted mark.
+    expect(result.doc?.textContent).toBe("原文增")
+
+    const revs = collectRevisionText(result.doc!)
+    // We expect 2 revision segments:
+    // 1. "文" with deleted role.
+    // 2. "增" with inserted role.
+    expect(revs).toHaveLength(2)
+    expect(revs).toContainEqual(expect.objectContaining({
+      text: "文",
+      role: "deleted",
+    }))
+    expect(revs).toContainEqual(expect.objectContaining({
+      text: "增",
+      role: "inserted",
+      id: "rev-1",
+    }))
   })
 })
