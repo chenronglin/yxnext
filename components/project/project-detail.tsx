@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useState } from "react"
 import Link from "next/link"
 
 import { PageHeader } from "@/components/page-header"
@@ -11,55 +11,16 @@ import { StageProgress } from "@/components/project/stage-progress"
 import { StagePlanTable } from "@/components/project/stage-plan-table"
 import { useRole } from "@/components/role-provider"
 import { fetchJson } from "@/lib/api"
-import { DOC_STATUS_LABELS, PROJECT_LIFECYCLE_LABELS, PROJECT_STAGE_LABELS } from "@/types/domain"
+import { PROJECT_LIFECYCLE_LABELS, PROJECT_STAGE_LABELS } from "@/types/domain"
 import {
-  DOC_STATUS_TONE,
   PROJECT_LIFECYCLE_TONE,
   PROJECT_STAGE_TONE,
-  RELEASE_DOC_STATUS_LABELS,
-  RELEASE_DOC_STATUS_TONE,
   type ProjectDetail as ProjectDetailView,
 } from "@/types/project"
-import {
-  FileText,
-  History,
-  Plus,
-  Unlock,
-  CheckCircle2,
-  Download,
-  Lock,
-  ArrowRight,
-} from "lucide-react"
+import { Plus, Unlock, CheckCircle2, Download, Lock } from "lucide-react"
 
 type ProjectDetailResponse = {
   project: ProjectDetailView
-}
-
-function firstChapterDocId(project: ProjectDetailView) {
-  const pendingChapter = project.docDirectory.chapterDocs.find((item) => item.status !== "approved")
-
-  return pendingChapter?.docId ?? project.docDirectory.chapterDocs[0]?.docId ?? null
-}
-
-function currentDocHref(project: ProjectDetailView) {
-  if (project.stage === "synopsis") {
-    return project.docDirectory.synopsisDocId ? `/projects/${project.id}/docs/${project.docDirectory.synopsisDocId}` : null
-  }
-
-  if (project.stage === "outline") {
-    return project.docDirectory.outlineDocId ? `/projects/${project.id}/docs/${project.docDirectory.outlineDocId}` : null
-  }
-
-  if (project.stage === "chapter") {
-    const chapterDocId = firstChapterDocId(project)
-    return chapterDocId ? `/projects/${project.id}/docs/${chapterDocId}` : `/projects/${project.id}/chapters`
-  }
-
-  if (project.stage === "release") {
-    return project.docDirectory.releaseDocId ? `/projects/${project.id}/docs/${project.docDirectory.releaseDocId}` : `/projects/${project.id}/qc`
-  }
-
-  return project.docDirectory.releaseDocId ? `/projects/${project.id}/docs/${project.docDirectory.releaseDocId}` : null
 }
 
 export function ProjectDetail({ id }: { id: string }) {
@@ -114,31 +75,11 @@ export function ProjectDetail({ id }: { id: string }) {
       project.releaseDocStatus === "locked",
   )
   const canComplete = Boolean(project && project.releaseDocStatus === "approved" && (role === "editor" || role === "admin"))
-  const entryHref = project ? currentDocHref(project) : null
-  const versionHref = useMemo(() => {
-    if (!project) {
-      return null
-    }
-
-    if (project.stage === "chapter") {
-      const chapterDocId = firstChapterDocId(project)
-      return chapterDocId ? `/projects/${project.id}/docs/${chapterDocId}/versions` : null
-    }
-
-    if (project.stage === "synopsis" && project.docDirectory.synopsisDocId) {
-      return `/projects/${project.id}/docs/${project.docDirectory.synopsisDocId}/versions`
-    }
-
-    if (project.stage === "outline" && project.docDirectory.outlineDocId) {
-      return `/projects/${project.id}/docs/${project.docDirectory.outlineDocId}/versions`
-    }
-
-    if (project.docDirectory.releaseDocId) {
-      return `/projects/${project.id}/docs/${project.docDirectory.releaseDocId}/versions`
-    }
-
-    return null
-  }, [project])
+  const canManageChapters = Boolean(
+    project && project.stage === "chapter" && (role === "admin" || role === "editor" || role === "author"),
+  )
+  const canExportProject = role === "editor" || role === "admin"
+  const hasActionItems = canManageChapters || canUnlockRelease || canComplete || canExportProject
 
   async function refreshProject(successText?: string) {
     const response = await fetchJson<ProjectDetailResponse>(`/api/projects/${id}`)
@@ -217,8 +158,7 @@ export function ProjectDetail({ id }: { id: string }) {
     <div className="flex flex-col gap-6">
       <PageHeader
         breadcrumb={["我的项目", project.title]}
-        title={project.title}
-        description={`来源 SI：${project.sourceSi}`}
+        showBorder={false}
         actions={readonly ? <StatusBadge label="只读" tone="neutral" /> : undefined}
       />
 
@@ -234,136 +174,95 @@ export function ProjectDetail({ id }: { id: string }) {
         </div>
       )}
 
-      <Card className="grid grid-cols-2 gap-4 p-5 sm:grid-cols-3 lg:grid-cols-6">
-        <HeaderField label="生命周期">
-          <StatusBadge label={PROJECT_LIFECYCLE_LABELS[project.lifecycle]} tone={PROJECT_LIFECYCLE_TONE[project.lifecycle]} />
-        </HeaderField>
-        <HeaderField label="当前阶段">
-          <StatusBadge label={PROJECT_STAGE_LABELS[project.stage]} tone={PROJECT_STAGE_TONE[project.stage]} />
-        </HeaderField>
-        <HeaderField label="来源 SI">
-          <Link href={`/si/${project.sourceSiId}`} className="text-sm text-primary hover:underline">
-            {project.sourceSi}
-          </Link>
-        </HeaderField>
-        <HeaderField label="负责编辑">
-          <span className="text-sm text-foreground">{project.editor}</span>
-        </HeaderField>
-        <HeaderField label="负责作者">
-          <span className="text-sm text-foreground">{project.author}</span>
-        </HeaderField>
-        <HeaderField label="创建时间">
-          <span className="text-sm text-foreground">{project.createdAt}</span>
-        </HeaderField>
-      </Card>
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="flex flex-col gap-6">
+          {/* 左侧仅保留项目概览与阶段进度，让顶部摘要区收紧到主内容列，避免继续占满整行。 */}
+          <Card className="grid grid-cols-2 gap-4 p-5 sm:grid-cols-3 lg:grid-cols-5">
+            <HeaderField label="生命周期">
+              <StatusBadge label={PROJECT_LIFECYCLE_LABELS[project.lifecycle]} tone={PROJECT_LIFECYCLE_TONE[project.lifecycle]} />
+            </HeaderField>
+            <HeaderField label="当前阶段">
+              <StatusBadge label={PROJECT_STAGE_LABELS[project.stage]} tone={PROJECT_STAGE_TONE[project.stage]} />
+            </HeaderField>
+            <HeaderField label="负责编辑">
+              <span className="text-sm text-foreground">{project.editor}</span>
+            </HeaderField>
+            <HeaderField label="负责作者">
+              <span className="text-sm text-foreground">{project.author}</span>
+            </HeaderField>
+            <HeaderField label="创建时间">
+              <span className="text-sm text-foreground">{formatDate(project.createdAt)}</span>
+            </HeaderField>
+          </Card>
 
-      <Card className="p-6">
-        <StageProgress project={project} />
-      </Card>
+          <Card className="p-6">
+            <StageProgress project={project} />
+          </Card>
+        </div>
+
+        {/* 右侧统一收纳项目动作，替代原来表格下方分散的按钮区，便于快速执行操作。 */}
+        <Card className="h-fit p-5">
+          <div className="flex flex-col gap-4">
+            <h2 className="text-sm font-semibold text-foreground">项目操作</h2>
+
+            {readonly ? (
+              <div className="rounded-md border border-border bg-muted/40 px-3 py-3 text-sm text-muted-foreground">
+                当前项目已进入只读状态，暂不支持继续协作操作。
+              </div>
+            ) : hasActionItems ? (
+              <div className="flex flex-col gap-2">
+                {canManageChapters && (
+                  <Button asChild variant="outline" className="w-full justify-start bg-transparent">
+                    <Link href={`/projects/${project.id}/chapters`}>
+                      <Plus className="mr-1.5 size-4" />
+                      新增章节
+                    </Link>
+                  </Button>
+                )}
+
+                {(role === "editor" || role === "admin") && (
+                  <Button
+                    variant="outline"
+                    className="w-full justify-start bg-transparent"
+                    disabled={!canUnlockRelease || workingAction === "unlock"}
+                    onClick={() => void handleUnlockRelease()}
+                  >
+                    {canUnlockRelease ? <Unlock className="mr-1.5 size-4" /> : <Lock className="mr-1.5 size-4" />}
+                    {workingAction === "unlock" ? "解锁中..." : "手动解锁质检"}
+                  </Button>
+                )}
+
+                {canComplete && (
+                  <Button
+                    variant="outline"
+                    className="w-full justify-start bg-transparent"
+                    disabled={workingAction === "complete"}
+                    onClick={() => void handleCompleteProject()}
+                  >
+                    <CheckCircle2 className="mr-1.5 size-4" />
+                    {workingAction === "complete" ? "处理中..." : "标记项目完成"}
+                  </Button>
+                )}
+
+                {canExportProject && (
+                  <Button asChild variant="outline" className="w-full justify-start bg-transparent">
+                    <a href={`/api/projects/${project.id}/export?scope=project&format=docx`}>
+                      <Download className="mr-1.5 size-4" />
+                      导出项目
+                    </a>
+                  </Button>
+                )}
+              </div>
+            ) : (
+              <div className="rounded-md border border-border bg-muted/40 px-3 py-3 text-sm text-muted-foreground">
+                当前阶段暂无可执行操作。
+              </div>
+            )}
+          </div>
+        </Card>
+      </div>
 
       <StagePlanTable project={project} editable={false} />
-
-      <Card className="overflow-hidden">
-        <div className="border-b border-border px-4 py-3">
-          <h2 className="text-sm font-semibold text-foreground">稿件 Doc</h2>
-        </div>
-        <div className="divide-y divide-border">
-          <DocRow
-            title="梗概 Doc"
-            statusLabel={project.docDirectory.synopsisDocId ? project.docSummary.find((item) => item.key === "synopsis")?.statusLabel ?? DOC_STATUS_LABELS.approved : "未创建"}
-            tone={project.docSummary.find((item) => item.key === "synopsis")?.tone ?? "neutral"}
-            unlocked={Boolean(project.docDirectory.synopsisDocId)}
-            href={project.docDirectory.synopsisDocId ? `/projects/${project.id}/docs/${project.docDirectory.synopsisDocId}` : null}
-          />
-          <DocRow
-            title="细纲 Doc"
-            statusLabel={project.docSummary.find((item) => item.key === "outline")?.statusLabel ?? "未解锁"}
-            tone={project.docSummary.find((item) => item.key === "outline")?.tone ?? "neutral"}
-            unlocked={Boolean(project.docDirectory.outlineDocId)}
-            href={project.docDirectory.outlineDocId ? `/projects/${project.id}/docs/${project.docDirectory.outlineDocId}` : null}
-          />
-          <DocRow
-            title="正文章节 Doc"
-            statusLabel={`${project.approvedChapters}/${project.totalChapters} 章已通过`}
-            tone={project.totalChapters > 0 ? "info" : "neutral"}
-            unlocked={project.totalChapters > 0}
-            href={`/projects/${project.id}/chapters`}
-            actionLabel="管理章节"
-          />
-          <DocRow
-            title="质检 Doc"
-            statusLabel={RELEASE_DOC_STATUS_LABELS[project.releaseDocStatus]}
-            tone={RELEASE_DOC_STATUS_TONE[project.releaseDocStatus]}
-            unlocked={project.releaseDocStatus !== "locked"}
-            href={project.docDirectory.releaseDocId ? `/projects/${project.id}/docs/${project.docDirectory.releaseDocId}` : `/projects/${project.id}/qc`}
-            actionLabel={project.releaseDocStatus === "locked" ? "查看质检条件" : "进入质检"}
-          />
-        </div>
-      </Card>
-
-      {!readonly && (
-        <Card className="flex flex-wrap items-center gap-2 p-4">
-          {entryHref && (
-            <Button asChild>
-              <Link href={entryHref}>
-                <FileText className="mr-1.5 size-4" />
-                进入当前稿件
-              </Link>
-            </Button>
-          )}
-
-          {versionHref && (
-            <Button asChild variant="outline" className="bg-transparent">
-              <Link href={versionHref}>
-                <History className="mr-1.5 size-4" />
-                查看历史版本
-              </Link>
-            </Button>
-          )}
-
-          {project.stage === "chapter" && (role === "admin" || role === "editor" || role === "author") && (
-            <Button asChild variant="outline" className="bg-transparent">
-              <Link href={`/projects/${project.id}/chapters`}>
-                <Plus className="mr-1.5 size-4" />
-                新增章节
-              </Link>
-            </Button>
-          )}
-
-          {(role === "editor" || role === "admin") && (
-            <Button
-              variant="outline"
-              className="bg-transparent"
-              disabled={!canUnlockRelease || workingAction === "unlock"}
-              onClick={() => void handleUnlockRelease()}
-            >
-              {canUnlockRelease ? <Unlock className="mr-1.5 size-4" /> : <Lock className="mr-1.5 size-4" />}
-              {workingAction === "unlock" ? "解锁中..." : "手动解锁质检"}
-            </Button>
-          )}
-
-          {canComplete && (
-            <Button
-              variant="outline"
-              className="bg-transparent"
-              disabled={workingAction === "complete"}
-              onClick={() => void handleCompleteProject()}
-            >
-              <CheckCircle2 className="mr-1.5 size-4" />
-              {workingAction === "complete" ? "处理中..." : "标记项目完成"}
-            </Button>
-          )}
-
-          {(role === "editor" || role === "admin") && (
-            <Button asChild variant="outline" className="bg-transparent">
-              <a href={`/api/projects/${project.id}/export?scope=project&format=docx`}>
-                <Download className="mr-1.5 size-4" />
-                导出项目
-              </a>
-            </Button>
-          )}
-        </Card>
-      )}
     </div>
   )
 }
@@ -377,39 +276,7 @@ function HeaderField({ label, children }: { label: string; children: React.React
   )
 }
 
-function DocRow({
-  title,
-  statusLabel,
-  tone,
-  unlocked,
-  href,
-  actionLabel = "进入",
-}: {
-  title: string
-  statusLabel: string
-  tone: "neutral" | "info" | "success" | "warning" | "danger"
-  unlocked: boolean
-  href: string | null
-  actionLabel?: string
-}) {
-  return (
-    <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-      <div className="flex items-center gap-3">
-        {unlocked ? <FileText className="size-4 text-muted-foreground" /> : <Lock className="size-4 text-muted-foreground" />}
-        <span className="text-sm font-medium text-foreground">{title}</span>
-        <StatusBadge label={statusLabel} tone={tone} />
-      </div>
-
-      {unlocked && href ? (
-        <Button asChild size="sm" variant="outline" className="bg-transparent">
-          <Link href={href}>
-            {actionLabel}
-            <ArrowRight className="ml-1 size-3.5" />
-          </Link>
-        </Button>
-      ) : (
-        <span className="text-xs text-muted-foreground">未达到解锁条件</span>
-      )}
-    </div>
-  )
+function formatDate(value: string | null) {
+  if (!value) return "—"
+  return value.split(/[T ]/)[0]
 }

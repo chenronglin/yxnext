@@ -89,14 +89,13 @@ export function StagePlanTable({ project, editable = false, onSave, saving = fal
           ))}
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[760px] text-sm">
+        <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border bg-muted/40 text-left text-xs text-muted-foreground">
               <th className="px-4 py-3 font-medium">阶段</th>
               <th className="px-4 py-3 font-medium">计划天数</th>
               <th className="px-4 py-3 font-medium">计时起点</th>
               <th className="px-4 py-3 font-medium">开始时间</th>
-              <th className="px-4 py-3 font-medium">截止时间</th>
               <th className="px-4 py-3 font-medium">完成时间</th>
               <th className="px-4 py-3 font-medium">状态</th>
             </tr>
@@ -119,9 +118,8 @@ export function StagePlanTable({ project, editable = false, onSave, saving = fal
                   )}
                 </td>
                 <td className="px-4 py-3 text-muted-foreground">{plan.timingNote}</td>
-                <td className="px-4 py-3 text-muted-foreground">{plan.startAt ?? "—"}</td>
-                <td className="px-4 py-3 text-muted-foreground">{plan.dueAt ?? "—"}</td>
-                <td className="px-4 py-3 text-muted-foreground">{plan.finishedAt ?? "—"}</td>
+                <td className="px-4 py-3 text-muted-foreground">{formatDate(plan.startAt)}</td>
+                <td className="px-4 py-3 text-muted-foreground">{formatDate(plan.finishedAt)}</td>
                 <td className="px-4 py-3">
                   <StatusBadge label={STAGE_PLAN_STATUS_LABELS[plan.status]} tone={STAGE_PLAN_TONE[plan.status]} />
                 </td>
@@ -132,4 +130,9 @@ export function StagePlanTable({ project, editable = false, onSave, saving = fal
       </div>
     </Card>
   )
+}
+
+function formatDate(value: string | null) {
+  if (!value) return "—"
+  return value.split(/[T ]/)[0]
 }
