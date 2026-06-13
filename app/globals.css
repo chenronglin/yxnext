@@ -181,14 +181,14 @@
   /* Tiptap 文档画布使用独立 class，避免影响项目里其它富文本或普通 article。 */
   .novel-prosemirror {
     min-height: 620px;
-    padding: 4.75rem 2rem 3rem;
+    padding: 3.25rem 1em 1em;
     color: var(--foreground);
     line-height: 1.9;
   }
 
   @media (min-width: 640px) {
     .novel-prosemirror {
-      padding-inline: 4rem;
+      padding-inline: 1em;
     }
   }
 

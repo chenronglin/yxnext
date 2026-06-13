@@ -9,8 +9,8 @@ import { PageHeader } from "@/components/page-header"
 import { StatusBadge } from "@/components/status-badge"
 import { fetchJson } from "@/lib/api"
 import type { DocRevisionListResponse } from "@/types/doc"
-import { DOC_STATUS_LABELS, HOLDER_ROLE_LABELS, ROLE_LABELS } from "@/types/domain"
-import { docStatusTone, docTypeLabel, holderTone } from "@/components/doc/doc-client-shared"
+import { ROLE_LABELS } from "@/types/domain"
+import { docTypeLabel } from "@/components/doc/doc-client-shared"
 import { ArrowLeft, Eye, FileText } from "lucide-react"
 
 function revisionActionLabel(action: "author_submit" | "editor_return" | "editor_approve") {
@@ -85,21 +85,6 @@ export function DocVersionList({ projectId, docRef }: { projectId: string; docRe
         <Card className="px-4 py-10 text-center text-sm text-muted-foreground">正在加载历史版本...</Card>
       ) : response ? (
         <>
-          <Card className="grid grid-cols-2 gap-4 p-5 sm:grid-cols-4">
-            <Field label="Doc 标题">
-              <span className="text-sm font-medium text-foreground">{response.doc.title}</span>
-            </Field>
-            <Field label="类型">
-              <StatusBadge label={docTypeLabel(response.doc.docType)} tone="neutral" />
-            </Field>
-            <Field label="当前状态">
-              <StatusBadge label={DOC_STATUS_LABELS[response.doc.status]} tone={docStatusTone(response.doc.status)} />
-            </Field>
-            <Field label="当前持有人">
-              <StatusBadge label={HOLDER_ROLE_LABELS[response.doc.holderRole]} tone={holderTone(response.doc.holderRole)} />
-            </Field>
-          </Card>
-
           {response.revisions.length === 0 ? (
             <Card className="flex flex-col items-center justify-center gap-2 py-16 text-center text-muted-foreground">
               <FileText className="size-7 opacity-40" />
@@ -152,15 +137,6 @@ export function DocVersionList({ projectId, docRef }: { projectId: string; docRe
       ) : (
         <Card className="px-4 py-10 text-center text-sm text-muted-foreground">Doc 不存在，或你无权访问当前历史版本。</Card>
       )}
-    </div>
-  )
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex flex-col gap-1.5">
-      <span className="text-xs text-muted-foreground">{label}</span>
-      {children}
     </div>
   )
 }

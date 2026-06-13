@@ -24,6 +24,8 @@ type NovelTiptapEditorProps = {
   trackChanges: boolean
   createdBy: NovelCreatedBy
   saveState: SaveState
+  // 同一个只读状态在当前稿件和历史版本中含义不同，允许调用方覆盖状态文案。
+  readonlyLabel?: string
   onChange: (json: NovelDocJson, projection: NovelDocProjection) => void
   onReady?: (editor: Editor | null) => void
 }
@@ -38,13 +40,13 @@ function stringifyContent(value: NovelDocJson) {
   return JSON.stringify(value)
 }
 
-function statusLabel(saveState: SaveState) {
+function statusLabel(saveState: SaveState, readonlyLabel?: string) {
   if (saveState === "dirty") return "未保存"
   if (saveState === "saving") return "保存中"
   if (saveState === "saved") return "已保存"
   if (saveState === "error") return "保存失败"
   if (saveState === "conflict") return "保存冲突"
-  if (saveState === "readonly") return "只读"
+  if (saveState === "readonly") return readonlyLabel ?? "当前内容只读，等待作者提交新版本"
   return "待编辑"
 }
 
@@ -227,6 +229,7 @@ export function NovelTiptapEditor({
   trackChanges,
   createdBy,
   saveState,
+  readonlyLabel,
   onChange,
   onReady,
 }: NovelTiptapEditorProps) {
@@ -282,7 +285,7 @@ export function NovelTiptapEditor({
       <div className="absolute right-4 top-4 z-10 flex flex-wrap justify-end gap-2">
         <span className={cn("inline-flex h-7 items-center gap-1 rounded-md border px-2 text-xs font-medium", statusTone(saveState))}>
           <Save className="size-3.5" />
-          {statusLabel(saveState)}
+          {statusLabel(saveState, readonlyLabel)}
         </span>
         <span className="inline-flex h-7 items-center rounded-md border border-border bg-background/90 px-2 text-xs text-muted-foreground">
           {characters.toLocaleString()} 字

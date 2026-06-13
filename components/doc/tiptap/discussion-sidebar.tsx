@@ -4,10 +4,11 @@ import type { Editor } from "@tiptap/core"
 import type { Mark as ProseMirrorMark } from "@tiptap/pm/model"
 import { TextSelection } from "@tiptap/pm/state"
 import type { EditorState, Transaction } from "@tiptap/pm/state"
-import { MessageSquareText, Minus, Plus, Replace, Trash2 } from "lucide-react"
+import { MessageSquareText, Minus, PanelRightClose, Plus, Replace, Trash2 } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
 
 import { setActiveDiscussion } from "@/components/doc/tiptap/extensions"
+import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
 
@@ -310,7 +311,7 @@ function KindIcon({ kind }: { kind: DiscussionKind }) {
   return <Icon className="size-3.5" />
 }
 
-export function DiscussionSidebar({ editor }: { editor: Editor | null }) {
+export function DiscussionSidebar({ editor, onHide }: { editor: Editor | null; onHide?: () => void }) {
   const [items, setItems] = useState<DiscussionItem[]>([])
   const [activeKey, setActiveKey] = useState<string | null>(null)
   const cardRefs = useRef(new Map<string, HTMLElement>())
@@ -386,11 +387,27 @@ export function DiscussionSidebar({ editor }: { editor: Editor | null }) {
 
   return (
     <Card className="sticky top-4 max-h-[calc(100vh-6rem)] gap-0 overflow-hidden p-0">
-      <div className="border-b border-border px-4 py-3">
-        <h2 className="text-sm font-semibold text-foreground">批注修订</h2>
-        <p className="mt-1 text-xs text-muted-foreground">
-          {summary.comments} 条批注 · {summary.revisions} 条修订
-        </p>
+      <div className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold text-foreground">批注修订</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {summary.comments} 条批注 · {summary.revisions} 条修订
+          </p>
+        </div>
+        {/* 右栏只负责发出隐藏请求，真正的布局扩展由父级 DocEditor 统一控制。 */}
+        {onHide && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="-mr-1 size-8 shrink-0"
+            title="隐藏批注区"
+            aria-label="隐藏批注区"
+            onClick={onHide}
+          >
+            <PanelRightClose className="size-4" />
+          </Button>
+        )}
       </div>
 
       <div className="max-h-[calc(100vh-12rem)] overflow-y-auto p-3">

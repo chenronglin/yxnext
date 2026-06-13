@@ -23,7 +23,7 @@ import {
   type NovelDocProjection,
 } from "@/lib/novel-doc"
 import type { DocCurrentView } from "@/types/doc"
-import { BookOpen, CheckCircle2, History, Info, RotateCcw, Send } from "lucide-react"
+import { BookOpen, CheckCircle2, History, Info, PanelRightOpen, RotateCcw, Send } from "lucide-react"
 import { docTypeLabel, snapshotText } from "@/components/doc/doc-client-shared"
 
 type Message = {
@@ -67,6 +67,8 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
   const [workflowNote, setWorkflowNote] = useState("")
   const [editingPaused, setEditingPaused] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
+  // 批注栏默认展开；用户隐藏后，编辑器区域会切换为全宽，给正文输入保留更大的工作面积。
+  const [discussionSidebarVisible, setDiscussionSidebarVisible] = useState(true)
 
   const viewRef = useRef<DocCurrentView | null>(null)
   const latestPayloadRef = useRef<DraftPayload | null>(null)
@@ -447,20 +449,39 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
           )}
 
           {content ? (
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
-              <NovelTiptapEditor
-                value={content}
-                editable={canEdit}
-                trackChanges={trackChanges}
-                createdBy={createdBy}
-                saveState={canEdit ? saveState : "readonly"}
-                onChange={handleEditorChange}
-                onReady={setEditor}
-              />
+            <div className={discussionSidebarVisible ? "grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]" : "grid gap-4"}>
+              <div className="min-w-0">
+                {!discussionSidebarVisible && (
+                  <div className="mb-3 flex justify-end">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="bg-transparent"
+                      onClick={() => setDiscussionSidebarVisible(true)}
+                    >
+                      <PanelRightOpen className="mr-1.5 size-4" />
+                      显示批注
+                    </Button>
+                  </div>
+                )}
 
-              <aside className="grid content-start gap-4">
-                <DiscussionSidebar editor={editor} />
-              </aside>
+                <NovelTiptapEditor
+                  value={content}
+                  editable={canEdit}
+                  trackChanges={trackChanges}
+                  createdBy={createdBy}
+                  saveState={canEdit ? saveState : "readonly"}
+                  onChange={handleEditorChange}
+                  onReady={setEditor}
+                />
+              </div>
+
+              {discussionSidebarVisible && (
+                <aside className="grid content-start gap-4">
+                  <DiscussionSidebar editor={editor} onHide={() => setDiscussionSidebarVisible(false)} />
+                </aside>
+              )}
             </div>
           ) : (
             <Card className="px-4 py-10 text-center text-sm text-muted-foreground">旧格式稿件不能在当前编辑器中修改。</Card>

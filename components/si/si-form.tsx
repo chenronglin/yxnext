@@ -45,6 +45,9 @@ type SiDetailResponse = {
   si: SiItem
 }
 
+const TROPE_USER_CACHE_KEY = "trope-user-cached-tags"
+const LEGACY_TROPE_CACHE_KEY = "trope-cached-tags"
+
 export function SiForm({ mode, initial }: SiFormProps) {
   const router = useRouter()
   const { user } = useRole()
@@ -73,23 +76,35 @@ export function SiForm({ mode, initial }: SiFormProps) {
   const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null)
 
   useEffect(() => {
-    // Trope 历史标签只存在浏览器本地，不进入数据库，目的是保留当前演示 UI 的录入体验。
-    const saved = localStorage.getItem("trope-cached-tags")
-    const defaultTags = ["马甲爽文", "扮猪吃虎", "双线叙事", "世界观庞大", "高概念", "废土拾荒"]
+    // Trope 历史标签只来自用户在当前浏览器里主动输入过的内容。
+    // 新建 SI 页面不能预置业务标签，否则用户删除后再次进入页面还会看到默认项，和“历史缓存”的语义不一致。
+    // 旧缓存 key 曾经可能混入系统默认标签，进入表单时主动清掉，避免历史脏数据继续回填。
+    localStorage.removeItem(LEGACY_TROPE_CACHE_KEY)
 
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved)
-        if (Array.isArray(parsed)) {
-          setCachedTags(Array.from(new Set([...defaultTags, ...parsed])))
-          return
-        }
-      } catch {
-        // 本地缓存损坏时直接回退到默认标签，不影响表单编辑。
-      }
+    const saved = localStorage.getItem(TROPE_USER_CACHE_KEY)
+
+    if (!saved) {
+      setCachedTags([])
+      return
     }
 
-    setCachedTags(defaultTags)
+    try {
+      const parsed = JSON.parse(saved)
+
+      if (Array.isArray(parsed)) {
+        const nextTags = Array.from(
+          new Set(parsed.map((tag) => (typeof tag === "string" ? tag.trim() : "")).filter(Boolean)),
+        )
+
+        setCachedTags(nextTags)
+        return
+      }
+    } catch {
+      // 本地缓存损坏时清空该 key，避免错误数据持续影响后续进入页面。
+    }
+
+    localStorage.removeItem(TROPE_USER_CACHE_KEY)
+    setCachedTags([])
   }, [])
 
   useEffect(() => {
@@ -141,7 +156,7 @@ export function SiForm({ mode, initial }: SiFormProps) {
     if (!cachedTags.includes(trimmed)) {
       const nextCache = [...cachedTags, trimmed]
       setCachedTags(nextCache)
-      localStorage.setItem("trope-cached-tags", JSON.stringify(nextCache))
+      localStorage.setItem(TROPE_USER_CACHE_KEY, JSON.stringify(nextCache))
     }
   }
 
@@ -153,7 +168,14 @@ export function SiForm({ mode, initial }: SiFormProps) {
     event.stopPropagation()
     const nextCache = cachedTags.filter((tag) => tag !== tagToDelete)
     setCachedTags(nextCache)
-    localStorage.setItem("trope-cached-tags", JSON.stringify(nextCache))
+
+    if (nextCache.length === 0) {
+      // 删除最后一个历史标签后不保留空数组缓存，下一次进入页面应展示纯空态。
+      localStorage.removeItem(TROPE_USER_CACHE_KEY)
+      return
+    }
+
+    localStorage.setItem(TROPE_USER_CACHE_KEY, JSON.stringify(nextCache))
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
@@ -472,7 +494,7 @@ export function SiForm({ mode, initial }: SiFormProps) {
 
           <Card className="p-4 text-xs leading-relaxed text-muted-foreground">
             {/* 这里明确提示“版本快照”和“Doc Revision”不是同一层概念，避免使用者混淆。 */}
-            提示：保存草稿后系统会自动生成 SI 版本快照；保存并预发会先保存内容，再打开预发弹窗。SI 版本历史仅用于选题追溯，不属于项目四阶段 Doc 版本。
+            提示：提示信息。
           </Card>
         </div>
       </div>

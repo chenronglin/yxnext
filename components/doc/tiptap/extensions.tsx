@@ -17,7 +17,7 @@ import type { EditorState, Selection, Transaction } from "@tiptap/pm/state"
 import { Decoration, DecorationSet, type EditorView } from "@tiptap/pm/view"
 import { NodeViewWrapper, ReactNodeViewRenderer } from "@tiptap/react"
 import type { ReactNodeViewProps } from "@tiptap/react"
-import { Check, PencilLine, Trash2 } from "lucide-react"
+import { PencilLine, Save, Trash2 } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 
 import {
@@ -1137,7 +1137,19 @@ function EditSuggestionView({ node, updateAttributes, deleteNode }: ReactNodeVie
 
   useEffect(() => {
     if (editing) {
-      textareaRef.current?.focus()
+      // Tiptap 插入 NodeView 后会继续处理本轮 selection 事务，立即 focus 可能被编辑器抢回。
+      // 延迟到下一帧再滚动和聚焦，确保点击“编辑建议”后光标稳定落到建议输入框。
+      const frameId = window.requestAnimationFrame(() => {
+        textareaRef.current?.scrollIntoView({
+          block: "center",
+          behavior: "smooth",
+        })
+        textareaRef.current?.focus({
+          preventScroll: true,
+        })
+      })
+
+      return () => window.cancelAnimationFrame(frameId)
     }
   }, [editing])
 
@@ -1156,6 +1168,18 @@ function EditSuggestionView({ node, updateAttributes, deleteNode }: ReactNodeVie
     setEditing(false)
   }
 
+  const categoryOptions: Array<{ value: NovelSuggestionCategory; label: string }> = [
+    { value: "structure", label: "结构" },
+    { value: "logic", label: "逻辑" },
+    { value: "rhythm", label: "节奏" },
+    { value: "expression", label: "表达" },
+    { value: "plot", label: "情节" },
+    { value: "character", label: "角色" },
+    { value: "worldbuilding", label: "设定" },
+    { value: "continuity", label: "连续性" },
+    { value: "other", label: "其他" },
+  ]
+
   return (
     <NodeViewWrapper
       as="section"
@@ -1163,12 +1187,50 @@ function EditSuggestionView({ node, updateAttributes, deleteNode }: ReactNodeVie
       contentEditable={false}
       data-edit-suggestion-card=""
     >
-      <div className="flex items-center justify-between gap-3 border-b border-amber-200/70 pb-3">
+      <div className="flex items-start justify-between gap-3 border-b border-amber-200/70 pb-2">
         <div className="flex min-w-0 flex-col gap-0.5">
-          <span className="font-medium text-amber-800">编辑建议</span>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="mr-1 font-medium text-amber-800">编辑建议</span>
+            {editing ? (
+              categoryOptions.map((option) => {
+                const active = category === option.value
+
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={cn(
+                      "inline-flex h-6 items-center rounded-md border px-2 text-[11px] transition-colors",
+                      active
+                        ? "border-amber-400 bg-amber-500 text-white"
+                        : "border-amber-200 bg-white text-amber-800 hover:bg-amber-100",
+                    )}
+                    onClick={() => setCategory(option.value)}
+                  >
+                    {option.label}
+                  </button>
+                )
+              })
+            ) : (
+              <span className="inline-flex h-6 items-center rounded-md border border-amber-200 bg-amber-100 px-2 text-[11px] font-medium text-amber-800">
+                {categoryOptions.find((option) => option.value === category)?.label ?? "其他"}
+              </span>
+            )}
+          </div>
           <span className="truncate text-xs text-amber-700/75">{attrs.createdBy?.nameSnapshot ?? "未知用户"}</span>
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          {editing && (
+            <button
+              className="inline-flex size-7 items-center justify-center rounded-md text-amber-700 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+              type="button"
+              disabled={!body.trim()}
+              onClick={saveSuggestion}
+              title="保存建议"
+            >
+              <Save className="size-4" />
+            </button>
+          )}
           {!editing && (
             <button
               className="inline-flex size-7 items-center justify-center rounded-md text-amber-700 hover:bg-amber-100"
@@ -1191,25 +1253,10 @@ function EditSuggestionView({ node, updateAttributes, deleteNode }: ReactNodeVie
       </div>
 
       {editing ? (
-        <div className="pt-3">
-          <select
-            className="mb-2 h-8 rounded-md border border-amber-200 bg-white px-2 text-xs text-amber-900 outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
-            value={category}
-            onChange={(event) => setCategory(event.target.value as NovelSuggestionCategory)}
-          >
-            <option value="structure">结构</option>
-            <option value="logic">逻辑</option>
-            <option value="rhythm">节奏</option>
-            <option value="expression">表达</option>
-            <option value="plot">情节</option>
-            <option value="character">角色</option>
-            <option value="worldbuilding">设定</option>
-            <option value="continuity">连续性</option>
-            <option value="other">其他</option>
-          </select>
+        <div className="pt-2">
           <textarea
             ref={textareaRef}
-            className="min-h-24 w-full resize-y rounded-md border border-amber-200 bg-white px-3 py-2 leading-6 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
+            className="min-h-16 w-full resize-y rounded-md border border-amber-200 bg-white px-3 py-2 leading-6 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
             value={body}
             placeholder="输入编辑建议"
             onChange={(event) => setBody(event.target.value)}
@@ -1219,17 +1266,6 @@ function EditSuggestionView({ node, updateAttributes, deleteNode }: ReactNodeVie
               }
             }}
           />
-          <div className="mt-3 flex justify-end">
-            <button
-              className="inline-flex h-8 items-center gap-1 rounded-md bg-amber-500 px-3 text-sm font-medium text-white hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-60"
-              type="button"
-              disabled={!body.trim()}
-              onClick={saveSuggestion}
-            >
-              <Check className="size-4" />
-              保存建议
-            </button>
-          </div>
         </div>
       ) : (
         <p className="whitespace-pre-wrap pt-3 leading-7 text-amber-950/80">{attrs.body}</p>
