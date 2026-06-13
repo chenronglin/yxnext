@@ -200,6 +200,18 @@ export async function syncActiveProjectTimelineStatuses() {
   }
 
   const now = new Date()
+  const activeProjectCount = await prisma.project.count({
+    where: {
+      lifecycleStatus: "active",
+    },
+  })
+
+  if (activeProjectCount === 0) {
+    // 新系统初始化时可能还没有任何项目。此时阶段计划同步没有可处理对象，
+    // 直接返回可以避免继续执行阶段计划聚合查询，让项目治理页稳定展示空态。
+    return
+  }
+
   const [defaults, stagePlans] = await Promise.all([
     stagePlanDefaultClient.findMany({
       select: {

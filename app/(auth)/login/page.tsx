@@ -94,12 +94,7 @@ export default function LoginPage() {
           </div>
 
           <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between">
-              <Label htmlFor="password">密码</Label>
-              <Link href="/forgot-password" className="text-xs text-primary hover:underline">
-                忘记密码？
-              </Link>
-            </div>
+            <Label htmlFor="password">密码</Label>
             <Input
               id="password"
               type="password"
@@ -115,12 +110,16 @@ export default function LoginPage() {
             {submitting ? "登录中..." : "登录"}
           </Button>
 
-          <p className="text-center text-sm text-muted-foreground">
-            还没有账号？{" "}
+          {/* 底部辅助入口统一左对齐，避免忘记密码入口挤占密码输入区的视觉焦点。 */}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-left text-sm text-muted-foreground">
+            <Link href="/forgot-password" className="text-primary hover:underline">
+              忘记密码？
+            </Link>
+            <span>还没有账号？</span>
             <Link href="/register" className="text-primary hover:underline">
               注册申请
             </Link>
-          </p>
+          </div>
         </form>
       </CardContent>
     </Card>
