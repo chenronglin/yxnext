@@ -6,6 +6,7 @@ import { Prisma } from "@prisma/client"
 import { createUserSession, toCurrentUser } from "@/server/auth/session"
 import { prisma } from "@/server/db/prisma"
 import { ApiError } from "@/server/shared/api-response"
+import { translateUniqueConstraintError } from "@/server/shared/invariant-keys"
 import type { CurrentUser, UserStatus } from "@/types/domain"
 import type { RegisterAccountResult } from "@/types/account"
 
@@ -270,55 +271,72 @@ export async function registerPendingUser(input: RegisterInput): Promise<Registe
 
   const passwordHash = await bcrypt.hash(input.password, 10)
 
-  const user = await prisma.$transaction(async (tx) => {
-    // 外部公开注册入口一律只创建作者申请。
-    // 这样即使有人篡改前端请求体，也无法直接借注册流程申请 editor 权限。
-    const createdUser = await tx.user.create({
-      data: {
-        username,
-        displayName: name,
-        role: "author",
-        email,
-        phone,
-        biography,
-        passwordHash,
-        status: "pending",
-      },
-      select: {
-        userId: true,
-        username: true,
-        displayName: true,
-        role: true,
-        status: true,
-      },
-    })
-
-    await tx.operationLog.create({
-      data: {
-        actorUserId: createdUser.userId,
-        actorRole: "author",
-        action: "auth.register",
-        entityType: "user",
-        entityId: createdUser.userId,
-        afterJson: {
+  try {
+    const user = await prisma.$transaction(async (tx) => {
+      // 外部公开注册入口一律只创建作者申请。
+      // 这样即使有人篡改前端请求体，也无法直接借注册流程申请 editor 权限。
+      const createdUser = await tx.user.create({
+        data: {
+          username,
+          displayName: name,
           role: "author",
-          status: createdUser.status,
+          email,
+          phone,
           biography,
+          passwordHash,
+          status: "pending",
         },
-      },
+        select: {
+          userId: true,
+          username: true,
+          displayName: true,
+          role: true,
+          status: true,
+        },
+      })
+
+      await tx.operationLog.create({
+        data: {
+          actorUserId: createdUser.userId,
+          actorRole: "author",
+          action: "auth.register",
+          entityType: "user",
+          entityId: createdUser.userId,
+          afterJson: {
+            role: "author",
+            status: createdUser.status,
+            biography,
+          },
+        },
+      })
+
+      await createRegisterApprovalNotifications(tx, {
+        applicantUserId: createdUser.userId,
+        applicantName: userName(createdUser),
+      })
+
+      return createdUser
     })
 
-    await createRegisterApprovalNotifications(tx, {
-      applicantUserId: createdUser.userId,
-      applicantName: userName(createdUser),
-    })
-
-    return createdUser
-  })
-
-  return {
-    userId: user.userId.toString(),
-    status: user.status,
+    return {
+      userId: user.userId.toString(),
+      status: user.status,
+    }
+  } catch (error) {
+    throw (
+      translateUniqueConstraintError(error, [
+        {
+          constraintIncludes: ["username"],
+          code: "REGISTER_USERNAME_CONFLICT",
+          message: "该用户名已被使用",
+        },
+        {
+          constraintIncludes: ["email"],
+          code: "REGISTER_EMAIL_CONFLICT",
+          message: "该邮箱已被使用",
+        },
+      ]) ?? error
+    )
   }
 }
 

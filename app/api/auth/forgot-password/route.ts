@@ -1,6 +1,13 @@
 import { type NextRequest } from "next/server"
+import { NextResponse } from "next/server"
 import { z } from "zod"
 
+import {
+  createPublicRateLimitContext,
+  getPublicRateLimitStatus,
+  PUBLIC_FORGOT_PASSWORD_RATE_LIMIT,
+  recordPublicRateLimitHit,
+} from "@/server/auth/login-rate-limit"
 import { requestPasswordResetByEmail } from "@/server/modules/auth/auth.service"
 import { fail, ok } from "@/server/shared/api-response"
 
@@ -13,6 +20,32 @@ const forgotPasswordSchema = z.object({
 })
 
 export async function POST(request: NextRequest) {
+  const rateLimitContext = createPublicRateLimitContext({
+    scope: "forgot-password",
+    forwardedFor: request.headers.get("x-forwarded-for"),
+    realIp: request.headers.get("x-real-ip"),
+  })
+  const rateLimitStatus = getPublicRateLimitStatus(rateLimitContext, PUBLIC_FORGOT_PASSWORD_RATE_LIMIT)
+
+  // 忘记密码不能透露账号存在性，但同样需要先限流，避免被用于批量刷管理员通知。
+  if (rateLimitStatus.limited) {
+    return NextResponse.json(
+      {
+        ok: false,
+        code: "FORGOT_PASSWORD_RATE_LIMITED",
+        message: "找回密码请求过于频繁，请稍后再试",
+      },
+      {
+        status: 429,
+        headers: {
+          "Retry-After": String(rateLimitStatus.retryAfterSeconds),
+        },
+      },
+    )
+  }
+
+  recordPublicRateLimitHit(rateLimitContext)
+
   try {
     const body = forgotPasswordSchema.parse(await request.json().catch(() => ({})))
     const result = await requestPasswordResetByEmail(body.email)

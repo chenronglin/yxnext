@@ -18,6 +18,15 @@ export async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit)
   const payload = await response.json().catch(() => null)
 
   if (!response.ok) {
+    if (response.status === 401 && typeof window !== "undefined") {
+      const currentPath = `${window.location.pathname}${window.location.search}`
+
+      // 登录态失效时统一送回登录页，并带上原路径，避免每个页面各自停留在红色错误条上。
+      if (!window.location.pathname.startsWith("/login")) {
+        window.location.assign(`/login?next=${encodeURIComponent(currentPath)}`)
+      }
+    }
+
     throw new ApiRequestError(
       payload?.message ?? "请求失败，请稍后重试",
       response.status,

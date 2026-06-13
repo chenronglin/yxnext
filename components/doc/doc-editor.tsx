@@ -65,6 +65,7 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
   const [workflowAction, setWorkflowAction] = useState<null | "submit" | "return" | "approve">(null)
   const [workflowDialogAction, setWorkflowDialogAction] = useState<null | "submit" | "return">(null)
   const [workflowNote, setWorkflowNote] = useState("")
+  const [editingPaused, setEditingPaused] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
 
   const viewRef = useRef<DocCurrentView | null>(null)
@@ -72,6 +73,7 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
   const dirtyRef = useRef(false)
   const pausedByConflictRef = useRef(false)
   const lockVersionRef = useRef(0)
+  const saveFailureCountRef = useRef(0)
   const saveInFlightRef = useRef<Promise<boolean> | null>(null)
   const runLatestSaveRef = useRef<() => Promise<boolean>>(async () => false)
 
@@ -84,8 +86,8 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
   }, [view])
 
   const basePath = `/projects/${projectId}/docs/${docRef}`
-  const canEdit = Boolean(view?.permissions.canEditContent && content)
-  const canUseWorkflow = Boolean(content && view?.source.kind === "draft")
+  const canEdit = Boolean(view?.permissions.canEditContent && content && !editingPaused)
+  const canUseWorkflow = Boolean(content && view?.source.kind === "draft" && !editingPaused)
   const trackChanges = Boolean(canEdit && view?.source.kind === "draft" && view.source.ownerRole === "editor")
   const unsupportedLegacyDoc = Boolean(view && !content)
 
@@ -141,6 +143,7 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
 
         if (latestPayloadRef.current && contentSignature(latestPayloadRef.current.contentJson) === savingSignature) {
           dirtyRef.current = false
+          saveFailureCountRef.current = 0
           setSaveState("saved")
         } else {
           dirtyRef.current = true
@@ -151,25 +154,32 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
       } catch (error) {
         if (error instanceof ApiRequestError && error.code === "DOC_LOCK_VERSION_CONFLICT") {
           pausedByConflictRef.current = true
+          setEditingPaused(true)
           setSaveState("conflict")
           setMessage({
             type: "error",
-            text: "稿件已在其他窗口更新，自动保存已暂停。请刷新页面后继续编辑。",
+            text: "稿件已在其他窗口更新，自动保存已暂停，编辑器已切换为只读。请刷新页面后继续编辑。",
           })
           return false
         }
 
+        saveFailureCountRef.current += 1
         setSaveState("error")
         setMessage({
           type: "error",
-          text: error instanceof Error ? error.message : "自动保存失败",
+          text:
+            saveFailureCountRef.current >= 3
+              ? "自动保存连续失败，已暂停自动重试。请检查网络后手动触发保存或刷新页面。"
+              : error instanceof Error
+                ? error.message
+                : "自动保存失败",
         })
         return false
       } finally {
         saveInFlightRef.current = null
 
         // 保存过程中如果用户又继续输入，当前请求结束后重新排队，保证最终落库的是最新内容。
-        if (dirtyRef.current && !pausedByConflictRef.current) {
+        if (dirtyRef.current && !pausedByConflictRef.current && saveFailureCountRef.current < 3) {
           debouncedSave()
         }
       }
@@ -191,6 +201,8 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
     setWorkflowDialogAction(null)
     dirtyRef.current = false
     pausedByConflictRef.current = false
+    saveFailureCountRef.current = 0
+    setEditingPaused(false)
 
     if (response.source.kind === "draft") {
       lockVersionRef.current = response.source.lockVersion
@@ -244,6 +256,24 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
     }
   }, [debouncedSave, loadDoc])
 
+  useEffect(() => {
+    function warnBeforeUnload(event: BeforeUnloadEvent) {
+      if (!dirtyRef.current) {
+        return
+      }
+
+      // 浏览器只会展示统一文案；这里设置 returnValue 是为了触发离开确认。
+      event.preventDefault()
+      event.returnValue = ""
+    }
+
+    window.addEventListener("beforeunload", warnBeforeUnload)
+
+    return () => {
+      window.removeEventListener("beforeunload", warnBeforeUnload)
+    }
+  }, [])
+
   function handleEditorChange(json: NovelDocJson, _nextProjection: NovelDocProjection) {
     if (!viewRef.current?.permissions.canSave || pausedByConflictRef.current) {
       return
@@ -264,6 +294,7 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
 
     if (saveInFlightRef.current) {
       await saveInFlightRef.current
+      debouncedSave.cancel()
     }
 
     if (!dirtyRef.current) {

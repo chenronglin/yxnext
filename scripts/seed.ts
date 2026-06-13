@@ -179,6 +179,19 @@ function dedupeAccounts(accounts: SeedAccount[]) {
   return [...accountMap.values()]
 }
 
+function passwordEnvKey(username: string) {
+  return `SEED_PASSWORD_${username.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}`
+}
+
+function applyPasswordOverrides(account: SeedAccount): SeedAccount {
+  const envKey = passwordEnvKey(account.username)
+  const password = process.env[envKey]?.trim()
+
+  // 开发环境可以继续使用脚本内默认密码；
+  // 部署或共享环境应通过 SEED_PASSWORD_<USERNAME> 注入更强的一次性密码。
+  return password ? { ...account, password } : account
+}
+
 async function upsertUser(prisma: PrismaClient, account: SeedAccount, adminUserId: bigint | null) {
   const passwordHash = await bcrypt.hash(account.password, 10)
   const now = new Date()
@@ -228,10 +241,14 @@ function toSummaryRow(user: User, password: string) {
 }
 
 async function main() {
+  if (process.env.NODE_ENV === "production" && !process.argv.includes("--force")) {
+    throw new Error("生产环境执行 seed 必须显式传入 --force，避免误植入测试账号")
+  }
+
   const prisma = createPrismaClient()
 
   try {
-    const accounts = dedupeAccounts([...baseAccounts, ...buildExtraAccounts()])
+    const accounts = dedupeAccounts([...baseAccounts, ...buildExtraAccounts()].map(applyPasswordOverrides))
     const adminAccount = accounts.find((account) => account.role === "admin")
 
     if (!adminAccount) {

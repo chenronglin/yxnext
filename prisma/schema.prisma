@@ -384,7 +384,7 @@ model SiPreissue {
 
 model Project {
   projectId       BigInt                  @id @default(autoincrement()) @map("project_id") @db.UnsignedBigInt
-  sourceSiId      BigInt                  @map("source_si_id") @db.UnsignedBigInt
+  sourceSiId      BigInt                  @unique @map("source_si_id") @db.UnsignedBigInt
   siPreissueId    BigInt                  @unique @map("si_preissue_id") @db.UnsignedBigInt
   title           String                  @map("title") @db.VarChar(255)
   intro           String?                 @map("intro") @db.Text
@@ -420,7 +420,6 @@ model Project {
   @@map("projects")
   @@index([editorId, lifecycleStatus, currentStage], map: "idx_projects_editor_status")
   @@index([authorId, lifecycleStatus, currentStage], map: "idx_projects_author_status")
-  @@index([sourceSiId], map: "idx_projects_source_si")
 }
 
 model StagePlanDefault {
@@ -508,6 +507,7 @@ model Doc {
   updatedAt        DateTime          @default(now()) @updatedAt @map("updated_at") @db.DateTime(3)
   singleDocKey     String?           @unique @map("single_doc_key") @db.VarChar(191)
   chapterOrderKey  String?           @unique @map("chapter_order_key") @db.VarChar(191)
+  chapterNoKey     String?           @unique @map("chapter_no_key") @db.VarChar(191)
 
   project          Project           @relation(fields: [projectId], references: [projectId], onDelete: Cascade, onUpdate: NoAction)
   lastActor        User?             @relation("DocLastActor", fields: [lastActorId], references: [userId], onDelete: SetNull, onUpdate: NoAction)

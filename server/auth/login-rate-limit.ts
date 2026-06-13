@@ -5,6 +5,16 @@ type LoginRateLimitContext = {
   ipKey: string
 }
 
+type PublicRateLimitContext = {
+  key: string
+}
+
+type PublicRateLimitPolicy = {
+  windowMs: number
+  blockMs: number
+  maxHits: number
+}
+
 type AttemptBucket = {
   failedTimestamps: number[]
   blockedUntil: number
@@ -17,6 +27,20 @@ const LOGIN_BLOCK_MS = 15 * 60 * 1000
 const COMBO_MAX_FAILURES = 5
 const IP_MAX_FAILURES = 15
 const STORE_KEY = "__YX_LOGIN_RATE_LIMIT_STORE__"
+
+// 公开入口没有登录态兜底，限流窗口比登录略长；
+// 这里仍用内存桶作为第一道止血，后续多实例部署时应替换为 Redis 等共享存储。
+export const PUBLIC_REGISTER_RATE_LIMIT: PublicRateLimitPolicy = {
+  windowMs: 10 * 60 * 1000,
+  blockMs: 30 * 60 * 1000,
+  maxHits: 5,
+}
+
+export const PUBLIC_FORGOT_PASSWORD_RATE_LIMIT: PublicRateLimitPolicy = {
+  windowMs: 15 * 60 * 1000,
+  blockMs: 30 * 60 * 1000,
+  maxHits: 5,
+}
 
 function getStore(): LoginRateLimitStore {
   const globalStore = globalThis as typeof globalThis & {
@@ -100,6 +124,19 @@ export function createLoginRateLimitContext(input: {
   }
 }
 
+export function createPublicRateLimitContext(input: {
+  scope: "register" | "forgot-password"
+  forwardedFor?: string | null
+  realIp?: string | null
+}): PublicRateLimitContext {
+  const ip = normalizeIp(input)
+
+  // 公开入口按“能力 + 来源 IP”限流，避免一个入口被打满后误伤另一个入口。
+  return {
+    key: `public:${input.scope}:${ip}`,
+  }
+}
+
 export function getLoginRateLimitStatus(context: LoginRateLimitContext) {
   const now = Date.now()
   const store = getStore()
@@ -120,6 +157,47 @@ export function getLoginRateLimitStatus(context: LoginRateLimitContext) {
     limited: false,
     retryAfterSeconds: 0,
   } as const
+}
+
+export function getPublicRateLimitStatus(context: PublicRateLimitContext, policy: PublicRateLimitPolicy) {
+  const now = Date.now()
+  const store = getStore()
+  pruneStore(store, now)
+
+  const bucket = getBucket(store, context.key)
+  const earliestAllowed = now - policy.windowMs
+  bucket.failedTimestamps = bucket.failedTimestamps.filter((timestamp) => timestamp >= earliestAllowed)
+
+  if (bucket.blockedUntil > now) {
+    return {
+      limited: true,
+      retryAfterSeconds: retryAfterSeconds(bucket.blockedUntil, now),
+    } as const
+  }
+
+  if (bucket.failedTimestamps.length >= policy.maxHits) {
+    bucket.blockedUntil = now + policy.blockMs
+
+    return {
+      limited: true,
+      retryAfterSeconds: retryAfterSeconds(bucket.blockedUntil, now),
+    } as const
+  }
+
+  return {
+    limited: false,
+    retryAfterSeconds: 0,
+  } as const
+}
+
+export function recordPublicRateLimitHit(context: PublicRateLimitContext) {
+  const now = Date.now()
+  const store = getStore()
+  pruneStore(store, now)
+
+  // 注册和忘记密码属于“每次请求都消耗额度”的公开能力；
+  // 不区分成功失败，避免攻击者用无效载荷绕开查库前保护。
+  getBucket(store, context.key).failedTimestamps.push(now)
 }
 
 export function recordFailedLoginAttempt(context: LoginRateLimitContext) {

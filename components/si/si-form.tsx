@@ -34,6 +34,13 @@ type BoundAuthorsResponse = {
   authors: BoundAuthor[]
 }
 
+type MainTypesResponse = {
+  items: Array<{
+    name: string
+    value: string
+  }>
+}
+
 type SiDetailResponse = {
   si: SiItem
 }
@@ -53,6 +60,7 @@ export function SiForm({ mode, initial }: SiFormProps) {
   })
   const [tagInput, setTagInput] = useState("")
   const [cachedTags, setCachedTags] = useState<string[]>([])
+  const [mainTypeOptions, setMainTypeOptions] = useState<string[]>(() => Array.from(DEFAULT_MAIN_TYPES))
   const [boundAuthors, setBoundAuthors] = useState<BoundAuthor[]>([])
   const [selectedAuthorIds, setSelectedAuthorIds] = useState<string[]>(initial?.authorIds ?? [])
   const [remark, setRemark] = useState(initial?.remark ?? "")
@@ -83,6 +91,20 @@ export function SiForm({ mode, initial }: SiFormProps) {
 
     setCachedTags(defaultTags)
   }, [])
+
+  useEffect(() => {
+    // 主类型由管理员参数页维护；接口失败时保留本地默认项，避免网络问题阻断编辑表单。
+    void fetchJson<MainTypesResponse>("/api/si-main-types")
+      .then((response) => {
+        const activeNames = response.items.map((item) => item.name.trim()).filter(Boolean)
+        const nextOptions = Array.from(new Set([...(initial?.mainType ? [initial.mainType] : []), ...activeNames]))
+
+        setMainTypeOptions(nextOptions.length > 0 ? nextOptions : Array.from(DEFAULT_MAIN_TYPES))
+      })
+      .catch(() => {
+        setMainTypeOptions(Array.from(new Set([...(initial?.mainType ? [initial.mainType] : []), ...DEFAULT_MAIN_TYPES])))
+      })
+  }, [initial?.mainType])
 
   useEffect(() => {
     // 适配作者和预发作者都沿用“绑定作者”口径，先读取编辑当前可操作的作者集合。
@@ -282,7 +304,7 @@ export function SiForm({ mode, initial }: SiFormProps) {
                     <SelectValue placeholder="选择主类型" />
                   </SelectTrigger>
                   <SelectContent>
-                    {DEFAULT_MAIN_TYPES.map((item) => (
+                    {mainTypeOptions.map((item) => (
                       <SelectItem key={item} value={item}>
                         {item}
                       </SelectItem>

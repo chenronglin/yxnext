@@ -6,6 +6,7 @@ import { prisma } from "@/server/db/prisma"
 import { ApiError } from "@/server/shared/api-response"
 import {
   makeActiveDocKey,
+  makeChapterNoKey,
   makeChapterOrderKey,
   makeSingleDocKey,
   translateUniqueConstraintError,
@@ -671,6 +672,42 @@ async function unlockStagePlan(tx: TxClient, projectId: bigint, stageCode: "rele
   return stagePlan
 }
 
+async function completeStagePlan(tx: TxClient, projectId: bigint, stageCode: "chapter", now: Date) {
+  const stagePlan = await tx.projectStagePlan.findFirst({
+    where: {
+      projectId,
+      stageCode,
+    },
+  })
+
+  if (!stagePlan) {
+    throw new ApiError({
+      status: 409,
+      code: "PROJECT_STAGE_PLAN_MISSING",
+      message: "正文阶段计划不存在，无法完成",
+    })
+  }
+
+  if (stagePlan.gateStatus === "completed" && stagePlan.timelineStatus === "completed") {
+    return stagePlan
+  }
+
+  // 质检解锁意味着所有章节已审核通过，正文阶段应同时完成；
+  // 否则阶段计划会一直停在 unlocked/in_progress，后续预警任务会持续误报正文逾期。
+  await tx.projectStagePlan.update({
+    where: {
+      stagePlanId: stagePlan.stagePlanId,
+    },
+    data: {
+      gateStatus: "completed",
+      timelineStatus: "completed",
+      completedAt: stagePlan.completedAt ?? now,
+    },
+  })
+
+  return stagePlan
+}
+
 export async function listMyProjects(actor: ApiCurrentUser, filters: ProjectListFilters = {}) {
   await syncActiveProjectTimelineStatuses()
 
@@ -695,6 +732,7 @@ export async function listMyProjects(actor: ApiCurrentUser, filters: ProjectList
             lifecycleStatus: lifecycle as Prisma.ProjectWhereInput["lifecycleStatus"],
           }
         : {}),
+      ...(overdue === "yes" && (!lifecycle || lifecycle === "all") ? { lifecycleStatus: "active" } : {}),
       ...(stage && stage !== "all"
         ? {
             currentStage:
@@ -835,6 +873,8 @@ export async function createProjectChapter(actor: ApiCurrentUser, projectIdValue
           lastHandoffNote: null,
           // 章节排序唯一键要跟着 sortOrder 一起写入，避免同项目出现重复排序值。
           chapterOrderKey: makeChapterOrderKey(project.projectId, nextSortOrder),
+          // 章节号允许为空；填写时写入活动唯一键，由数据库兜住并发创建的重复章节号。
+          chapterNoKey: makeChapterNoKey(project.projectId, chapterNo),
         },
         select: {
           docId: true,
@@ -893,6 +933,11 @@ export async function createProjectChapter(actor: ApiCurrentUser, projectIdValue
           constraintIncludes: ["chapter_order_key"],
           code: "CHAPTER_ORDER_CONFLICT",
           message: "章节排序已在其他操作中变化，请刷新后重试",
+        },
+        {
+          constraintIncludes: ["chapter_no_key"],
+          code: "CHAPTER_NO_CONFLICT",
+          message: "该章节号已存在，请调整后重试",
         },
         {
           constraintIncludes: ["active_doc_key"],
@@ -1063,6 +1108,7 @@ export async function deleteProjectChapter(
         holderRole: "none",
         activeDraftId: null,
         chapterOrderKey: null,
+        chapterNoKey: null,
       },
     })
 
@@ -1290,6 +1336,7 @@ export async function unlockProjectQc(actor: ApiCurrentUser, projectIdValue: str
       })),
     })
 
+    await completeStagePlan(tx, project.projectId, "chapter", now)
     await unlockStagePlan(tx, project.projectId, "release", now)
 
     await tx.project.update({
@@ -1312,19 +1359,19 @@ export async function unlockProjectQc(actor: ApiCurrentUser, projectIdValue: str
       docId: releaseDocId,
     })
 
-      await writeOperationLog(tx, {
-        actor,
-        action: "project.qc.unlock",
-        entityType: "project",
-        entityId: project.projectId,
-        projectId: project.projectId,
-        afterJson: {
-          releaseStatus: "unlocked",
-          releaseDocId: releaseDocId.toString(),
-          chapterCount: chapterDocs.length,
-        },
-      })
+    await writeOperationLog(tx, {
+      actor,
+      action: "project.qc.unlock",
+      entityType: "project",
+      entityId: project.projectId,
+      projectId: project.projectId,
+      afterJson: {
+        releaseStatus: "unlocked",
+        releaseDocId: releaseDocId.toString(),
+        chapterCount: chapterDocs.length,
+      },
     })
+  })
   } catch (error) {
     throw (
       translateUniqueConstraintError(error, [
@@ -1370,6 +1417,18 @@ export async function completeProject(actor: ApiCurrentUser, projectIdValue: str
         lifecycleStatus: "completed",
         currentStage: "completed",
         completedAt: now,
+      },
+    })
+
+    await tx.todoItem.updateMany({
+      where: {
+        projectId: project.projectId,
+        status: "open",
+      },
+      data: {
+        status: "cancelled",
+        cancelledAt: now,
+        openDedupeKey: null,
       },
     })
 

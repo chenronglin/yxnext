@@ -25,8 +25,15 @@ type SiListResponse = {
   items: SiItem[]
 }
 
+type MainTypesResponse = {
+  items: Array<{
+    name: string
+  }>
+}
+
 export default function SiLibraryPage() {
   const [items, setItems] = useState<SiItem[]>([])
+  const [configuredMainTypes, setConfiguredMainTypes] = useState<string[]>(() => Array.from(DEFAULT_MAIN_TYPES))
   const [loading, setLoading] = useState(true)
   const [keyword, setKeyword] = useState("")
   const [status, setStatus] = useState<SiStatus | "all">("all")
@@ -55,10 +62,22 @@ export default function SiLibraryPage() {
     void loadItems()
   }, [])
 
+  useEffect(() => {
+    // 列表筛选使用管理员维护的启用主类型；失败时回退到本地默认项，避免筛选条空白。
+    void fetchJson<MainTypesResponse>("/api/si-main-types")
+      .then((response) => {
+        const activeNames = response.items.map((item) => item.name.trim()).filter(Boolean)
+        setConfiguredMainTypes(activeNames.length > 0 ? activeNames : Array.from(DEFAULT_MAIN_TYPES))
+      })
+      .catch(() => {
+        setConfiguredMainTypes(Array.from(DEFAULT_MAIN_TYPES))
+      })
+  }, [])
+
   const mainTypeOptions = useMemo(() => {
-    // 既保留设计稿里的固定类型，也兼容数据库里已存在但不在默认清单中的主类型。
-    return Array.from(new Set([...DEFAULT_MAIN_TYPES, ...items.map((item) => item.mainType).filter(Boolean)]))
-  }, [items])
+    // 既使用后台启用项，也兼容历史 SI 上已经存在但后来被停用的主类型。
+    return Array.from(new Set([...configuredMainTypes, ...items.map((item) => item.mainType).filter(Boolean)]))
+  }, [configuredMainTypes, items])
 
   const filtered = useMemo(() => {
     return items.filter((item) => {

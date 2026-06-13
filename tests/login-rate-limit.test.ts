@@ -3,8 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   clearLoginRateLimit,
   createLoginRateLimitContext,
+  createPublicRateLimitContext,
   getLoginRateLimitStatus,
+  getPublicRateLimitStatus,
+  PUBLIC_REGISTER_RATE_LIMIT,
   recordFailedLoginAttempt,
+  recordPublicRateLimitHit,
   resetLoginRateLimitStoreForTests,
 } from "@/server/auth/login-rate-limit"
 
@@ -52,6 +56,25 @@ describe("login-rate-limit", () => {
     expect(getLoginRateLimitStatus(context)).toEqual({
       limited: false,
       retryAfterSeconds: 0,
+    })
+  })
+
+  it("公开注册入口按来源 IP 达到窗口上限后会被限流", () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-06-10T10:00:00.000Z"))
+
+    const context = createPublicRateLimitContext({
+      scope: "register",
+      forwardedFor: "203.0.113.10",
+    })
+
+    for (let index = 0; index < PUBLIC_REGISTER_RATE_LIMIT.maxHits; index += 1) {
+      recordPublicRateLimitHit(context)
+    }
+
+    expect(getPublicRateLimitStatus(context, PUBLIC_REGISTER_RATE_LIMIT)).toEqual({
+      limited: true,
+      retryAfterSeconds: 1800,
     })
   })
 })

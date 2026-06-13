@@ -867,6 +867,10 @@ async function dashboardStats(range: RangeKey = "30d"): Promise<DashboardStats> 
       prisma.projectStagePlan.findMany({
         where: {
           timelineStatus: "overdue",
+          // 管理看板只统计仍在推进中的项目，避免已完成、归档、取消项目的历史逾期值长期污染指标。
+          project: {
+            lifecycleStatus: "active",
+          },
         },
         select: {
           projectId: true,
@@ -1426,7 +1430,7 @@ export async function resetManagedUserPassword(actor: ApiCurrentUser, userIdValu
     })
   }
 
-  const tempPassword = randomBytes(5).toString("hex")
+  const tempPassword = randomBytes(8).toString("hex")
   const passwordHash = await bcrypt.hash(tempPassword, 10)
 
   await prisma.$transaction(async (tx) => {
@@ -2322,6 +2326,7 @@ export async function listGovernanceProjects(actor: ApiCurrentUser, filters: Pro
       ...(lifecycle && lifecycle !== "all"
         ? { lifecycleStatus: lifecycle as Prisma.ProjectWhereInput["lifecycleStatus"] }
         : {}),
+      ...(overdue === "yes" && (!lifecycle || lifecycle === "all") ? { lifecycleStatus: "active" } : {}),
       ...(editorId ? { editorId } : {}),
       ...(authorId ? { authorId } : {}),
       ...(stage && stage !== "all"
@@ -2466,17 +2471,75 @@ export async function updateGovernanceProjectAssignment(
       })
     }
 
-    await tx.project.update({
-      where: {
-        projectId,
-      },
-      data: {
-        editorId: nextEditorId,
-        authorId: nextAuthorId,
-      },
-    })
+      await tx.project.update({
+        where: {
+          projectId,
+        },
+        data: {
+          editorId: nextEditorId,
+          authorId: nextAuthorId,
+        },
+      })
 
-    await tx.projectAssignmentLog.create({
+      if (nextAuthorId !== project.authorId) {
+        // 项目作者变更后，仍处于作者持有中的活动草稿必须同步迁给新作者；
+        // 否则新作者能看到项目，却会被 Doc 编辑权限拦在 activeDraft.ownerUserId 上。
+        await tx.docCurrentDraft.updateMany({
+          where: {
+            status: "active",
+            ownerRole: "author",
+            doc: {
+              projectId,
+            },
+          },
+          data: {
+            ownerUserId: nextAuthorId,
+          },
+        })
+
+        await tx.todoItem.updateMany({
+          where: {
+            projectId,
+            status: "open",
+            todoType: "doc_return",
+            recipientUserId: project.authorId,
+          },
+          data: {
+            recipientUserId: nextAuthorId,
+          },
+        })
+      }
+
+      if (nextEditorId !== project.editorId) {
+        // 编辑变更同样要迁移编辑持有中的审稿草稿和待审待办，
+        // 避免旧编辑离开后，新编辑无法继续 review 当前流转中的稿件。
+        await tx.docCurrentDraft.updateMany({
+          where: {
+            status: "active",
+            ownerRole: "editor",
+            doc: {
+              projectId,
+            },
+          },
+          data: {
+            ownerUserId: nextEditorId,
+          },
+        })
+
+        await tx.todoItem.updateMany({
+          where: {
+            projectId,
+            status: "open",
+            todoType: "doc_review",
+            recipientUserId: project.editorId,
+          },
+          data: {
+            recipientUserId: nextEditorId,
+          },
+        })
+      }
+
+	    await tx.projectAssignmentLog.create({
       data: {
         projectId,
         oldEditorId: project.editorId,
@@ -2680,8 +2743,8 @@ export async function transitionGovernanceProject(
           cancelledAt: now,
         },
       })
-    } else {
-      const restorableProject = await tx.project.findUnique({
+	    } else {
+	      const restorableProject = await tx.project.findUnique({
         where: {
           projectId,
         },
@@ -2791,6 +2854,22 @@ export async function transitionGovernanceProject(
           archivedAt: null,
           cancelledAt: null,
           restoredAt: now,
+        },
+      })
+    }
+
+    if (action !== "restore") {
+      // 项目完成、归档或取消后，所有打开待办都应同步关闭；
+      // 否则已结束项目仍会污染工作台和通知待处理入口。
+      await tx.todoItem.updateMany({
+        where: {
+          projectId,
+          status: "open",
+        },
+        data: {
+          status: "cancelled",
+          cancelledAt: now,
+          openDedupeKey: null,
         },
       })
     }

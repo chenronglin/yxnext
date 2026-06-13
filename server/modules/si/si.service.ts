@@ -67,6 +67,26 @@ type OperationLogInput = {
   metadataJson?: Prisma.InputJsonValue
 }
 
+export async function listActiveSiMainTypes(actor: ApiCurrentUser) {
+  void actor
+
+  const items = await prisma.siMainType.findMany({
+    where: {
+      isActive: true,
+    },
+    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+  })
+
+  return {
+    items: items.map((item) => ({
+      id: item.mainTypeId.toString(),
+      name: item.name,
+      value: item.name,
+      order: item.sortOrder,
+    })),
+  }
+}
+
 const storyIdeaInclude = {
   mainType: true,
   creatorEditor: {
@@ -756,7 +776,9 @@ export async function listSiPreissues(actor: ApiCurrentUser, filters: PreissueLi
           : {
               ...(dbStatus ? { status: dbStatus as PreissueRecord["status"] } : {}),
             }),
-      ...(authorId ? { authorId } : {}),
+      // 作者只能查看预发给自己的记录；前端传入的 authorId 只能用于编辑/管理员筛选，
+      // 不能覆盖作者端的强制归属条件，否则会形成 IDOR 越权读取。
+      ...(actor.role !== "author" && authorId ? { authorId } : {}),
       ...(keyword
         ? {
             storyIdea: {
@@ -1361,269 +1383,326 @@ export async function convertSiPreissueToProject(actor: ApiCurrentUser, recordId
 
   const preissueId = parseBigIntId(recordIdValue, "预发记录 ID")
 
-  const result = await prisma.$transaction(async (tx) => {
-    const existing = await tx.siPreissue.findUnique({
-      where: {
-        preissueId,
-      },
-      include: {
-        storyIdea: {
-          include: {
-            mainType: true,
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const existing = await tx.siPreissue.findUnique({
+        where: {
+          preissueId,
+        },
+        include: {
+          storyIdea: {
+            include: {
+              mainType: true,
+            },
           },
         },
-      },
-    })
-
-    if (!existing) {
-      throw new ApiError({
-        status: 404,
-        code: "PREISSUE_NOT_FOUND",
-        message: "预发记录不存在",
       })
-    }
 
-    ensureCanManageSi(actor, existing.storyIdea)
+      if (!existing) {
+        throw new ApiError({
+          status: 404,
+          code: "PREISSUE_NOT_FOUND",
+          message: "预发记录不存在",
+        })
+      }
 
-    if (existing.status === "recalled") {
-      throw new ApiError({
-        status: 409,
-        code: "PREISSUE_RECALLED",
-        message: "已收回的预发记录不可转项目",
-      })
-    }
+      ensureCanManageSi(actor, existing.storyIdea)
 
-    if (existing.status === "converted" || existing.projectId) {
-      throw new ApiError({
-        status: 409,
-        code: "PREISSUE_ALREADY_CONVERTED",
-        message: "该预发记录已转项目，不能重复创建项目",
-      })
-    }
+      if (existing.status === "recalled") {
+        throw new ApiError({
+          status: 409,
+          code: "PREISSUE_RECALLED",
+          message: "已收回的预发记录不可转项目",
+        })
+      }
 
-    if (existing.storyIdea.status === "converted") {
-      throw new ApiError({
-        status: 409,
-        code: "SI_ALREADY_CONVERTED",
-        message: "该 SI 已转项目，不能重复创建项目",
-      })
-    }
+      if (existing.status === "converted" || existing.projectId) {
+        throw new ApiError({
+          status: 409,
+          code: "PREISSUE_ALREADY_CONVERTED",
+          message: "该预发记录已转项目，不能重复创建项目",
+        })
+      }
 
-    if (existing.storyIdea.status === "archived") {
-      throw new ApiError({
-        status: 409,
-        code: "SI_ARCHIVED",
-        message: "已归档的 SI 不可转项目",
-      })
-    }
+      if (existing.storyIdea.status === "converted") {
+        throw new ApiError({
+          status: 409,
+          code: "SI_ALREADY_CONVERTED",
+          message: "该 SI 已转项目，不能重复创建项目",
+        })
+      }
 
-    const existedProject = await tx.project.findFirst({
-      where: {
-        OR: [{ siPreissueId: preissueId }, { sourceSiId: existing.siId }],
-      },
-      select: {
-        projectId: true,
-      },
-    })
+      if (existing.storyIdea.status === "archived") {
+        throw new ApiError({
+          status: 409,
+          code: "SI_ARCHIVED",
+          message: "已归档的 SI 不可转项目",
+        })
+      }
 
-    if (existedProject) {
-      throw new ApiError({
-        status: 409,
-        code: "PROJECT_ALREADY_EXISTS",
-        message: "该预发记录或 SI 已创建过项目",
-      })
-    }
-
-    const snapshot = existing.siSnapshotJson
-    const title = readSnapshotString(snapshot, "title", existing.storyIdea.title)
-    const freshTwist = readSnapshotString(snapshot, "freshTwist", existing.storyIdea.freshTwist ?? "")
-    const coreSynopsis = readSnapshotString(snapshot, "coreSynopsis", existing.storyIdea.coreSynopsis ?? "")
-    const now = new Date()
-
-    const project = await tx.project.create({
-      data: {
-        sourceSiId: existing.siId,
-        siPreissueId: preissueId,
-        title,
-        intro: coreSynopsis || freshTwist || null,
-        editorId: existing.editorId,
-        authorId: existing.authorId,
-        lifecycleStatus: "active",
-        currentStage: "synopsis",
-        releaseStatus: "locked",
-        createdBy: actor.userId,
-      },
-    })
-
-    const defaultPlans = await tx.stagePlanDefault.findMany({
-      where: {
-        stageCode: {
-          in: STAGE_ORDER,
+      const activeBinding = await tx.editorAuthorBinding.findFirst({
+        where: {
+          editorId: existing.editorId,
+          authorId: existing.authorId,
+          status: "active",
         },
-      },
-    })
-    const defaultPlanMap = new Map(defaultPlans.map((item) => [item.stageCode, item.defaultPlanDays]))
+        select: {
+          bindingId: true,
+        },
+      })
 
-    await tx.projectStagePlan.createMany({
-      data: STAGE_ORDER.map((stageCode) => {
-        const planDays = defaultPlanMap.get(stageCode) ?? STAGE_FALLBACK_DAYS[stageCode]
-        const isFirstStage = stageCode === "synopsis"
+      if (!activeBinding) {
+        throw new ApiError({
+          status: 409,
+          code: "PREISSUE_BINDING_INACTIVE",
+          message: "该预发记录的编辑-作者绑定已失效，请重新绑定后再转项目",
+        })
+      }
 
-        return {
+      const existedProject = await tx.project.findFirst({
+        where: {
+          OR: [{ siPreissueId: preissueId }, { sourceSiId: existing.siId }],
+        },
+        select: {
+          projectId: true,
+        },
+      })
+
+      if (existedProject) {
+        throw new ApiError({
+          status: 409,
+          code: "PROJECT_ALREADY_EXISTS",
+          message: "该预发记录或 SI 已创建过项目",
+        })
+      }
+
+      const snapshot = existing.siSnapshotJson
+      const title = readSnapshotString(snapshot, "title", existing.storyIdea.title)
+      const freshTwist = readSnapshotString(snapshot, "freshTwist", existing.storyIdea.freshTwist ?? "")
+      const coreSynopsis = readSnapshotString(snapshot, "coreSynopsis", existing.storyIdea.coreSynopsis ?? "")
+      const now = new Date()
+
+      const project = await tx.project.create({
+        data: {
+          sourceSiId: existing.siId,
+          siPreissueId: preissueId,
+          title,
+          intro: coreSynopsis || freshTwist || null,
+          editorId: existing.editorId,
+          authorId: existing.authorId,
+          lifecycleStatus: "active",
+          currentStage: "synopsis",
+          releaseStatus: "locked",
+          createdBy: actor.userId,
+        },
+      })
+
+      const defaultPlans = await tx.stagePlanDefault.findMany({
+        where: {
+          stageCode: {
+            in: STAGE_ORDER,
+          },
+        },
+      })
+      const defaultPlanMap = new Map(defaultPlans.map((item) => [item.stageCode, item.defaultPlanDays]))
+
+      await tx.projectStagePlan.createMany({
+        data: STAGE_ORDER.map((stageCode) => {
+          const planDays = defaultPlanMap.get(stageCode) ?? STAGE_FALLBACK_DAYS[stageCode]
+          const isFirstStage = stageCode === "synopsis"
+
+          return {
+            projectId: project.projectId,
+            stageCode,
+            gateStatus: isFirstStage ? "unlocked" : "locked",
+            timelineStatus: isFirstStage ? "in_progress" : "not_started",
+            planDays,
+            unlockedAt: isFirstStage ? now : null,
+            startedAt: isFirstStage ? now : null,
+            dueAt: isFirstStage ? addDays(now, planDays) : null,
+          }
+        }),
+      })
+
+      const wordCount = countWordsForChineseText(coreSynopsis)
+
+      const doc = await tx.doc.create({
+        data: {
           projectId: project.projectId,
-          stageCode,
-          gateStatus: isFirstStage ? "unlocked" : "locked",
-          timelineStatus: isFirstStage ? "in_progress" : "not_started",
-          planDays,
-          unlockedAt: isFirstStage ? now : null,
-          startedAt: isFirstStage ? now : null,
-          dueAt: isFirstStage ? addDays(now, planDays) : null,
-        }
-      }),
-    })
+          docType: "synopsis",
+          stageCode: "synopsis",
+          title: "梗概",
+          status: "draft",
+          holderRole: "author",
+          currentWordCount: wordCount,
+          currentPlainText: coreSynopsis || null,
+          currentCleanText: coreSynopsis || null,
+          summary: freshTwist || null,
+          lastAction: "author_save",
+          lastActorId: existing.authorId,
+          lastActionAt: now,
+          // 梗概 Doc 属于“项目内唯一单据”，创建时必须把唯一键写实，交给数据库做最后兜底。
+          singleDocKey: makeSingleDocKey(project.projectId, "synopsis"),
+        },
+      })
 
-    const wordCount = countWordsForChineseText(coreSynopsis)
+      const contentJson = makeSynopsisDocContent({
+        docId: doc.docId,
+        title,
+        freshTwist: freshTwist || null,
+        coreSynopsis: coreSynopsis || null,
+        now,
+      })
 
-    const doc = await tx.doc.create({
-      data: {
+      const draft = await tx.docCurrentDraft.create({
+        data: {
+          docId: doc.docId,
+          ownerRole: "author",
+          ownerUserId: existing.authorId,
+          contentSchemaVersion: SYNOPSIS_DOC_SCHEMA_VERSION,
+          contentJson,
+          wordCount,
+          plainText: coreSynopsis || null,
+          cleanText: coreSynopsis || null,
+          exportText: coreSynopsis || null,
+          summary: freshTwist || null,
+          status: "active",
+          // 当前工作稿唯一键直接复用 docId，保证同一 Doc 同时只能存在一条 active 草稿。
+          activeDocKey: makeActiveDocKey(doc.docId),
+        },
+      })
+
+      await tx.doc.update({
+        where: {
+          docId: doc.docId,
+        },
+        data: {
+          activeDraftId: draft.draftId,
+        },
+      })
+
+      await tx.siPreissue.update({
+        where: {
+          preissueId,
+        },
+        data: {
+          status: "converted",
+          projectId: project.projectId,
+          convertedAt: now,
+        },
+      })
+
+      await tx.siPreissue.updateMany({
+        where: {
+          siId: existing.siId,
+          preissueId: {
+            not: preissueId,
+          },
+          status: "preissued",
+        },
+        data: {
+          status: "recalled",
+          recalledAt: now,
+          effectivePairKey: null,
+        },
+      })
+
+      await tx.storyIdea.update({
+        where: {
+          siId: existing.siId,
+        },
+        data: {
+          status: "converted",
+        },
+      })
+
+      await tx.notification.create({
+        data: {
+          recipientUserId: existing.authorId,
+          type: "project_created_from_si",
+          title: "SI 已确认转项目",
+          body: `《${title}》已创建为项目，请进入项目开始梗概阶段。`,
+          projectId: project.projectId,
+          siId: existing.siId,
+          preissueId,
+          entityType: "project",
+          entityId: project.projectId,
+        },
+      })
+
+      await writeOperationLog(tx, {
+        actor,
+        action: "si_preissue.convert_to_project",
+        entityType: "si_preissue",
+        entityId: preissueId,
         projectId: project.projectId,
-        docType: "synopsis",
-        stageCode: "synopsis",
-        title: "梗概",
-        status: "draft",
-        holderRole: "author",
-        currentWordCount: wordCount,
-        currentPlainText: coreSynopsis || null,
-        currentCleanText: coreSynopsis || null,
-        summary: freshTwist || null,
-        lastAction: "author_save",
-        lastActorId: existing.authorId,
-        lastActionAt: now,
-        // 梗概 Doc 属于“项目内唯一单据”，创建时必须把唯一键写实，交给数据库做最后兜底。
-        singleDocKey: makeSingleDocKey(project.projectId, "synopsis"),
-      },
-    })
-
-    const contentJson = makeSynopsisDocContent({
-      docId: doc.docId,
-      title,
-      freshTwist: freshTwist || null,
-      coreSynopsis: coreSynopsis || null,
-      now,
-    })
-
-    const draft = await tx.docCurrentDraft.create({
-      data: {
         docId: doc.docId,
-        ownerRole: "author",
-        ownerUserId: existing.authorId,
-        contentSchemaVersion: SYNOPSIS_DOC_SCHEMA_VERSION,
-        contentJson,
-        wordCount,
-        plainText: coreSynopsis || null,
-        cleanText: coreSynopsis || null,
-        exportText: coreSynopsis || null,
-        summary: freshTwist || null,
-        status: "active",
-        // 当前工作稿唯一键直接复用 docId，保证同一 Doc 同时只能存在一条 active 草稿。
-        activeDocKey: makeActiveDocKey(doc.docId),
-      },
-    })
+        siId: existing.siId,
+        preissueId,
+        beforeJson: {
+          preissueStatus: existing.status,
+          siStatus: existing.storyIdea.status,
+          projectId: existing.projectId?.toString() ?? null,
+        },
+        afterJson: {
+          preissueStatus: "converted",
+          siStatus: "converted",
+          projectId: project.projectId.toString(),
+          synopsisDocId: doc.docId.toString(),
+          synopsisDraftId: draft.draftId.toString(),
+        },
+      })
 
-    await tx.doc.update({
-      where: {
+      return {
+        projectId: project.projectId,
         docId: doc.docId,
-      },
-      data: {
-        activeDraftId: draft.draftId,
-      },
+      }
     })
 
-    await tx.siPreissue.update({
+    const record = await prisma.siPreissue.findUniqueOrThrow({
       where: {
         preissueId,
       },
-      data: {
-        status: "converted",
-        projectId: project.projectId,
-        convertedAt: now,
-      },
-    })
-
-    await tx.storyIdea.update({
-      where: {
-        siId: existing.siId,
-      },
-      data: {
-        status: "converted",
-      },
-    })
-
-    await tx.notification.create({
-      data: {
-        recipientUserId: existing.authorId,
-        type: "project_created_from_si",
-        title: "SI 已确认转项目",
-        body: `《${title}》已创建为项目，请进入项目开始梗概阶段。`,
-        projectId: project.projectId,
-        siId: existing.siId,
-        preissueId,
-        entityType: "project",
-        entityId: project.projectId,
-      },
-    })
-
-    await writeOperationLog(tx, {
-      actor,
-      action: "si_preissue.convert_to_project",
-      entityType: "si_preissue",
-      entityId: preissueId,
-      projectId: project.projectId,
-      docId: doc.docId,
-      siId: existing.siId,
-      preissueId,
-      beforeJson: {
-        preissueStatus: existing.status,
-        siStatus: existing.storyIdea.status,
-        projectId: existing.projectId?.toString() ?? null,
-      },
-      afterJson: {
-        preissueStatus: "converted",
-        siStatus: "converted",
-        projectId: project.projectId.toString(),
-        synopsisDocId: doc.docId.toString(),
-        synopsisDraftId: draft.draftId.toString(),
-      },
+      include: preissueInclude,
     })
 
     return {
-      projectId: project.projectId,
-      docId: doc.docId,
+      project: {
+        id: result.projectId.toString(),
+        projectId: result.projectId.toString(),
+        synopsisDocId: result.docId.toString(),
+      },
+      record: serializePreissue(record),
     }
-  })
-
-  const record = await prisma.siPreissue.findUniqueOrThrow({
-    where: {
-      preissueId,
-    },
-    include: preissueInclude,
-  })
-
-  return {
-    project: {
-      id: result.projectId.toString(),
-      projectId: result.projectId.toString(),
-      synopsisDocId: result.docId.toString(),
-    },
-    record: serializePreissue(record),
+  } catch (error) {
+    throw (
+      translateUniqueConstraintError(error, [
+        {
+          constraintIncludes: ["si_preissue_id"],
+          code: "PREISSUE_ALREADY_CONVERTED",
+          message: "该预发记录已被转成项目，请刷新后重试",
+        },
+        {
+          constraintIncludes: ["source_si_id"],
+          code: "SI_ALREADY_CONVERTED",
+          message: "该 SI 已被转成项目，请刷新后重试",
+        },
+        {
+          constraintIncludes: ["single_doc_key"],
+          code: "SYNOPSIS_DOC_EXISTS",
+          message: "梗概 Doc 已在其他操作中创建，请刷新后重试",
+        },
+        {
+          constraintIncludes: ["active_doc_key"],
+          code: "DOC_ACTIVE_DRAFT_CONFLICT",
+          message: "梗概活动草稿已在其他操作中创建，请刷新后重试",
+        },
+      ]) ?? error
+    )
   }
 }
 
-export async function rollbackStoryIdeaVersion(
-  actor: ApiCurrentUser,
-  siIdValue: string,
-  versionIdValue: string,
-) {
+export async function rollbackStoryIdeaVersion(actor: ApiCurrentUser, siIdValue: string, versionIdValue: string) {
   const siId = parseBigIntId(siIdValue, "SI ID")
   const versionId = parseBigIntId(versionIdValue, "版本 ID")
 

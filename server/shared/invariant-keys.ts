@@ -7,9 +7,11 @@ function joinBigIntKey(parts: Array<bigint | number | string>) {
 }
 
 // 活动绑定唯一键：
-// 同一作者在活动状态下只能绑定一个编辑，同一编辑-作者组合也只能存在一条活动关系。
+// 同一作者在活动状态下只能绑定一个编辑，因此唯一键只能以作者为维度。
+// 如果把 editorId 也拼进键里，并发场景会允许“同一作者绑定多个编辑”同时成立。
 export function makeActiveBindingKey(editorId: bigint, authorId: bigint) {
-  return joinBigIntKey([editorId, authorId])
+  void editorId
+  return String(authorId)
 }
 
 // 有效预发唯一键：
@@ -28,6 +30,12 @@ export function makeSingleDocKey(projectId: bigint, docType: "synopsis" | "outli
 // 同一项目下的章节 Doc 在未删除状态时，排序值必须唯一。
 export function makeChapterOrderKey(projectId: bigint, sortOrder: number) {
   return joinBigIntKey([projectId, sortOrder])
+}
+
+// 章节号唯一键：
+// 章节号允许为空；一旦填写，同一项目下未删除章节不能重复使用同一个章节号。
+export function makeChapterNoKey(projectId: bigint, chapterNo: number | null) {
+  return chapterNo === null ? null : joinBigIntKey([projectId, chapterNo])
 }
 
 // 活动草稿唯一键：
@@ -49,10 +57,7 @@ function hasAllConstraintParts(target: unknown, expectedParts: string[]) {
 }
 
 // 把底层唯一约束异常翻译成稳定业务错误，避免并发写入场景把 P2002 直接冒成 500。
-export function translateUniqueConstraintError(
-  error: unknown,
-  mappings: UniqueConstraintMapping[],
-) {
+export function translateUniqueConstraintError(error: unknown, mappings: UniqueConstraintMapping[]) {
   if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") {
     return null
   }

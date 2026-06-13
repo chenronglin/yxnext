@@ -1,6 +1,13 @@
 import { type NextRequest } from "next/server"
+import { NextResponse } from "next/server"
 import { z } from "zod"
 
+import {
+  createPublicRateLimitContext,
+  getPublicRateLimitStatus,
+  PUBLIC_REGISTER_RATE_LIMIT,
+  recordPublicRateLimitHit,
+} from "@/server/auth/login-rate-limit"
 import { registerPendingUser } from "@/server/modules/auth/auth.service"
 import { fail, ok, ApiError } from "@/server/shared/api-response"
 
@@ -19,6 +26,32 @@ const registerSchema = z.object({
 })
 
 export async function POST(request: NextRequest) {
+  const rateLimitContext = createPublicRateLimitContext({
+    scope: "register",
+    forwardedFor: request.headers.get("x-forwarded-for"),
+    realIp: request.headers.get("x-real-ip"),
+  })
+  const rateLimitStatus = getPublicRateLimitStatus(rateLimitContext, PUBLIC_REGISTER_RATE_LIMIT)
+
+  // 注册是公网入口，限流必须发生在解析和写库之前，避免垃圾注册请求消耗数据库资源。
+  if (rateLimitStatus.limited) {
+    return NextResponse.json(
+      {
+        ok: false,
+        code: "REGISTER_RATE_LIMITED",
+        message: "注册申请提交过于频繁，请稍后再试",
+      },
+      {
+        status: 429,
+        headers: {
+          "Retry-After": String(rateLimitStatus.retryAfterSeconds),
+        },
+      },
+    )
+  }
+
+  recordPublicRateLimitHit(rateLimitContext)
+
   try {
     const body = registerSchema.parse(await request.json().catch(() => ({})))
 

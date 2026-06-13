@@ -11,7 +11,7 @@ import Placeholder from "@tiptap/extension-placeholder"
 import { TextStyle } from "@tiptap/extension-text-style"
 import Underline from "@tiptap/extension-underline"
 import StarterKit from "@tiptap/starter-kit"
-import type { Mark as ProseMirrorMark, Slice } from "@tiptap/pm/model"
+import { Fragment, Slice, type Mark as ProseMirrorMark, type Node as ProseMirrorNode } from "@tiptap/pm/model"
 import { Plugin, PluginKey, TextSelection } from "@tiptap/pm/state"
 import type { EditorState, Selection, Transaction } from "@tiptap/pm/state"
 import { Decoration, DecorationSet, type EditorView } from "@tiptap/pm/view"
@@ -142,6 +142,72 @@ function rangeContainsText(state: EditorState, range: TextRange) {
   return hasText
 }
 
+function collectRevisionTextSegments(state: EditorState, range: TextRange) {
+  const segments: { from: number; to: number; isInserted: boolean }[] = []
+
+  state.doc.nodesBetween(range.from, range.to, (node, pos) => {
+    if (!node.isText) {
+      return true
+    }
+
+    const start = Math.max(range.from, pos)
+    const end = Math.min(range.to, pos + node.nodeSize)
+
+    if (start < end) {
+      segments.push({
+        from: start,
+        to: end,
+        isInserted: node.marks.some(isInsertedRevisionMark),
+      })
+    }
+
+    return true
+  })
+
+  return segments
+}
+
+function filterInsertedTextNode(node: ProseMirrorNode): ProseMirrorNode | null {
+  if (node.isText) {
+    return node.marks.some(isInsertedRevisionMark) ? null : node
+  }
+
+  if (node.isLeaf) {
+    return node
+  }
+
+  const children: ProseMirrorNode[] = []
+  node.content.forEach((child) => {
+    const next = filterInsertedTextNode(child)
+
+    if (next) {
+      children.push(next)
+    }
+  })
+
+  // 输入法替换时，原选区里已有 inserted 文本不属于真实底稿；
+  // 过滤后若容器为空，直接丢弃该容器，避免后续恢复出空的修订块。
+  if (children.length === 0 && node.content.size > 0) {
+    return null
+  }
+
+  return node.copy(Fragment.fromArray(children))
+}
+
+function stripInsertedTextFromSlice(slice: Slice) {
+  const children: ProseMirrorNode[] = []
+
+  slice.content.forEach((node) => {
+    const next = filterInsertedTextNode(node)
+
+    if (next) {
+      children.push(next)
+    }
+  })
+
+  return new Slice(Fragment.fromArray(children), slice.openStart, slice.openEnd)
+}
+
 function getTypingMarks(state: EditorState) {
   // 用户输入时保留加粗、颜色等普通格式，但去掉旧 revision mark，避免新输入继承旧修订身份。
   const marks = state.storedMarks ?? state.selection.$from.marks()
@@ -155,6 +221,28 @@ function isRevisionMark(mark: ProseMirrorMark): mark is ProseMirrorMark & { attr
 
 function isInsertedRevisionMark(mark: ProseMirrorMark): mark is ProseMirrorMark & { attrs: RevisionAttributes } {
   return isRevisionMark(mark) && mark.attrs.role === "inserted" && (mark.attrs.kind === "insert" || mark.attrs.kind === "replace")
+}
+
+function isDeletedRevisionMark(mark: ProseMirrorMark): mark is ProseMirrorMark & { attrs: RevisionAttributes } {
+  return isRevisionMark(mark) && mark.attrs.role === "deleted" && mark.attrs.kind === "delete"
+}
+
+function forwardDeleteRangeSkippingDeletedText(state: EditorState, pos: number) {
+  let from = clampPosition(state, pos)
+
+  while (from < state.doc.content.size) {
+    const nodeAfter = state.doc.resolve(from).nodeAfter
+
+    // Delete 连按时应越过已经标删的文字；否则光标一直卡在同一个 deleted 字符前。
+    if (nodeAfter?.isText && nodeAfter.marks.some(isDeletedRevisionMark)) {
+      from += nodeAfter.nodeSize
+      continue
+    }
+
+    break
+  }
+
+  return normalizeRange(state, from, from + 1)
 }
 
 function hasSameInsertedRevisionIdentity(left: RevisionAttributes, right: RevisionAttributes) {
@@ -346,10 +434,20 @@ export function applyInsertedText(
       return false
     }
 
-    const originalFrom = tr.mapping.map(range.from, 1)
-    const originalTo = tr.mapping.map(range.to, 1)
+    const originalSegments = collectRevisionTextSegments(state, range)
 
-    tr.addMark(originalFrom, originalTo, originalMark)
+    // 替换选区可能混有 inserted 文本；这些文字从未存在于底稿，不能被标成 original。
+    for (let i = originalSegments.length - 1; i >= 0; i--) {
+      const segment = originalSegments[i]
+      const originalFrom = tr.mapping.map(segment.from, 1)
+      const originalTo = tr.mapping.map(segment.to, 1)
+
+      if (segment.isInserted) {
+        tr.delete(originalFrom, originalTo)
+      } else {
+        tr.addMark(originalFrom, originalTo, originalMark)
+      }
+    }
   }
 
   tr.setSelection(TextSelection.create(tr.doc, insertedTo))
@@ -371,27 +469,14 @@ export function markDeletedRange(
   range: TextRange,
   options: RevisionTrackingOptions,
   dispatch?: (tr: Transaction) => void,
+  selectionSide: "start" | "end" = "start",
 ) {
   if (!options.enabled || range.from === range.to || !rangeContainsText(state, range)) {
     return false
   }
 
   const tr = state.tr
-  const segments: { from: number; to: number; isInserted: boolean }[] = []
-
-  state.doc.nodesBetween(range.from, range.to, (node, pos) => {
-    if (!node.isText) {
-      return true
-    }
-
-    const start = Math.max(range.from, pos)
-    const end = Math.min(range.to, pos + node.nodeSize)
-    if (start < end) {
-      const isInserted = node.marks.some(isInsertedRevisionMark)
-      segments.push({ from: start, to: end, isInserted })
-    }
-    return true
-  })
+  const segments = collectRevisionTextSegments(state, range)
 
   if (segments.length === 0) {
     return false
@@ -437,7 +522,8 @@ export function markDeletedRange(
   }
 
   const resolvedFrom = tr.mapping.map(range.from)
-  tr.setSelection(TextSelection.create(tr.doc, resolvedFrom))
+  const resolvedTo = tr.mapping.map(range.to)
+  tr.setSelection(TextSelection.create(tr.doc, selectionSide === "end" ? resolvedTo : resolvedFrom))
 
   if (lastMarkedAttrs) {
     tr.setMeta(revisionTrackingKey, {
@@ -571,7 +657,9 @@ export function finalizeComposition(view: EditorView, base: CompositionBase, opt
 
   const tr = state.tr.addMark(insertedRange.from, insertedRange.to, insertedMark)
 
-  if (isReplacement && base.slice.size > 0) {
+  const originalSlice = isReplacement && base.slice.size > 0 ? stripInsertedTextFromSlice(base.slice) : null
+
+  if (originalSlice && originalSlice.size > 0) {
     const originalMark = createRevisionMark(state, makeOriginalRevisionAttrs(insertedAttrs))
 
     if (!originalMark) {
@@ -579,9 +667,9 @@ export function finalizeComposition(view: EditorView, base: CompositionBase, opt
     }
 
     const originalFrom = insertedRange.to
-    const originalTo = originalFrom + base.slice.size
+    const originalTo = originalFrom + originalSlice.size
 
-    tr.replace(originalFrom, originalFrom, base.slice)
+    tr.replace(originalFrom, originalFrom, originalSlice)
     tr.addMark(originalFrom, originalTo, originalMark)
   }
 
@@ -980,9 +1068,9 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
                 ? range
                 : event.key === "Backspace"
                   ? normalizeRange(state, state.selection.from - 1, state.selection.from)
-                  : normalizeRange(state, state.selection.from, state.selection.from + 1)
+              : forwardDeleteRangeSkippingDeletedText(state, state.selection.from)
 
-            return markDeletedRange(state, targetRange, this.options, view.dispatch)
+            return markDeletedRange(state, targetRange, this.options, view.dispatch, event.key === "Delete" ? "end" : "start")
           },
           handleDOMEvents: {
             compositionstart: (view) => composition.handleCompositionStart(view),

@@ -54,15 +54,6 @@ export default async function AccountStatusPage({
           <p className="text-pretty text-sm leading-relaxed text-muted-foreground">{config.desc}</p>
         </div>
 
-        {status === "rejected" && (
-          <div className="w-full rounded-md border border-border bg-muted px-4 py-3 text-left">
-            <p className="text-xs font-medium text-muted-foreground">管理员反馈原因</p>
-            <p className="mt-1 text-sm text-foreground">
-              提交的作品信息不完整，请补充代表作与联系方式后重新申请。
-            </p>
-          </div>
-        )}
-
         <div className="flex w-full flex-col gap-2">
           <Button asChild className="w-full">
             <Link href="/login">返回登录</Link>

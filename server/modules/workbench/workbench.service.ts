@@ -637,6 +637,7 @@ async function getEditorDashboard(actor: ApiCurrentUser): Promise<EditorDashboar
       prisma.project.count({
         where: {
           editorId: actor.userId,
+          lifecycleStatus: "active",
           stagePlans: {
             some: {
               timelineStatus: "due_soon",
@@ -647,6 +648,7 @@ async function getEditorDashboard(actor: ApiCurrentUser): Promise<EditorDashboar
       prisma.project.count({
         where: {
           editorId: actor.userId,
+          lifecycleStatus: "active",
           stagePlans: {
             some: {
               timelineStatus: "overdue",

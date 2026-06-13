@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/page-header"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { StatusBadge } from "@/components/status-badge"
 import { useRole } from "@/components/role-provider"
 import { fetchJson } from "@/lib/api"
@@ -40,6 +41,7 @@ export default function ChaptersPage({ params }: { params: Promise<{ id: string 
   const [creating, setCreating] = useState(false)
   const [reorderingId, setReorderingId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<ChapterDoc | null>(null)
   const [newChapter, setNewChapter] = useState({
     title: "",
     chapterNo: "",
@@ -77,10 +79,20 @@ export default function ChaptersPage({ params }: { params: Promise<{ id: string 
   }, [id])
 
   async function handleCreateChapter() {
+    const parsedChapterNo = newChapter.chapterNo.trim() ? Number(newChapter.chapterNo) : null
+
     if (!newChapter.title.trim()) {
       setMessage({
         type: "error",
         text: "请输入章节标题",
+      })
+      return
+    }
+
+    if (parsedChapterNo !== null && (!Number.isInteger(parsedChapterNo) || parsedChapterNo <= 0)) {
+      setMessage({
+        type: "error",
+        text: "章节号必须是正整数",
       })
       return
     }
@@ -96,7 +108,7 @@ export default function ChaptersPage({ params }: { params: Promise<{ id: string 
         },
         body: JSON.stringify({
           title: newChapter.title,
-          chapterNo: newChapter.chapterNo.trim() ? Number(newChapter.chapterNo) : null,
+          chapterNo: parsedChapterNo,
         }),
       })
 
@@ -136,7 +148,7 @@ export default function ChaptersPage({ params }: { params: Promise<{ id: string 
 
     try {
       await fetchJson(`/api/projects/${id}/chapters/order`, {
-        method: "POST",
+        method: "PATCH",
         headers: {
           "Content-Type": "application/json",
         },
@@ -165,6 +177,7 @@ export default function ChaptersPage({ params }: { params: Promise<{ id: string 
         method: "DELETE",
       })
 
+      setDeleteTarget(null)
       await loadChapters("章节已删除")
     } catch (error) {
       setMessage({
@@ -238,6 +251,10 @@ export default function ChaptersPage({ params }: { params: Promise<{ id: string 
                   disabled={creating}
                 />
                 <Input
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  step={1}
                   value={newChapter.chapterNo}
                   onChange={(event) => setNewChapter((current) => ({ ...current, chapterNo: event.target.value }))}
                   placeholder="章节号（可选）"
@@ -362,7 +379,7 @@ export default function ChaptersPage({ params }: { params: Promise<{ id: string 
                                 className="h-8 px-2 text-red-600 hover:text-red-600"
                                 title="删除章节"
                                 disabled={deletingId === chapter.id}
-                                onClick={() => void handleDeleteChapter(chapter.id)}
+                                onClick={() => setDeleteTarget(chapter)}
                               >
                                 <Trash2 className="size-3.5" />
                               </Button>
@@ -385,6 +402,34 @@ export default function ChaptersPage({ params }: { params: Promise<{ id: string 
         </Link>
         查看阶段进度与其他 Doc。
       </p>
+
+      <Dialog open={Boolean(deleteTarget)} onOpenChange={(open) => !open && !deletingId && setDeleteTarget(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>确认删除章节</DialogTitle>
+            <DialogDescription>
+              删除后会归档当前活动草稿并取消相关待办，章节内容将不再出现在项目正文列表中。
+            </DialogDescription>
+          </DialogHeader>
+          {deleteTarget && (
+            <div className="rounded-md border border-border bg-muted px-4 py-3 text-sm text-foreground">
+              {deleteTarget.title}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" className="bg-transparent" disabled={Boolean(deletingId)} onClick={() => setDeleteTarget(null)}>
+              取消
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={!deleteTarget || Boolean(deletingId)}
+              onClick={() => deleteTarget && void handleDeleteChapter(deleteTarget.id)}
+            >
+              {deletingId ? "删除中..." : "确认删除"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

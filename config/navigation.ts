@@ -15,6 +15,7 @@ import {
   Send,
   FileCheck2,
   BookMarked,
+  ScrollText,
   type LucideIcon,
 } from "lucide-react"
 
@@ -32,6 +33,7 @@ const adminNav: NavItem[] = [
   { label: "作者审批", href: "/admin/approvals", icon: UserCheck },
   { label: "编辑-作者绑定", href: "/admin/bindings", icon: Link2 },
   { label: "参数管理", href: "/admin/params", icon: Settings2 },
+  { label: "审计日志", href: "/admin/audit", icon: ScrollText },
   { label: "统计报表", href: "/reports", icon: BarChart3 },
   { label: "通知中心", href: "/notifications", icon: Bell },
   { label: "AI 助手", href: "/ai", icon: Bot },
