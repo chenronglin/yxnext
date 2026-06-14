@@ -180,7 +180,8 @@
 @layer components {
   /* Tiptap 文档画布使用独立 class，避免影响项目里其它富文本或普通 article。 */
   .novel-prosemirror {
-    min-height: 620px;
+    /* 画布高度跟随外层滚动容器；不再写死 620px，防止文稿页底部超过浏览器视口。 */
+    min-height: 100%;
     padding: 3.25rem 1em 1em;
     color: var(--foreground);
     line-height: 1.9;

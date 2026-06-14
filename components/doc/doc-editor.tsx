@@ -380,64 +380,67 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      {message && <div className={messageClass(message.type)}>{message.text}</div>}
+    // 文稿编辑页直接占满后台主内容区剩余高度；正文滚动交给编辑器内部处理，避免外层页面继续向下延伸。
+    <div className="flex h-[calc(100dvh-7rem)] min-h-0 flex-col gap-4 overflow-hidden">
+      {message && <div className={`${messageClass(message.type)} shrink-0`}>{message.text}</div>}
 
       {loading ? (
         <Card className="px-4 py-10 text-center text-sm text-muted-foreground">正在加载稿件...</Card>
       ) : view ? (
         <>
-          <PageHeader
-            breadcrumb={[view.project.title, docTypeLabel(view.doc.docType), "当前稿件"]}
-            title={view.doc.title}
-            description={trackChanges ? "当前由编辑持有，正文输入会自动写入修订标记。" : undefined}
-            actions={
-              <div className="flex flex-wrap gap-2">
-                <Button asChild variant="outline" className="bg-transparent">
-                  <Link href={`${basePath}/versions`}>
-                    <History className="mr-1.5 size-4" />
-                    历史版本
-                  </Link>
-                </Button>
-                <Button asChild variant="outline" className="bg-transparent">
-                  <Link href={`${basePath}/clean`}>
-                    <BookOpen className="mr-1.5 size-4" />
-                    Clean 阅读
-                  </Link>
-                </Button>
-                {view.permissions.canSubmit && (
-                  <Button disabled={workflowAction !== null || !canUseWorkflow} onClick={() => openWorkflowDialog("submit")}>
-                    <Send className="mr-1.5 size-4" />
-                    {workflowAction === "submit" ? "提交中..." : "提交审核"}
+          <div className="shrink-0">
+            <PageHeader
+              breadcrumb={[view.project.title, docTypeLabel(view.doc.docType), "当前稿件"]}
+              title={view.doc.title}
+              description={trackChanges ? "当前由编辑持有，正文输入会自动写入修订标记。" : undefined}
+              actions={
+                <div className="flex flex-wrap gap-2">
+                  <Button asChild variant="outline" className="bg-transparent">
+                    <Link href={`${basePath}/versions`}>
+                      <History className="mr-1.5 size-4" />
+                      历史版本
+                    </Link>
                   </Button>
-                )}
-                {view.permissions.canReturn && (
-                  <Button
-                    variant="outline"
-                    className="bg-transparent"
-                    disabled={workflowAction !== null || !canUseWorkflow}
-                    onClick={() => openWorkflowDialog("return")}
-                  >
-                    <RotateCcw className="mr-1.5 size-4" />
-                    {workflowAction === "return" ? "退回中..." : "退回作者"}
+                  <Button asChild variant="outline" className="bg-transparent">
+                    <Link href={`${basePath}/clean`}>
+                      <BookOpen className="mr-1.5 size-4" />
+                      Clean 阅读
+                    </Link>
                   </Button>
-                )}
-                {view.permissions.canApprove && (
-                  <Button
-                    className="bg-emerald-600 text-white hover:bg-emerald-700"
-                    disabled={workflowAction !== null || !canUseWorkflow}
-                    onClick={() => void handleWorkflow("approve")}
-                  >
-                    <CheckCircle2 className="mr-1.5 size-4" />
-                    {workflowAction === "approve" ? "通过中..." : "审核通过"}
-                  </Button>
-                )}
-              </div>
-            }
-          />
+                  {view.permissions.canSubmit && (
+                    <Button disabled={workflowAction !== null || !canUseWorkflow} onClick={() => openWorkflowDialog("submit")}>
+                      <Send className="mr-1.5 size-4" />
+                      {workflowAction === "submit" ? "提交中..." : "提交审核"}
+                    </Button>
+                  )}
+                  {view.permissions.canReturn && (
+                    <Button
+                      variant="outline"
+                      className="bg-transparent"
+                      disabled={workflowAction !== null || !canUseWorkflow}
+                      onClick={() => openWorkflowDialog("return")}
+                    >
+                      <RotateCcw className="mr-1.5 size-4" />
+                      {workflowAction === "return" ? "退回中..." : "退回作者"}
+                    </Button>
+                  )}
+                  {view.permissions.canApprove && (
+                    <Button
+                      className="bg-emerald-600 text-white hover:bg-emerald-700"
+                      disabled={workflowAction !== null || !canUseWorkflow}
+                      onClick={() => void handleWorkflow("approve")}
+                    >
+                      <CheckCircle2 className="mr-1.5 size-4" />
+                      {workflowAction === "approve" ? "通过中..." : "审核通过"}
+                    </Button>
+                  )}
+                </div>
+              }
+            />
+          </div>
 
           {unsupportedLegacyDoc && (
-            <Card className="flex items-start gap-3 border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+            <Card className="shrink-0 flex-row items-start gap-3 border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
               <Info className="mt-0.5 size-4 shrink-0" />
               <div className="space-y-2">
                 <p>当前稿件不是 Novel Editor Tiptap JSON v1，已按计划进入只读模式，不会静默迁移或自动保存。</p>
@@ -449,10 +452,16 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
           )}
 
           {content ? (
-            <div className={discussionSidebarVisible ? "grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]" : "grid gap-4"}>
-              <div className="min-w-0">
+            <div
+              className={
+                discussionSidebarVisible
+                  ? "grid min-h-0 flex-1 gap-4 overflow-hidden xl:grid-cols-[minmax(0,1fr)_340px]"
+                  : "grid min-h-0 flex-1 gap-4 overflow-hidden"
+              }
+            >
+              <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
                 {!discussionSidebarVisible && (
-                  <div className="mb-3 flex justify-end">
+                  <div className="mb-3 flex shrink-0 justify-end">
                     <Button
                       type="button"
                       variant="outline"
@@ -474,12 +483,13 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
                   saveState={canEdit ? saveState : "readonly"}
                   onChange={handleEditorChange}
                   onReady={setEditor}
+                  className="min-h-0 flex-1"
                 />
               </div>
 
               {discussionSidebarVisible && (
-                <aside className="grid content-start gap-4">
-                  <DiscussionSidebar editor={editor} onHide={() => setDiscussionSidebarVisible(false)} />
+                <aside className="min-h-0 overflow-hidden">
+                  <DiscussionSidebar editor={editor} onHide={() => setDiscussionSidebarVisible(false)} className="h-full min-h-0" />
                 </aside>
               )}
             </div>

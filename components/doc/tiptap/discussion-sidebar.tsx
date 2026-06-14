@@ -42,6 +42,9 @@ type DiscussionItem = {
 }
 
 const MAX_QUOTE_LENGTH = 88
+const EDITOR_SCROLL_CONTAINER_SELECTOR = "[data-doc-editor-scroll='true']"
+const MIN_SCROLL_PADDING = 48
+const MAX_SCROLL_PADDING = 96
 
 function asString(value: unknown) {
   return typeof value === "string" ? value : ""
@@ -247,6 +250,62 @@ function getActiveKeyFromSelection(state: EditorState) {
   return activeKey
 }
 
+function getEditorScrollContainer(editor: Editor) {
+  // 编辑器正文滚动被限制在 EditorContent 外层；从 ProseMirror 根节点向上找，避免误滚动后台主页面。
+  return editor.view.dom.closest<HTMLElement>(EDITOR_SCROLL_CONTAINER_SELECTOR)
+}
+
+function scrollDiscussionRangeIntoEditorView(editor: Editor, from: number, to: number) {
+  const scrollContainer = getEditorScrollContainer(editor)
+
+  if (!scrollContainer) {
+    return
+  }
+
+  const alignSelection = (shouldRetry: boolean) => {
+    try {
+      const docEnd = editor.state.doc.content.size
+      // to 是 ProseMirror 右开区间，取 to - 1 能把结束坐标落在被选中文本内部，跨段落时也能覆盖区间底部。
+      const endPos = Math.max(from, Math.min(to - 1, docEnd))
+      const startRect = editor.view.coordsAtPos(from)
+      const endRect = editor.view.coordsAtPos(endPos)
+      const selectionTop = Math.min(startRect.top, endRect.top)
+      const selectionBottom = Math.max(startRect.bottom, endRect.bottom)
+      const containerRect = scrollContainer.getBoundingClientRect()
+
+      if (containerRect.height <= 0) {
+        return
+      }
+
+      // 给选中文本上下留出稳定的阅读缓冲，避免滚到视口边缘后被状态标签或侧栏视觉焦点压住。
+      const padding = Math.min(MAX_SCROLL_PADDING, Math.max(MIN_SCROLL_PADDING, containerRect.height * 0.18))
+      const visibleTop = containerRect.top + padding
+      const visibleBottom = containerRect.bottom - padding
+
+      if (selectionTop >= visibleTop && selectionBottom <= visibleBottom) {
+        return
+      }
+
+      const selectionCenter = (selectionTop + selectionBottom) / 2
+      const containerCenter = (containerRect.top + containerRect.bottom) / 2
+
+      scrollContainer.scrollTo({
+        top: scrollContainer.scrollTop + selectionCenter - containerCenter,
+        behavior: "auto",
+      })
+
+      if (shouldRetry) {
+        // 再等一帧复查一次，覆盖浏览器聚焦或 ProseMirror 同步 DOM 选区后的二次位移。
+        window.requestAnimationFrame(() => alignSelection(false))
+      }
+    } catch {
+      // 光标位置在极少数结构化节点边界上可能无法计算坐标；失败时保留选区，不打断用户操作。
+    }
+  }
+
+  window.requestAnimationFrame(() => alignSelection(true))
+}
+
 function selectDiscussionItem(editor: Editor, item: DiscussionItem) {
   const from = Math.max(0, Math.min(item.from, editor.state.doc.content.size))
   const to = Math.max(from, Math.min(item.to, editor.state.doc.content.size))
@@ -255,8 +314,10 @@ function selectDiscussionItem(editor: Editor, item: DiscussionItem) {
     return
   }
 
-  editor.view.dispatch(editor.state.tr.setSelection(TextSelection.create(editor.state.doc, from, to)).scrollIntoView())
-  editor.view.focus()
+  // 先设置真实选区，再按自定义滚动容器定位；不使用 ProseMirror 默认滚动，避免触发外层页面滚动。
+  editor.view.dispatch(editor.state.tr.setSelection(TextSelection.create(editor.state.doc, from, to)))
+  editor.commands.focus(undefined, { scrollIntoView: false })
+  scrollDiscussionRangeIntoEditorView(editor, from, to)
 }
 
 function removeDiscussionMark(editor: Editor, item: DiscussionItem) {
@@ -311,7 +372,16 @@ function KindIcon({ kind }: { kind: DiscussionKind }) {
   return <Icon className="size-3.5" />
 }
 
-export function DiscussionSidebar({ editor, onHide }: { editor: Editor | null; onHide?: () => void }) {
+export function DiscussionSidebar({
+  editor,
+  onHide,
+  className,
+}: {
+  editor: Editor | null
+  onHide?: () => void
+  // 调用方负责决定侧栏是否占满工作区高度，组件内部只维护列表滚动。
+  className?: string
+}) {
   const [items, setItems] = useState<DiscussionItem[]>([])
   const [activeKey, setActiveKey] = useState<string | null>(null)
   const cardRefs = useRef(new Map<string, HTMLElement>())
@@ -386,7 +456,7 @@ export function DiscussionSidebar({ editor, onHide }: { editor: Editor | null; o
   )
 
   return (
-    <Card className="sticky top-4 max-h-[calc(100vh-6rem)] gap-0 overflow-hidden p-0">
+    <Card className={cn("h-full min-h-0 gap-0 overflow-hidden p-0", className)}>
       <div className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
         <div className="min-w-0">
           <h2 className="text-sm font-semibold text-foreground">批注修订</h2>
@@ -410,7 +480,7 @@ export function DiscussionSidebar({ editor, onHide }: { editor: Editor | null; o
         )}
       </div>
 
-      <div className="max-h-[calc(100vh-12rem)] overflow-y-auto p-3">
+      <div className="min-h-0 flex-1 overflow-y-auto p-3">
         {items.length === 0 ? (
           <div className="rounded-lg border border-dashed border-border p-5 text-center text-sm leading-6 text-muted-foreground">
             暂无批注或修订。

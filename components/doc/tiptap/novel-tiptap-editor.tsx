@@ -24,6 +24,8 @@ type NovelTiptapEditorProps = {
   trackChanges: boolean
   createdBy: NovelCreatedBy
   saveState: SaveState
+  // 由页面层注入高度约束；编辑器自身只负责撑满容器，避免不同页面复用时互相影响。
+  className?: string
   // 同一个只读状态在当前稿件和历史版本中含义不同，允许调用方覆盖状态文案。
   readonlyLabel?: string
   onChange: (json: NovelDocJson, projection: NovelDocProjection) => void
@@ -229,6 +231,7 @@ export function NovelTiptapEditor({
   trackChanges,
   createdBy,
   saveState,
+  className,
   readonlyLabel,
   onChange,
   onReady,
@@ -281,7 +284,14 @@ export function NovelTiptapEditor({
   const characters = editor?.storage.characterCount?.characters?.() ?? deriveNovelDocProjection(value).wordCount
 
   return (
-    <div className="relative min-w-0">
+    <div
+      className={cn(
+        "relative flex min-h-0 min-w-0 flex-col",
+        // 没有页面层高度约束的只读版本页，保留基础阅读高度；当前编辑页会传入 flex 高度覆盖。
+        !className && "min-h-[620px]",
+        className,
+      )}
+    >
       <div className="absolute right-4 top-4 z-10 flex flex-wrap justify-end gap-2">
         <span className={cn("inline-flex h-7 items-center gap-1 rounded-md border px-2 text-xs font-medium", statusTone(saveState))}>
           <Save className="size-3.5" />
@@ -292,8 +302,9 @@ export function NovelTiptapEditor({
         </span>
       </div>
 
-      <div className={cn("rounded-xl border border-border bg-card shadow-sm", !editable && "bg-muted/20")}>
-        <EditorContent editor={editor} />
+      <div className={cn("min-h-0 flex-1 overflow-hidden rounded-xl border border-border bg-card shadow-sm", !editable && "bg-muted/20")}>
+        {/* 这个滚动层是批注/修订跳转的定位基准；右侧卡片只滚动这里，不再推动整个页面。 */}
+        <EditorContent editor={editor} className="h-full overflow-y-auto" data-doc-editor-scroll="true" />
       </div>
 
       {editor && editable && <SelectionBubble editor={editor} createdBy={createdBy} />}
