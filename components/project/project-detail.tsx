@@ -95,7 +95,8 @@ export function ProjectDetail({ id }: { id: string }) {
   // 正文章节的新建和结构调整只由作者发起，编辑进入章节页后只处理稿件协作和审核。
   const canManageChapters = Boolean(project && !readonly && project.stage === "chapter" && role === "author")
   const canExportProject = role === "editor" || role === "admin"
-  const hasActionItems = canUnlockRelease || canComplete || canExportProject
+  const canExportRelease = Boolean(canExportProject && project?.docDirectory.releaseDocId)
+  const hasActionItems = canUnlockRelease || canComplete || canExportProject || canExportRelease
 
   async function refreshProject(successText?: string) {
     const response = await fetchJson<ProjectDetailResponse>(`/api/projects/${id}`)
@@ -322,46 +323,62 @@ export function ProjectDetail({ id }: { id: string }) {
           <div className="flex flex-col gap-2">
             <h2 className="text-xs font-semibold text-foreground">项目操作</h2>
 
-            {readonly ? (
+            {hasActionItems ? (
+              <>
+                {readonly && (
+                  <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs leading-5 text-muted-foreground">
+                    当前项目已进入只读状态，暂不支持继续协作操作，但仍可导出项目终稿。
+                  </div>
+                )}
+                <div className="grid grid-cols-2 gap-2">
+                  {!readonly && (role === "editor" || role === "admin") && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 w-full justify-center bg-transparent px-2 text-xs"
+                      disabled={!canUnlockRelease || workingAction === "unlock"}
+                      onClick={() => void handleUnlockRelease()}
+                    >
+                      {canUnlockRelease ? <Unlock className="mr-1 size-3.5" /> : <Lock className="mr-1 size-3.5" />}
+                      {workingAction === "unlock" ? "解锁中..." : "手动解锁质检"}
+                    </Button>
+                  )}
+
+                  {canComplete && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 w-full justify-center bg-transparent px-2 text-xs"
+                      disabled={workingAction === "complete"}
+                      onClick={() => void handleCompleteProject()}
+                    >
+                      <CheckCircle2 className="mr-1 size-3.5" />
+                      {workingAction === "complete" ? "处理中..." : "标记项目完成"}
+                    </Button>
+                  )}
+
+                  {canExportProject && (
+                    <Button asChild size="sm" variant="outline" className="h-7 w-full justify-center bg-transparent px-2 text-xs">
+                      <a href={`/api/projects/${project.id}/export?scope=project&format=docx`}>
+                        <Download className="mr-1 size-3.5" />
+                        {readonly ? "导出项目终稿" : "导出项目"}
+                      </a>
+                    </Button>
+                  )}
+
+                  {!readonly && canExportRelease && (
+                    <Button asChild size="sm" variant="outline" className="h-7 w-full justify-center bg-transparent px-2 text-xs">
+                      <a href={`/api/projects/${project.id}/export?scope=release&format=docx`}>
+                        <Download className="mr-1 size-3.5" />
+                        导出全文质检
+                      </a>
+                    </Button>
+                  )}
+                </div>
+              </>
+            ) : readonly ? (
               <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs leading-5 text-muted-foreground">
                 当前项目已进入只读状态，暂不支持继续协作操作。
-              </div>
-            ) : hasActionItems ? (
-              <div className="grid grid-cols-2 gap-2">
-                {(role === "editor" || role === "admin") && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-7 w-full justify-center bg-transparent px-2 text-xs"
-                    disabled={!canUnlockRelease || workingAction === "unlock"}
-                    onClick={() => void handleUnlockRelease()}
-                  >
-                    {canUnlockRelease ? <Unlock className="mr-1 size-3.5" /> : <Lock className="mr-1 size-3.5" />}
-                    {workingAction === "unlock" ? "解锁中..." : "手动解锁质检"}
-                  </Button>
-                )}
-
-                {canComplete && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-7 w-full justify-center bg-transparent px-2 text-xs"
-                    disabled={workingAction === "complete"}
-                    onClick={() => void handleCompleteProject()}
-                  >
-                    <CheckCircle2 className="mr-1 size-3.5" />
-                    {workingAction === "complete" ? "处理中..." : "标记项目完成"}
-                  </Button>
-                )}
-
-                {canExportProject && (
-                  <Button asChild size="sm" variant="outline" className="h-7 w-full justify-center bg-transparent px-2 text-xs">
-                    <a href={`/api/projects/${project.id}/export?scope=project&format=docx`}>
-                      <Download className="mr-1 size-3.5" />
-                      导出项目
-                    </a>
-                  </Button>
-                )}
               </div>
             ) : (
               <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs leading-5 text-muted-foreground">
