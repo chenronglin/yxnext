@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 
 import { PageHeader } from "@/components/page-header"
 import { PrereleaseDialog } from "@/components/si/prerelease-dialog"
@@ -16,14 +17,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { useConfirmDialog, useToast } from "@/components/ui/app-feedback"
 import { fetchJson } from "@/lib/api"
 import { formatDateOnly } from "@/lib/utils"
 import { SI_STATUS_LABELS, type SiStatus } from "@/types/domain"
 import { DEFAULT_MAIN_TYPES, SI_STATUS_TONE, type SiItem } from "@/types/si"
-import { Archive, Eye, History, Lock, Pencil, Plus, Search, Send, Trash2 } from "lucide-react"
+import { Archive, ChevronLeft, ChevronRight, Eye, History, Lock, Pencil, Plus, Search, Send, Trash2 } from "lucide-react"
 
 type SiListResponse = {
   items: SiItem[]
+  page: number
+  pageSize: number
+  total: number
+  totalPages: number
 }
 
 type MainTypesResponse = {
@@ -32,36 +38,172 @@ type MainTypesResponse = {
   }>
 }
 
+type SiFilterState = {
+  keyword: string
+  status: SiStatus | "all"
+  mainType: string
+  page: number
+  pageSize: number
+}
+
+function positiveInteger(value: string | null, fallback: number) {
+  const parsed = Number(value)
+
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
+}
+
+function readFilterState(searchParams: URLSearchParams): SiFilterState {
+  return {
+    keyword: searchParams.get("keyword") ?? "",
+    status: (searchParams.get("status") as SiStatus | "all" | null) ?? "all",
+    mainType: searchParams.get("mainType") ?? "all",
+    page: positiveInteger(searchParams.get("page"), 1),
+    pageSize: positiveInteger(searchParams.get("pageSize"), 20),
+  }
+}
+
+function buildQuery(filters: SiFilterState) {
+  const params = new URLSearchParams()
+
+  if (filters.keyword.trim()) params.set("keyword", filters.keyword.trim())
+  if (filters.status !== "all") params.set("status", filters.status)
+  if (filters.mainType !== "all") params.set("mainType", filters.mainType)
+  if (filters.page > 1) params.set("page", String(filters.page))
+  if (filters.pageSize !== 20) params.set("pageSize", String(filters.pageSize))
+
+  return params
+}
+
 export default function SiLibraryPage() {
+  const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+  const confirm = useConfirmDialog()
+  const toast = useToast()
   const [items, setItems] = useState<SiItem[]>([])
   const [configuredMainTypes, setConfiguredMainTypes] = useState<string[]>(() => Array.from(DEFAULT_MAIN_TYPES))
   const [loading, setLoading] = useState(true)
-  const [keyword, setKeyword] = useState("")
-  const [status, setStatus] = useState<SiStatus | "all">("all")
-  const [mainType, setMainType] = useState<string>("all")
+  const [filters, setFilters] = useState<SiFilterState>(() => readFilterState(searchParams))
+  const [pagination, setPagination] = useState({ page: filters.page, pageSize: filters.pageSize, total: 0, totalPages: 1 })
   const [dialogSi, setDialogSi] = useState<SiItem | null>(null)
-  const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null)
+  const [workingId, setWorkingId] = useState<string | null>(null)
 
-  async function loadItems() {
-    // 列表页一次性取回当前编辑的 SI，再沿用现有 UI 的前端筛选体验。
+  const mainTypeOptions = useMemo(() => {
+    // 筛选项以后台启用主类型为主，同时兼容当前页历史 SI 上仍存在的停用主类型。
+    return Array.from(new Set([...configuredMainTypes, ...items.map((item) => item.mainType).filter(Boolean)]))
+  }, [configuredMainTypes, items])
+
+  function updateFilters(patch: Partial<SiFilterState>, resetPage = true) {
+    setFilters((current) => ({
+      ...current,
+      ...patch,
+      page: resetPage ? 1 : patch.page ?? current.page,
+    }))
+  }
+
+  async function loadItems(nextFilters = filters) {
     setLoading(true)
 
     try {
-      const response = await fetchJson<SiListResponse>("/api/si")
+      const params = buildQuery(nextFilters)
+      const query = params.toString()
+      const response = await fetchJson<SiListResponse>(query ? `/api/si?${query}` : "/api/si")
+
       setItems(response.items)
+      setPagination({
+        page: response.page,
+        pageSize: response.pageSize,
+        total: response.total,
+        totalPages: response.totalPages,
+      })
     } catch (error) {
-      setMessage({
+      setItems([])
+      setPagination((current) => ({ ...current, total: 0, totalPages: 1 }))
+      toast({
         type: "error",
-        text: error instanceof Error ? error.message : "SI 列表读取失败",
+        title: error instanceof Error ? error.message : "SI 列表读取失败",
       })
     } finally {
       setLoading(false)
     }
   }
 
+  async function handleArchive(item: SiItem) {
+    if (workingId) return
+
+    const confirmed = await confirm({
+      title: "确认归档 SI",
+      description: `归档后《${item.title}》将不可继续编辑或预发。`,
+      confirmText: "确认归档",
+    })
+
+    if (!confirmed) return
+
+    setWorkingId(item.id)
+
+    try {
+      await fetchJson(`/api/si/${item.id}/archive`, { method: "POST" })
+      toast({ type: "success", title: "SI 已归档" })
+      await loadItems()
+    } catch (error) {
+      toast({ type: "error", title: error instanceof Error ? error.message : "归档失败，请稍后重试" })
+    } finally {
+      setWorkingId(null)
+    }
+  }
+
+  async function handleDelete(item: SiItem) {
+    if (workingId) return
+
+    const confirmed = await confirm({
+      title: "确认删除 SI",
+      description: `删除《${item.title}》会同步收回活动预发、关闭待办并通知作者。该操作不可恢复。`,
+      confirmText: "确认删除",
+      tone: "danger",
+    })
+
+    if (!confirmed) return
+
+    setWorkingId(item.id)
+
+    try {
+      await fetchJson(`/api/si/${item.id}`, { method: "DELETE" })
+      toast({ type: "success", title: "SI 已删除" })
+      await loadItems()
+    } catch (error) {
+      toast({ type: "error", title: error instanceof Error ? error.message : "删除失败，请稍后重试" })
+    } finally {
+      setWorkingId(null)
+    }
+  }
+
   useEffect(() => {
-    void loadItems()
-  }, [])
+    setFilters(readFilterState(searchParams))
+  }, [searchParams])
+
+  useEffect(() => {
+    const nextParams = buildQuery(filters)
+    const nextQuery = nextParams.toString()
+    const currentQuery = searchParams.toString()
+
+    // SI 列表筛选以 URL 为准，方便复制链接给产品或测试复现同一页数据。
+    if (nextQuery !== currentQuery) {
+      router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false })
+    }
+  }, [filters, pathname, router, searchParams])
+
+  useEffect(() => {
+    let cancelled = false
+    const timer = window.setTimeout(async () => {
+      if (cancelled) return
+      await loadItems(filters)
+    }, 250)
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [filters])
 
   useEffect(() => {
     // 列表筛选使用管理员维护的启用主类型；失败时回退到本地默认项，避免筛选条空白。
@@ -74,20 +216,6 @@ export default function SiLibraryPage() {
         setConfiguredMainTypes(Array.from(DEFAULT_MAIN_TYPES))
       })
   }, [])
-
-  const mainTypeOptions = useMemo(() => {
-    // 既使用后台启用项，也兼容历史 SI 上已经存在但后来被停用的主类型。
-    return Array.from(new Set([...configuredMainTypes, ...items.map((item) => item.mainType).filter(Boolean)]))
-  }, [configuredMainTypes, items])
-
-  const filtered = useMemo(() => {
-    return items.filter((item) => {
-      if (keyword && !item.title.includes(keyword) && !item.trope.includes(keyword)) return false
-      if (status !== "all" && item.status !== status) return false
-      if (mainType !== "all" && item.mainType !== mainType) return false
-      return true
-    })
-  }, [items, keyword, status, mainType])
 
   return (
     <div className="flex flex-col gap-6">
@@ -105,32 +233,20 @@ export default function SiLibraryPage() {
         }
       />
 
-      {message && (
-        <div
-          className={
-            message.type === "error"
-              ? "rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600"
-              : "rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"
-          }
-        >
-          {message.text}
-        </div>
-      )}
-
       <Card className="flex flex-col gap-3 p-4 lg:flex-row lg:items-center">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
-            value={keyword}
-            onChange={(event) => setKeyword(event.target.value)}
+            value={filters.keyword}
+            onChange={(event) => updateFilters({ keyword: event.target.value })}
             placeholder="搜索 SI 标题、Trope"
             className="pl-9"
           />
         </div>
         <div className="flex flex-wrap gap-3">
-          <Select value={status} onValueChange={(value) => setStatus(value as SiStatus | "all")}>
+          <Select value={filters.status} onValueChange={(value) => updateFilters({ status: value as SiStatus | "all" })}>
             <SelectTrigger className="w-36">
-              <SelectValue>{status === "all" ? "全部状态" : SI_STATUS_LABELS[status]}</SelectValue>
+              <SelectValue>{filters.status === "all" ? "全部状态" : SI_STATUS_LABELS[filters.status]}</SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">全部状态</SelectItem>
@@ -141,9 +257,9 @@ export default function SiLibraryPage() {
               ))}
             </SelectContent>
           </Select>
-          <Select value={mainType} onValueChange={setMainType}>
+          <Select value={filters.mainType} onValueChange={(value) => updateFilters({ mainType: value })}>
             <SelectTrigger className="w-36">
-              <SelectValue>{mainType === "all" ? "全部类型" : mainType}</SelectValue>
+              <SelectValue>{filters.mainType === "all" ? "全部类型" : filters.mainType}</SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">全部类型</SelectItem>
@@ -154,17 +270,33 @@ export default function SiLibraryPage() {
               ))}
             </SelectContent>
           </Select>
+          <Select
+            value={String(filters.pageSize)}
+            onValueChange={(value) => updateFilters({ pageSize: positiveInteger(value, 20) })}
+          >
+            <SelectTrigger className="w-28">
+              <SelectValue>{filters.pageSize} 条/页</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {[20, 50, 100].map((size) => (
+                <SelectItem key={size} value={String(size)}>
+                  {size} 条/页
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       </Card>
 
       <div className="flex flex-col gap-3">
         {loading && <Card className="p-10 text-center text-sm text-muted-foreground">正在加载 SI...</Card>}
-        {!loading && filtered.length === 0 && (
+        {!loading && items.length === 0 && (
           <Card className="p-10 text-center text-sm text-muted-foreground">未找到匹配的 SI</Card>
         )}
         {!loading &&
-          filtered.map((item) => {
+          items.map((item) => {
             const editable = item.status === "draft" || item.status === "prereleased"
+            const itemWorking = workingId === item.id
 
             return (
               <Card
@@ -227,9 +359,15 @@ export default function SiLibraryPage() {
                       版本历史
                     </Link>
                   </Button>
-                  <Button size="sm" variant="outline" className="bg-transparent text-muted-foreground" disabled>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="bg-transparent"
+                    disabled={item.status === "archived" || item.converted || itemWorking}
+                    onClick={() => void handleArchive(item)}
+                  >
                     <Archive className="mr-1 size-3.5" />
-                    归档
+                    {itemWorking ? "处理中..." : "归档"}
                   </Button>
                   {item.converted ? (
                     <Button size="sm" variant="outline" className="bg-transparent text-muted-foreground" disabled>
@@ -237,9 +375,15 @@ export default function SiLibraryPage() {
                       删除
                     </Button>
                   ) : (
-                    <Button size="sm" variant="outline" className="bg-transparent text-muted-foreground" disabled>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="bg-transparent"
+                      disabled={itemWorking}
+                      onClick={() => void handleDelete(item)}
+                    >
                       <Trash2 className="mr-1 size-3.5" />
-                      删除
+                      {itemWorking ? "处理中..." : "删除"}
                     </Button>
                   )}
                 </div>
@@ -248,6 +392,34 @@ export default function SiLibraryPage() {
           })}
       </div>
 
+      <Card className="flex flex-col gap-3 p-4 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+        <span>
+          共 {pagination.total} 个 SI，第 {pagination.page} / {pagination.totalPages} 页
+        </span>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="bg-transparent"
+            disabled={loading || pagination.page <= 1}
+            onClick={() => updateFilters({ page: Math.max(1, pagination.page - 1) }, false)}
+          >
+            <ChevronLeft className="mr-1 size-3.5" />
+            上一页
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="bg-transparent"
+            disabled={loading || pagination.page >= pagination.totalPages}
+            onClick={() => updateFilters({ page: Math.min(pagination.totalPages, pagination.page + 1) }, false)}
+          >
+            下一页
+            <ChevronRight className="ml-1 size-3.5" />
+          </Button>
+        </div>
+      </Card>
+
       {dialogSi && (
         <PrereleaseDialog
           open={Boolean(dialogSi)}
@@ -255,10 +427,7 @@ export default function SiLibraryPage() {
           si={dialogSi}
           prereleasedAuthorIds={dialogSi.preissues.filter((item) => item.status === "active").map((item) => item.authorId)}
           onSubmitted={() => {
-            setMessage({
-              type: "success",
-              text: "SI 已预发",
-            })
+            toast({ type: "success", title: "SI 已预发" })
             setDialogSi(null)
             void loadItems()
           }}

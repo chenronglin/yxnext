@@ -10,8 +10,14 @@ import type { CurrentUser } from "@/types/domain"
 // Session cookie 只保存数据库会话 ID，不保存用户资料，避免前端可读存储成为权限真相源。
 export const SESSION_COOKIE_NAME = "yx_session"
 
-// 第一阶段先采用 7 天固定有效期；后续如果要做“记住我”或短会话，可以在这里集中调整。
-const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7
+// 登录会话默认 7 天有效；这里导出给 middleware 复用，确保数据库和浏览器 cookie 的续期口径一致。
+export const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7
+
+// 当会话剩余有效期不足 1 天时执行滑动续期，避免每个请求都写 user_sessions 表。
+const SESSION_RENEW_THRESHOLD_MS = 60 * 60 * 24 * 1000
+
+// 已撤销会话保留 30 天，用于排查异常登录和管理员重置密码后的审计追踪。
+const REVOKED_SESSION_RETENTION_MS = 60 * 60 * 24 * 30 * 1000
 
 // 会话 ID 使用 32 字节随机数转 64 位 hex，刚好匹配 user_sessions.session_id 的 CHAR(64) 设计。
 const SESSION_ID_PATTERN = /^[a-f0-9]{64}$/
@@ -102,12 +108,13 @@ export async function getCurrentUserBySessionId(sessionId: string | undefined | 
     return null
   }
 
+  const now = new Date()
   const session = await prisma.userSession.findFirst({
     where: {
       sessionId,
       revokedAt: null,
       expiresAt: {
-        gt: new Date(),
+        gt: now,
       },
       user: {
         status: "active",
@@ -129,6 +136,21 @@ export async function getCurrentUserBySessionId(sessionId: string | undefined | 
       },
     },
   })
+
+  if (session && session.expiresAt.getTime() - now.getTime() < SESSION_RENEW_THRESHOLD_MS) {
+    // 数据库会话和浏览器 cookie 都需要滑动续期；cookie 续期由 middleware 写响应头，
+    // 这里负责延长服务端真相源，避免 cookie 还在但数据库会话已经过期。
+    await prisma.userSession.updateMany({
+      where: {
+        sessionId,
+        revokedAt: null,
+        expiresAt: session.expiresAt,
+      },
+      data: {
+        expiresAt: new Date(now.getTime() + SESSION_MAX_AGE_SECONDS * 1000),
+      },
+    })
+  }
 
   return session ? toCurrentUser(session.user) : null
 }
@@ -168,4 +190,29 @@ export async function revokeAllUserSessionsByUserId(userId: bigint, client: Sess
       revokedAt: new Date(),
     },
   })
+}
+
+// 定时任务清理已经失效的会话记录，避免 user_sessions 随使用时间无限增长。
+export async function cleanupExpiredUserSessions(before: Date = new Date()) {
+  const revokedBefore = new Date(before.getTime() - REVOKED_SESSION_RETENTION_MS)
+  const result = await prisma.userSession.deleteMany({
+    where: {
+      OR: [
+        {
+          expiresAt: {
+            lt: before,
+          },
+        },
+        {
+          revokedAt: {
+            lt: revokedBefore,
+          },
+        },
+      ],
+    },
+  })
+
+  return {
+    deleted: result.count,
+  }
 }

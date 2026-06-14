@@ -196,10 +196,12 @@ export async function syncActiveProjectTimelineStatuses() {
   // 单测里会按需 mock prisma 的局部模型；
   // 如果当前测试没有提供阶段计划相关 delegate，就直接跳过这层同步逻辑，避免让无关用例全部失败。
   if (!stagePlanDefaultClient || !projectStagePlanClient) {
-    return
+    return { checked: 0, updated: 0, notifications: 0 }
   }
 
   const now = new Date()
+  let updated = 0
+  let notifications = 0
   const activeProjectCount = await prisma.project.count({
     where: {
       lifecycleStatus: "active",
@@ -209,7 +211,7 @@ export async function syncActiveProjectTimelineStatuses() {
   if (activeProjectCount === 0) {
     // 新系统初始化时可能还没有任何项目。此时阶段计划同步没有可处理对象，
     // 直接返回可以避免继续执行阶段计划聚合查询，让项目治理页稳定展示空态。
-    return
+    return { checked: 0, updated: 0, notifications: 0 }
   }
 
   const [defaults, stagePlans] = await Promise.all([
@@ -263,6 +265,7 @@ export async function syncActiveProjectTimelineStatuses() {
         timelineStatus: nextStatus,
       },
     })
+    updated += 1
 
     const recipients = [stagePlan.project.editorId, stagePlan.project.authorId].filter(
       (value, index, list) => list.findIndex((candidate) => candidate === value) === index,
@@ -288,6 +291,7 @@ export async function syncActiveProjectTimelineStatuses() {
           dueAt: stagePlan.dueAt,
           status: nextStatus,
         })
+        notifications += 1
       }
 
       continue
@@ -296,5 +300,11 @@ export async function syncActiveProjectTimelineStatuses() {
     for (const recipientUserId of recipients) {
       await closeStageWarningTodo(stagePlan.project.projectId, stagePlan.stageCode, recipientUserId, now)
     }
+  }
+
+  return {
+    checked: stagePlans.length,
+    updated,
+    notifications,
   }
 }

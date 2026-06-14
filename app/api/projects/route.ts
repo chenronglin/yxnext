@@ -15,7 +15,11 @@ export async function GET(request: NextRequest) {
       keyword: searchParams.get("keyword"),
       stage: searchParams.get("stage"),
       lifecycle: searchParams.get("lifecycle"),
+      editorId: searchParams.get("editorId"),
+      authorId: searchParams.get("authorId"),
       overdue: searchParams.get("overdue"),
+      page: searchParams.get("page"),
+      pageSize: searchParams.get("pageSize"),
     })
 
     return ok(result)

@@ -130,7 +130,7 @@ function rangeOfFirstInserted(doc: ProseMirrorNode): { from: number; to: number 
 }
 
 function collectRevisionText(doc: ProseMirrorNode) {
-  const segments: Array<{ text: string; id: string; kind: string; role: string }> = []
+  const segments: Array<{ text: string; id: string; groupId: string; kind: string; role: string }> = []
 
   doc.descendants((node) => {
     if (!node.isText || !node.text) {
@@ -142,6 +142,7 @@ function collectRevisionText(doc: ProseMirrorNode) {
         segments.push({
           text: node.text ?? "",
           id: String(mark.attrs.id),
+          groupId: String(mark.attrs.groupId),
           kind: String(mark.attrs.kind),
           role: String(mark.attrs.role),
         })
@@ -471,5 +472,36 @@ describe("markDeletedRange", () => {
       role: "inserted",
       id: "rev-1",
     }))
+  })
+
+  it("跨段落删除会用同一个 groupId 聚合为一次修订操作", () => {
+    const doc = schema.nodes.doc.create(null, [
+      schema.nodes.paragraph.create(null, [schema.text("第一段")]),
+      schema.nodes.paragraph.create(null, [schema.text("第二段")]),
+    ])
+    const state = makeState(doc)
+    const textRanges: Array<{ from: number; to: number }> = []
+
+    state.doc.descendants((node, pos) => {
+      if (node.isText && node.text) {
+        textRanges.push({ from: pos, to: pos + node.nodeSize })
+      }
+
+      return true
+    })
+
+    const result = dispatchDeletedRange(state, {
+      from: textRanges[0].from,
+      to: textRanges[textRanges.length - 1].to,
+    })
+
+    expect(result.applied).toBe(true)
+
+    const revs = collectRevisionText(result.doc!)
+    const deletedRevisions = revs.filter((item) => item.kind === "delete" && item.role === "deleted")
+
+    expect(deletedRevisions).toHaveLength(2)
+    expect(new Set(deletedRevisions.map((item) => item.groupId)).size).toBe(1)
+    expect(new Set(deletedRevisions.map((item) => item.id)).size).toBe(2)
   })
 })

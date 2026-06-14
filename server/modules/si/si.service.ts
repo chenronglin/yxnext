@@ -11,6 +11,7 @@ import {
   makeSingleDocKey,
   translateUniqueConstraintError,
 } from "@/server/shared/invariant-keys"
+import { makePaginationMeta, parsePagination } from "@/server/shared/pagination"
 import { createNovelDocV1, createNovelHeading, textToNovelParagraphs } from "@/lib/novel-doc"
 import type { ApiCurrentUser } from "@/server/shared/current-user"
 import type { PrereleaseRecord, PrereleaseStatus, SiItem, SiVersion } from "@/types/si"
@@ -36,12 +37,16 @@ type SiListFilters = {
   keyword?: string | null
   status?: string | null
   mainType?: string | null
+  page?: string | null
+  pageSize?: string | null
 }
 
 type PreissueListFilters = {
   keyword?: string | null
   status?: string | null
   authorId?: string | null
+  page?: string | null
+  pageSize?: string | null
 }
 
 type PrepublishInput = {
@@ -670,37 +675,46 @@ export async function listStoryIdeas(actor: ApiCurrentUser, filters: SiListFilte
   const dbStatus = toDbSiStatus(filters.status)
   const keyword = trimToNull(filters.keyword)
   const mainType = trimToNull(filters.mainType)
+  const pagination = parsePagination(filters)
 
-  const items = await prisma.storyIdea.findMany({
-    where: {
-      ...(actor.role === "editor" ? { creatorEditorId: actor.userId } : {}),
-      ...(dbStatus ? { status: dbStatus as StoryIdeaRecord["status"] } : {}),
-      ...(keyword
-        ? {
-            OR: [
-              { title: { contains: keyword } },
-              { trope: { contains: keyword } },
-              { coreSynopsis: { contains: keyword } },
-            ],
-          }
-        : {}),
-      ...(mainType && mainType !== "all"
-        ? {
-            mainType: {
-              name: mainType,
-            },
-          }
-        : {}),
-    },
-    include: storyIdeaInclude,
-    orderBy: {
-      updatedAt: "desc",
-    },
-  })
+  // SI 库筛选必须落到数据库，避免前端分页后再次本地过滤造成“当前页无结果但总数不为 0”。
+  const where: Prisma.StoryIdeaWhereInput = {
+    ...(actor.role === "editor" ? { creatorEditorId: actor.userId } : {}),
+    ...(dbStatus ? { status: dbStatus as StoryIdeaRecord["status"] } : {}),
+    ...(keyword
+      ? {
+          OR: [
+            { title: { contains: keyword } },
+            { trope: { contains: keyword } },
+            { coreSynopsis: { contains: keyword } },
+          ],
+        }
+      : {}),
+    ...(mainType && mainType !== "all"
+      ? {
+          mainType: {
+            name: mainType,
+          },
+        }
+      : {}),
+  }
+
+  const [items, total] = await Promise.all([
+    prisma.storyIdea.findMany({
+      where,
+      include: storyIdeaInclude,
+      orderBy: {
+        updatedAt: "desc",
+      },
+      skip: pagination.skip,
+      take: pagination.take,
+    }),
+    prisma.storyIdea.count({ where }),
+  ])
 
   return {
     items: items.map(serializeStoryIdea),
-    total: items.length,
+    ...makePaginationMeta(total, pagination),
   }
 }
 
@@ -752,52 +766,60 @@ export async function listSiPreissues(actor: ApiCurrentUser, filters: PreissueLi
     filters.authorId && filters.authorId !== "all"
       ? parseBigIntId(filters.authorId, "作者 ID")
       : null
+  const pagination = parsePagination(filters)
 
   if (actor.role === "author" && dbStatus === "recalled") {
     return {
       records: [],
-      total: 0,
+      ...makePaginationMeta(0, pagination),
     }
   }
 
-  const records = await prisma.siPreissue.findMany({
-    where: {
-      ...(actor.role === "author"
+  const where: Prisma.SiPreissueWhereInput = {
+    ...(actor.role === "author"
+      ? {
+          authorId: actor.userId,
+          // 作者端必须隐藏已收回记录；这是业务要求，不交给前端自行过滤。
+          status: dbStatus ? (dbStatus as PreissueRecord["status"]) : { not: "recalled" },
+        }
+      : actor.role === "editor"
         ? {
-            authorId: actor.userId,
-            // 作者端必须隐藏已收回记录；这是业务要求，不交给前端自行过滤。
-            status: dbStatus ? (dbStatus as PreissueRecord["status"]) : { not: "recalled" },
+            editorId: actor.userId,
+            ...(dbStatus ? { status: dbStatus as PreissueRecord["status"] } : {}),
           }
-        : actor.role === "editor"
-          ? {
-              editorId: actor.userId,
-              ...(dbStatus ? { status: dbStatus as PreissueRecord["status"] } : {}),
-            }
-          : {
-              ...(dbStatus ? { status: dbStatus as PreissueRecord["status"] } : {}),
-            }),
-      // 作者只能查看预发给自己的记录；前端传入的 authorId 只能用于编辑/管理员筛选，
-      // 不能覆盖作者端的强制归属条件，否则会形成 IDOR 越权读取。
-      ...(actor.role !== "author" && authorId ? { authorId } : {}),
-      ...(keyword
-        ? {
-            storyIdea: {
-              title: {
-                contains: keyword,
-              },
+        : {
+            ...(dbStatus ? { status: dbStatus as PreissueRecord["status"] } : {}),
+          }),
+    // 作者只能查看预发给自己的记录；前端传入的 authorId 只能用于编辑/管理员筛选，
+    // 不能覆盖作者端的强制归属条件，否则会形成 IDOR 越权读取。
+    ...(actor.role !== "author" && authorId ? { authorId } : {}),
+    ...(keyword
+      ? {
+          storyIdea: {
+            title: {
+              contains: keyword,
             },
-          }
-        : {}),
-    },
-    include: preissueInclude,
-    orderBy: {
-      preissuedAt: "desc",
-    },
-  })
+          },
+        }
+      : {}),
+  }
+
+  const [records, total] = await Promise.all([
+    prisma.siPreissue.findMany({
+      where,
+      include: preissueInclude,
+      orderBy: {
+        preissuedAt: "desc",
+      },
+      skip: pagination.skip,
+      take: pagination.take,
+    }),
+    prisma.siPreissue.count({ where }),
+  ])
 
   return {
     records: records.map(serializePreissue),
-    total: records.length,
+    ...makePaginationMeta(total, pagination),
   }
 }
 
@@ -974,6 +996,15 @@ export async function updateStoryIdea(actor: ApiCurrentUser, siIdValue: string, 
       include: {
         mainType: true,
         fitAuthors: true,
+        preissues: {
+          where: {
+            status: "preissued",
+          },
+          select: {
+            preissueId: true,
+            authorId: true,
+          },
+        },
       },
     })
 
@@ -1714,6 +1745,15 @@ export async function rollbackStoryIdeaVersion(actor: ApiCurrentUser, siIdValue:
       include: {
         mainType: true,
         fitAuthors: true,
+        preissues: {
+          where: {
+            status: "preissued",
+          },
+          select: {
+            preissueId: true,
+            authorId: true,
+          },
+        },
       },
     })
 
@@ -1899,6 +1939,15 @@ export async function archiveStoryIdea(actor: ApiCurrentUser, siIdValue: string)
       include: {
         mainType: true,
         fitAuthors: true,
+        preissues: {
+          where: {
+            status: "preissued",
+          },
+          select: {
+            preissueId: true,
+            authorId: true,
+          },
+        },
       },
     })
 
@@ -1983,6 +2032,15 @@ export async function deleteStoryIdea(actor: ApiCurrentUser, siIdValue: string) 
       include: {
         mainType: true,
         fitAuthors: true,
+        preissues: {
+          where: {
+            status: "preissued",
+          },
+          select: {
+            preissueId: true,
+            authorId: true,
+          },
+        },
       },
     })
 
@@ -2045,6 +2103,59 @@ export async function deleteStoryIdea(actor: ApiCurrentUser, siIdValue: string) 
         deleted: true,
       },
     })
+
+    if (existing.preissues.length > 0) {
+      const now = new Date()
+
+      // 删除 SI 前先收回所有活动预发，避免级联删除让作者端待办和通知失去业务语义。
+      await tx.siPreissue.updateMany({
+        where: {
+          siId,
+          status: "preissued",
+        },
+        data: {
+          status: "recalled",
+          recalledAt: now,
+          effectivePairKey: null,
+        },
+      })
+
+      await tx.todoItem.updateMany({
+        where: {
+          siId,
+          status: "open",
+        },
+        data: {
+          status: "cancelled",
+          cancelledAt: now,
+          openDedupeKey: null,
+        },
+      })
+
+      await tx.notification.createMany({
+        data: existing.preissues.map((preissue) => ({
+          recipientUserId: preissue.authorId,
+          type: "si_recalled",
+          title: "SI 预发已收回",
+          body: `编辑已删除《${existing.title}》，对应预发记录已同步收回。`,
+          siId,
+          preissueId: preissue.preissueId,
+          entityType: "si_preissue",
+          entityId: preissue.preissueId,
+        })),
+      })
+
+      await writeOperationLog(tx, {
+        actor,
+        action: "si_preissue.withdraw_by_si_delete",
+        entityType: "story_idea",
+        entityId: siId,
+        siId,
+        afterJson: {
+          preissueIds: existing.preissues.map((item) => item.preissueId.toString()),
+        },
+      })
+    }
 
     // 删除动作的日志必须先写再删主记录；
     // 否则 operation_logs.si_id 在插入时会引用一个已不存在的外键。

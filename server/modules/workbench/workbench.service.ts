@@ -6,7 +6,6 @@ import { getAdminDashboard, getAdminReport } from "@/server/modules/admin/admin.
 import { prisma } from "@/server/db/prisma"
 import { ApiError } from "@/server/shared/api-response"
 import type { ApiCurrentUser } from "@/server/shared/current-user"
-import { syncActiveProjectTimelineStatuses } from "@/server/shared/project-stage-timeline"
 import type { BadgeTone, DocStatus } from "@/types/domain"
 import type {
   AuthorDashboardStats,
@@ -199,9 +198,6 @@ export async function listReviewQueue(actor: ApiCurrentUser) {
       message: "只有编辑或管理员可以查看审稿队列",
     })
   }
-
-  await syncActiveProjectTimelineStatuses()
-
   const docs = await prisma.doc.findMany({
     where: {
       ...makeDocVisibilityWhere(actor),
@@ -272,8 +268,6 @@ export async function listReviewQueue(actor: ApiCurrentUser) {
 export async function listTodos(actor: ApiCurrentUser) {
   // 待办页现在只展示“有持久化真相源”的任务：
   // 也就是直接来自 todo_items 的记录，不再额外拼接 SI 预发、阶段预警等临时列表项。
-  await syncActiveProjectTimelineStatuses()
-
   const openTodos = await prisma.todoItem.findMany({
     where: {
       recipientUserId: actor.userId,
@@ -407,8 +401,6 @@ export async function markAllTodosRead(actor: ApiCurrentUser) {
 }
 
 export async function listNotifications(actor: ApiCurrentUser) {
-  await syncActiveProjectTimelineStatuses()
-
   const notifications = await prisma.notification.findMany({
     where: {
       recipientUserId: actor.userId,
@@ -799,8 +791,6 @@ async function getAuthorReport(actor: ApiCurrentUser, range: RangeKey): Promise<
 }
 
 export async function getWorkspaceDashboard(actor: ApiCurrentUser, range: RangeKey = "30d"): Promise<WorkspaceDashboardPayload> {
-  await syncActiveProjectTimelineStatuses()
-
   if (actor.role === "admin") {
     return {
       role: "admin",
@@ -822,8 +812,6 @@ export async function getWorkspaceDashboard(actor: ApiCurrentUser, range: RangeK
 }
 
 export async function getWorkspaceReport(actor: ApiCurrentUser, range: RangeKey = "30d"): Promise<WorkspaceReportPayload> {
-  await syncActiveProjectTimelineStatuses()
-
   if (actor.role === "admin") {
     return {
       role: "admin",

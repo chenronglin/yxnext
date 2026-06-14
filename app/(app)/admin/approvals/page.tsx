@@ -6,6 +6,7 @@ import { CheckCircle2, Eye, Search, XCircle } from "lucide-react"
 import { PageHeader } from "@/components/page-header"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
+import { useConfirmDialog } from "@/components/ui/app-feedback"
 import { Card } from "@/components/ui/card"
 import {
   Dialog,
@@ -28,6 +29,7 @@ type ApprovalsResponse = {
 }
 
 export default function ApprovalsPage() {
+  const confirm = useConfirmDialog()
   const [requests, setRequests] = useState<ApprovalRequest[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
@@ -80,7 +82,11 @@ export default function ApprovalsPage() {
   )
 
   async function handleApprove(request: ApprovalRequest) {
-    const confirmed = window.confirm(`确认通过作者「${request.penName}」的注册申请吗？`)
+    const confirmed = await confirm({
+      title: "确认通过注册申请",
+      description: `通过后，作者「${request.penName}」将可以登录并开始协作。`,
+      confirmText: "确认通过",
+    })
     if (!confirmed || submitting) return
 
     setSubmitting(true)

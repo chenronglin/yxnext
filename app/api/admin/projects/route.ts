@@ -18,6 +18,8 @@ export async function GET(request: NextRequest) {
       editorId: searchParams.get("editorId"),
       authorId: searchParams.get("authorId"),
       overdue: searchParams.get("overdue"),
+      page: searchParams.get("page"),
+      pageSize: searchParams.get("pageSize"),
     })
 
     return ok(result)

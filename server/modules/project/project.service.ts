@@ -11,10 +11,10 @@ import {
   makeSingleDocKey,
   translateUniqueConstraintError,
 } from "@/server/shared/invariant-keys"
-import { syncActiveProjectTimelineStatuses } from "@/server/shared/project-stage-timeline"
 import { buildDocxBuffer } from "@/server/shared/docx-export"
 import { createNovelDocV1, createNovelHeading, textToNovelParagraphs } from "@/lib/novel-doc"
 import type { ApiCurrentUser } from "@/server/shared/current-user"
+import { makePaginationMeta, parsePagination } from "@/server/shared/pagination"
 import type { DocStatus, HolderRole, ProjectLifecycle, ProjectStage, StagePlanStatus } from "@/types/domain"
 import type {
   ChapterDoc,
@@ -37,7 +37,11 @@ type ProjectListFilters = {
   keyword?: string | null
   stage?: string | null
   lifecycle?: string | null
+  editorId?: string | null
+  authorId?: string | null
   overdue?: string | null
+  page?: string | null
+  pageSize?: string | null
 }
 
 // 项目服务直接返回数据库真实阶段编码，页面层只负责把 release 翻译成“质检”。
@@ -709,70 +713,80 @@ async function completeStagePlan(tx: TxClient, projectId: bigint, stageCode: "ch
 }
 
 export async function listMyProjects(actor: ApiCurrentUser, filters: ProjectListFilters = {}) {
-  await syncActiveProjectTimelineStatuses()
-
   const keyword = trimToNull(filters.keyword)
   const stage = trimToNull(filters.stage)
   const lifecycle = trimToNull(filters.lifecycle)
+  const editorId = filters.editorId && filters.editorId !== "all" ? parseBigIntId(filters.editorId, "编辑 ID") : null
+  const authorId = filters.authorId && filters.authorId !== "all" ? parseBigIntId(filters.authorId, "作者 ID") : null
   const overdue = trimToNull(filters.overdue)
+  const pagination = parsePagination(filters)
 
-  const projects = await prisma.project.findMany({
-    where: {
-      ...makeProjectVisibilityWhere(actor),
-      ...(keyword
-        ? {
-            OR: [
-              { title: { contains: keyword } },
-              { sourceSi: { title: { contains: keyword } } },
-            ],
-          }
-        : {}),
-      ...(lifecycle && lifecycle !== "all"
-        ? {
-            lifecycleStatus: lifecycle as Prisma.ProjectWhereInput["lifecycleStatus"],
-          }
-        : {}),
-      ...(overdue === "yes" && (!lifecycle || lifecycle === "all") ? { lifecycleStatus: "active" } : {}),
-      ...(stage && stage !== "all"
-        ? {
-            currentStage:
-              stage === "completed"
-                ? "completed"
-                : stage as Prisma.ProjectWhereInput["currentStage"],
-          }
-        : {}),
-      ...(overdue === "yes"
+  // 列表筛选与分页必须在服务端执行，避免治理页和我的项目页因本地过滤产生不可复制的 URL 状态。
+  const where: Prisma.ProjectWhereInput = {
+    ...makeProjectVisibilityWhere(actor),
+    ...(keyword
+      ? {
+          OR: [
+            { title: { contains: keyword } },
+            { sourceSi: { title: { contains: keyword } } },
+          ],
+        }
+      : {}),
+    ...(lifecycle && lifecycle !== "all"
+      ? {
+          lifecycleStatus: lifecycle as Prisma.ProjectWhereInput["lifecycleStatus"],
+        }
+      : {}),
+    ...(overdue === "yes" && (!lifecycle || lifecycle === "all") ? { lifecycleStatus: "active" } : {}),
+    ...(editorId ? { editorId } : {}),
+    ...(authorId ? { authorId } : {}),
+    ...(stage && stage !== "all"
+      ? {
+          currentStage:
+            stage === "completed"
+              ? "completed"
+              : stage as Prisma.ProjectWhereInput["currentStage"],
+        }
+      : {}),
+    ...(overdue === "yes"
+      ? {
+          stagePlans: {
+            some: {
+              timelineStatus: "overdue",
+            },
+          },
+        }
+      : overdue === "no"
         ? {
             stagePlans: {
-              some: {
+              none: {
                 timelineStatus: "overdue",
               },
             },
           }
-        : overdue === "no"
-          ? {
-              stagePlans: {
-                none: {
-                  timelineStatus: "overdue",
-                },
-              },
-            }
-          : {}),
-    },
-    include: projectInclude,
-    orderBy: {
-      updatedAt: "desc",
-    },
-  })
+        : {}),
+  }
+
+  const [projects, total] = await Promise.all([
+    prisma.project.findMany({
+      where,
+      include: projectInclude,
+      orderBy: {
+        updatedAt: "desc",
+      },
+      skip: pagination.skip,
+      take: pagination.take,
+    }),
+    prisma.project.count({ where }),
+  ])
 
   return {
     items: projects.map(toProjectItem),
+    ...makePaginationMeta(total, pagination),
   }
 }
 
 export async function getProjectDetail(actor: ApiCurrentUser, projectIdValue: string) {
-  await syncActiveProjectTimelineStatuses()
-
   const projectId = parseBigIntId(projectIdValue, "项目 ID")
   const project = await findVisibleProjectOrThrow(prisma, actor, projectId)
 
@@ -782,8 +796,6 @@ export async function getProjectDetail(actor: ApiCurrentUser, projectIdValue: st
 }
 
 export async function getProjectDocDirectory(actor: ApiCurrentUser, projectIdValue: string) {
-  await syncActiveProjectTimelineStatuses()
-
   const projectId = parseBigIntId(projectIdValue, "项目 ID")
   const project = await findVisibleProjectOrThrow(prisma, actor, projectId)
 
@@ -795,8 +807,6 @@ export async function getProjectDocDirectory(actor: ApiCurrentUser, projectIdVal
 }
 
 export async function listProjectChapters(actor: ApiCurrentUser, projectIdValue: string) {
-  await syncActiveProjectTimelineStatuses()
-
   const projectId = parseBigIntId(projectIdValue, "项目 ID")
   const project = await findVisibleProjectOrThrow(prisma, actor, projectId)
   const chapterDocs = project.docs.filter((doc) => doc.docType === "chapter").map(toChapterDoc)
@@ -1478,8 +1488,6 @@ export async function exportProjectContent(
   scope: ProjectExportScope,
   format: ProjectExportFormat = "markdown",
 ) {
-  await syncActiveProjectTimelineStatuses()
-
   const projectId = parseBigIntId(projectIdValue, "项目 ID")
   const project = await findVisibleProjectOrThrow(prisma, actor, projectId)
   assertEditorOrAdmin(actor, project)

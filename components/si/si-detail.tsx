@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/page-header"
 import { PrereleaseDialog } from "@/components/si/prerelease-dialog"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
+import { useConfirmDialog, useToast } from "@/components/ui/app-feedback"
 import { Card } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import { fetchJson } from "@/lib/api"
@@ -50,9 +51,12 @@ type ConvertProjectResponse = {
 
 export function SiDetail({ si }: { si: SiItem }) {
   const router = useRouter()
+  const confirm = useConfirmDialog()
+  const toast = useToast()
   const [prereleaseOpen, setPrereleaseOpen] = useState(false)
   const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null)
   const [pendingRecordId, setPendingRecordId] = useState<string | null>(null)
+  const [workingAction, setWorkingAction] = useState<"archive" | "delete" | null>(null)
 
   const records = si.preissues
   const convertedRecord = records.find((record) => record.status === "converted")
@@ -61,7 +65,11 @@ export function SiDetail({ si }: { si: SiItem }) {
   async function handleWithdraw(record: PrereleaseRecord) {
     if (pendingRecordId) return
 
-    const confirmed = window.confirm(`确认收回作者「${record.authorName}」的预发记录吗？`)
+    const confirmed = await confirm({
+      title: "确认收回预发",
+      description: `收回后，作者「${record.authorName}」端将不再显示《${record.siTitle}》的预发记录。`,
+      confirmText: "确认收回",
+    })
     if (!confirmed) return
 
     setPendingRecordId(record.recordId)
@@ -81,6 +89,7 @@ export function SiDetail({ si }: { si: SiItem }) {
         type: "success",
         text: "预发记录已收回",
       })
+      toast({ type: "success", title: "预发记录已收回" })
       router.refresh()
     } catch (error) {
       setMessage({
@@ -95,7 +104,11 @@ export function SiDetail({ si }: { si: SiItem }) {
   async function handleConvert(record: PrereleaseRecord) {
     if (pendingRecordId) return
 
-    const confirmed = window.confirm(`确认基于《${record.siTitle}》和作者「${record.authorName}」创建项目吗？`)
+    const confirmed = await confirm({
+      title: "确认转项目",
+      description: `将基于《${record.siTitle}》与作者「${record.authorName}」创建新项目，并进入梗概阶段。`,
+      confirmText: "确认转项目",
+    })
     if (!confirmed) return
 
     setPendingRecordId(record.recordId)
@@ -119,6 +132,56 @@ export function SiDetail({ si }: { si: SiItem }) {
       })
     } finally {
       setPendingRecordId(null)
+    }
+  }
+
+  async function handleArchive() {
+    if (workingAction) return
+
+    const confirmed = await confirm({
+      title: "确认归档 SI",
+      description: `归档后《${si.title}》将不可继续编辑或预发。`,
+      confirmText: "确认归档",
+    })
+
+    if (!confirmed) return
+
+    setWorkingAction("archive")
+
+    try {
+      await fetchJson(`/api/si/${si.id}/archive`, { method: "POST" })
+      toast({ type: "success", title: "SI 已归档" })
+      router.refresh()
+    } catch (error) {
+      toast({ type: "error", title: error instanceof Error ? error.message : "归档失败，请稍后重试" })
+    } finally {
+      setWorkingAction(null)
+    }
+  }
+
+  async function handleDelete() {
+    if (workingAction) return
+
+    const confirmed = await confirm({
+      title: "确认删除 SI",
+      description: `删除《${si.title}》会同步收回活动预发、关闭待办并通知作者。该操作不可恢复。`,
+      confirmText: "确认删除",
+      tone: "danger",
+    })
+
+    if (!confirmed) return
+
+    setWorkingAction("delete")
+
+    try {
+      await fetchJson(`/api/si/${si.id}`, { method: "DELETE" })
+      toast({ type: "success", title: "SI 已删除" })
+      router.push("/si")
+      router.refresh()
+    } catch (error) {
+      toast({ type: "error", title: error instanceof Error ? error.message : "删除失败，请稍后重试" })
+    } finally {
+      setWorkingAction(null)
     }
   }
 
@@ -291,10 +354,14 @@ export function SiDetail({ si }: { si: SiItem }) {
                 查看版本历史
               </Link>
             </Button>
-            {/* 归档/删除不属于第 3 批，保留入口但明确禁用，避免形成假交互。 */}
-            <Button variant="outline" className="justify-start bg-transparent text-muted-foreground" disabled>
+            <Button
+              variant="outline"
+              className="justify-start bg-transparent"
+              disabled={si.status === "archived" || si.converted || Boolean(workingAction)}
+              onClick={() => void handleArchive()}
+            >
               <Archive className="mr-2 size-4" />
-              归档（后续批次）
+              {workingAction === "archive" ? "归档中..." : "归档"}
             </Button>
             {si.converted ? (
               <Button variant="outline" className="justify-start bg-transparent text-muted-foreground" disabled>
@@ -302,9 +369,14 @@ export function SiDetail({ si }: { si: SiItem }) {
                 已转项目，不可删除
               </Button>
             ) : (
-              <Button variant="outline" className="justify-start bg-transparent text-muted-foreground" disabled>
+              <Button
+                variant="outline"
+                className="justify-start bg-transparent"
+                disabled={Boolean(workingAction)}
+                onClick={() => void handleDelete()}
+              >
                 <Trash2 className="mr-2 size-4" />
-                删除（后续批次）
+                {workingAction === "delete" ? "删除中..." : "删除"}
               </Button>
             )}
             <Button variant="ghost" className="justify-start" onClick={() => router.push("/si")}>
@@ -325,6 +397,7 @@ export function SiDetail({ si }: { si: SiItem }) {
             type: "success",
             text: "SI 已预发",
           })
+          toast({ type: "success", title: "SI 已预发" })
           router.refresh()
         }}
       />

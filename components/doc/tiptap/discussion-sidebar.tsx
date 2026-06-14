@@ -78,6 +78,11 @@ function keyFor(source: DiscussionSource, id: string) {
   return `${source}:${id}`
 }
 
+function revisionDiscussionId(mark: ProseMirrorMark) {
+  // 跨段落删除会产生多个 revision id，但它们共享同一个 groupId；侧栏按 group 聚合展示。
+  return asString(mark.attrs.groupId) || asString(mark.attrs.id)
+}
+
 function getCreatedByName(mark: ProseMirrorMark) {
   const createdBy = mark.attrs.createdBy
 
@@ -165,17 +170,18 @@ function collectDiscussionItems(state: EditorState) {
         return
       }
 
+      const revisionId = revisionDiscussionId(mark)
       const kind = getRevisionKind(mark)
       const role = mark.attrs.role as RevisionRole | undefined
 
-      if (!kind || (role !== "inserted" && role !== "deleted" && role !== "original")) {
+      if (!revisionId || !kind || (role !== "inserted" && role !== "deleted" && role !== "original")) {
         return
       }
 
       const item = getOrCreateItem(itemsByKey, {
-        key: keyFor("revision", id),
+        key: keyFor("revision", revisionId),
         source: "revision",
-        id,
+        id: revisionId,
         kind,
         label: getRevisionLabel(kind),
         from,
@@ -222,7 +228,7 @@ function keyFromMarks(marks: readonly ProseMirrorMark[]) {
 
   const revision = marks.find((mark) => mark.type.name === "revision" && asString(mark.attrs.id))
 
-  return revision ? keyFor("revision", asString(revision.attrs.id)) : null
+  return revision ? keyFor("revision", revisionDiscussionId(revision)) : null
 }
 
 function getActiveKeyFromSelection(state: EditorState) {
@@ -321,6 +327,10 @@ function selectDiscussionItem(editor: Editor, item: DiscussionItem) {
 }
 
 function removeDiscussionMark(editor: Editor, item: DiscussionItem) {
+  if (!editor.isEditable) {
+    return
+  }
+
   const markName = item.source === "comment" ? "comment" : "revision"
   const tr = editor.state.tr
   let removed = false
@@ -331,7 +341,12 @@ function removeDiscussionMark(editor: Editor, item: DiscussionItem) {
     }
 
     node.marks.forEach((mark) => {
-      if (mark.type.name !== markName || asString(mark.attrs.id) !== item.id) {
+      const sameDiscussion =
+        item.source === "revision"
+          ? revisionDiscussionId(mark) === item.id
+          : asString(mark.attrs.id) === item.id
+
+      if (mark.type.name !== markName || !sameDiscussion) {
         return
       }
 
@@ -454,6 +469,7 @@ export function DiscussionSidebar({
     }),
     [items],
   )
+  const readOnly = !editor?.isEditable
 
   return (
     <Card className={cn("h-full min-h-0 gap-0 overflow-hidden p-0", className)}>
@@ -520,13 +536,14 @@ export function DiscussionSidebar({
                       {item.label}
                     </span>
                     <button
-                      className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-red-50 hover:text-red-600"
+                      className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
                       type="button"
-                      title="删除标记"
+                      title={readOnly ? "当前内容只读，不能删除标记" : "删除标记"}
+                      disabled={readOnly}
                       onClick={(event) => {
                         event.stopPropagation()
 
-                        if (editor) {
+                        if (editor && !readOnly) {
                           removeDiscussionMark(editor, item)
                         }
                       }}

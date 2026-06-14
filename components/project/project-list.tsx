@@ -2,8 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 
 import { Card } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { StatusBadge } from "@/components/status-badge"
 import {
@@ -26,29 +28,68 @@ import {
 } from "@/types/project"
 import type { ProjectLifecycle, ProjectStage } from "@/types/domain"
 import { STAGE_PLAN_STATUS_LABELS } from "@/types/domain"
-import { Search, Eye, Download, Settings2 } from "lucide-react"
+import { ChevronLeft, ChevronRight, Download, Eye, Search, Settings2 } from "lucide-react"
 
 interface ProjectListProps {
   variant: "governance" | "mine"
-  items?: ProjectItem[]
-  editorOptions?: ProjectPersonOption[]
-  authorOptions?: ProjectPersonOption[]
-  loading?: boolean
-  message?: { type: "error" | "success"; text: string } | null
-  initialFilters?: {
-    keyword?: string
-    stage?: ProjectStage | "all"
-    lifecycle?: ProjectLifecycle | "all"
-    editor?: string
-    author?: string
-    overdue?: "all" | "yes" | "no"
-  }
 }
 
 type ProjectListResponse = {
   items: ProjectItem[]
   editors?: ProjectPersonOption[]
   authors?: ProjectPersonOption[]
+  page: number
+  pageSize: number
+  total: number
+  totalPages: number
+}
+
+type ProjectFilterState = {
+  keyword: string
+  stage: ProjectStage | "all"
+  lifecycle: ProjectLifecycle | "all"
+  editor: string
+  author: string
+  overdue: "all" | "yes" | "no"
+  page: number
+  pageSize: number
+}
+
+function positiveInteger(value: string | null, fallback: number) {
+  const parsed = Number(value)
+
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
+}
+
+function readFilterState(searchParams: URLSearchParams): ProjectFilterState {
+  const overdueParam = searchParams.get("overdue")
+
+  return {
+    keyword: searchParams.get("keyword") ?? "",
+    stage: (searchParams.get("stage") as ProjectStage | "all" | null) ?? "all",
+    lifecycle: (searchParams.get("lifecycle") as ProjectLifecycle | "all" | null) ?? "all",
+    editor: searchParams.get("editorId") ?? "all",
+    author: searchParams.get("authorId") ?? "all",
+    // 兼容旧入口 /governance/projects?overdue=1，首次读入后会被规范化成 overdue=yes。
+    overdue: overdueParam === "1" ? "yes" : ((overdueParam as "all" | "yes" | "no" | null) ?? "all"),
+    page: positiveInteger(searchParams.get("page"), 1),
+    pageSize: positiveInteger(searchParams.get("pageSize"), 20),
+  }
+}
+
+function buildQuery(filters: ProjectFilterState) {
+  const params = new URLSearchParams()
+
+  if (filters.keyword.trim()) params.set("keyword", filters.keyword.trim())
+  if (filters.stage !== "all") params.set("stage", filters.stage)
+  if (filters.lifecycle !== "all") params.set("lifecycle", filters.lifecycle)
+  if (filters.editor !== "all") params.set("editorId", filters.editor)
+  if (filters.author !== "all") params.set("authorId", filters.author)
+  if (filters.overdue !== "all") params.set("overdue", filters.overdue)
+  if (filters.page > 1) params.set("page", String(filters.page))
+  if (filters.pageSize !== 20) params.set("pageSize", String(filters.pageSize))
+
+  return params
 }
 
 function derivePersonOptions(items: ProjectItem[], key: "editor" | "author") {
@@ -69,137 +110,107 @@ function derivePersonOptions(items: ProjectItem[], key: "editor" | "author") {
   return [...map.values()].sort((left, right) => left.name.localeCompare(right.name, "zh-Hans-CN"))
 }
 
-export function ProjectList({
-  variant,
-  items,
-  editorOptions,
-  authorOptions,
-  loading = false,
-  message = null,
-  initialFilters,
-}: ProjectListProps) {
+export function ProjectList({ variant }: ProjectListProps) {
   const { role } = useRole()
-  const [keyword, setKeyword] = useState(initialFilters?.keyword ?? "")
-  const [stage, setStage] = useState<ProjectStage | "all">(initialFilters?.stage ?? "all")
-  const [lifecycle, setLifecycle] = useState<ProjectLifecycle | "all">(initialFilters?.lifecycle ?? "all")
-  const [editor, setEditor] = useState<string>(initialFilters?.editor ?? "all")
-  const [author, setAuthor] = useState<string>(initialFilters?.author ?? "all")
-  const [overdue, setOverdue] = useState<"all" | "yes" | "no">(initialFilters?.overdue ?? "all")
-  const [remoteItems, setRemoteItems] = useState<ProjectItem[]>(items ?? [])
-  const [remoteEditors, setRemoteEditors] = useState<ProjectPersonOption[]>(editorOptions ?? [])
-  const [remoteAuthors, setRemoteAuthors] = useState<ProjectPersonOption[]>(authorOptions ?? [])
-  const [remoteLoading, setRemoteLoading] = useState(false)
-  const [remoteMessage, setRemoteMessage] = useState<{ type: "error" | "success"; text: string } | null>(null)
+  const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+  const [filters, setFilters] = useState<ProjectFilterState>(() => readFilterState(searchParams))
+  const [items, setItems] = useState<ProjectItem[]>([])
+  const [editors, setEditors] = useState<ProjectPersonOption[]>([])
+  const [authors, setAuthors] = useState<ProjectPersonOption[]>([])
+  const [pagination, setPagination] = useState({ page: filters.page, pageSize: filters.pageSize, total: 0, totalPages: 1 })
+  const [loading, setLoading] = useState(true)
+  const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null)
+  const isGov = variant === "governance"
 
   useEffect(() => {
-    setRemoteItems(items ?? [])
-  }, [items])
+    setFilters(readFilterState(searchParams))
+  }, [searchParams])
 
   useEffect(() => {
-    setRemoteEditors(editorOptions ?? [])
-  }, [editorOptions])
+    const nextParams = buildQuery(filters)
+    const nextQuery = nextParams.toString()
+    const currentQuery = searchParams.toString()
+    const target = nextQuery ? `${pathname}?${nextQuery}` : pathname
 
-  useEffect(() => {
-    setRemoteAuthors(authorOptions ?? [])
-  }, [authorOptions])
-
-  useEffect(() => {
-    if (items) {
-      return
+    // 筛选状态是 URL 的投影；只有和地址栏不一致时才替换，避免浏览器历史被重复写入。
+    if (nextQuery !== currentQuery) {
+      router.replace(target, { scroll: false })
     }
+  }, [filters, pathname, router, searchParams])
 
+  useEffect(() => {
     let cancelled = false
-
-    async function loadProjects() {
-      setRemoteLoading(true)
-      setRemoteMessage(null)
+    const timer = window.setTimeout(async () => {
+      setLoading(true)
+      setMessage(null)
 
       try {
         const endpoint = variant === "governance" ? "/api/admin/projects" : "/api/projects"
-        const response = await fetchJson<ProjectListResponse>(endpoint)
+        const params = buildQuery(filters)
+        const query = params.toString()
+        const response = await fetchJson<ProjectListResponse>(query ? `${endpoint}?${query}` : endpoint)
 
-        if (cancelled) {
-          return
-        }
+        if (cancelled) return
 
-        setRemoteItems(response.items)
-        setRemoteEditors(response.editors ?? derivePersonOptions(response.items, "editor"))
-        setRemoteAuthors(response.authors ?? derivePersonOptions(response.items, "author"))
+        setItems(response.items)
+        setEditors(response.editors ?? derivePersonOptions(response.items, "editor"))
+        setAuthors(response.authors ?? derivePersonOptions(response.items, "author"))
+        setPagination({
+          page: response.page,
+          pageSize: response.pageSize,
+          total: response.total,
+          totalPages: response.totalPages,
+        })
       } catch (error) {
-        if (cancelled) {
-          return
-        }
+        if (cancelled) return
 
-        setRemoteMessage({
+        setItems([])
+        setPagination((current) => ({ ...current, total: 0, totalPages: 1 }))
+        setMessage({
           type: "error",
           text: error instanceof Error ? error.message : "项目列表读取失败",
         })
       } finally {
-        if (!cancelled) {
-          setRemoteLoading(false)
-        }
+        if (!cancelled) setLoading(false)
       }
-    }
-
-    void loadProjects()
+    }, 250)
 
     return () => {
       cancelled = true
+      window.clearTimeout(timer)
     }
-  }, [items, variant])
+  }, [filters, variant])
 
-  const dataItems = items ?? remoteItems
-  const editorList = (editorOptions ?? remoteEditors).length > 0 ? editorOptions ?? remoteEditors : derivePersonOptions(dataItems, "editor")
-  const authorList = (authorOptions ?? remoteAuthors).length > 0 ? authorOptions ?? remoteAuthors : derivePersonOptions(dataItems, "author")
-  const isLoading = loading || remoteLoading
-  const activeMessage = message ?? remoteMessage
-  const isGov = variant === "governance"
+  const editorList = useMemo(
+    () => (editors.length > 0 ? editors : derivePersonOptions(items, "editor")),
+    [editors, items],
+  )
+  const authorList = useMemo(
+    () => (authors.length > 0 ? authors : derivePersonOptions(items, "author")),
+    [authors, items],
+  )
 
-  const filtered = useMemo(() => {
-    return dataItems.filter((project) => {
-      if (keyword && !project.title.includes(keyword) && !project.sourceSi.includes(keyword)) {
-        return false
-      }
-
-      if (stage !== "all" && project.stage !== stage) {
-        return false
-      }
-
-      if (lifecycle !== "all" && project.lifecycle !== lifecycle) {
-        return false
-      }
-
-      if (editor !== "all" && project.editorId !== editor) {
-        return false
-      }
-
-      if (author !== "all" && project.authorId !== author) {
-        return false
-      }
-
-      if (overdue === "yes" && !project.overdue) {
-        return false
-      }
-
-      if (overdue === "no" && project.overdue) {
-        return false
-      }
-
-      return true
-    })
-  }, [author, dataItems, editor, keyword, lifecycle, overdue, stage])
+  function updateFilters(patch: Partial<ProjectFilterState>, resetPage = true) {
+    setFilters((current) => ({
+      ...current,
+      ...patch,
+      page: resetPage ? 1 : patch.page ?? current.page,
+    }))
+  }
 
   return (
     <div className="flex flex-col gap-6">
-      {activeMessage && (
+      {message && (
         <div
           className={
-            activeMessage.type === "error"
+            message.type === "error"
               ? "rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600"
               : "rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"
           }
         >
-          {activeMessage.text}
+          {message.text}
         </div>
       )}
 
@@ -207,16 +218,16 @@ export function ProjectList({
         <div className="relative">
           <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
-            value={keyword}
-            onChange={(event) => setKeyword(event.target.value)}
+            value={filters.keyword}
+            onChange={(event) => updateFilters({ keyword: event.target.value })}
             placeholder="搜索项目标题、来源 SI"
             className="pl-9"
           />
         </div>
         <div className="flex flex-wrap gap-3">
-          <Select value={stage} onValueChange={(value) => setStage(value as ProjectStage | "all")}>
+          <Select value={filters.stage} onValueChange={(value) => updateFilters({ stage: value as ProjectStage | "all" })}>
             <SelectTrigger className="w-32">
-              <SelectValue>{stage === "all" ? "全部阶段" : PROJECT_STAGE_LABELS[stage]}</SelectValue>
+              <SelectValue>{filters.stage === "all" ? "全部阶段" : PROJECT_STAGE_LABELS[filters.stage]}</SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">全部阶段</SelectItem>
@@ -228,9 +239,14 @@ export function ProjectList({
             </SelectContent>
           </Select>
 
-          <Select value={lifecycle} onValueChange={(value) => setLifecycle(value as ProjectLifecycle | "all")}>
+          <Select
+            value={filters.lifecycle}
+            onValueChange={(value) => updateFilters({ lifecycle: value as ProjectLifecycle | "all" })}
+          >
             <SelectTrigger className="w-32">
-              <SelectValue>{lifecycle === "all" ? "全部状态" : PROJECT_LIFECYCLE_LABELS[lifecycle]}</SelectValue>
+              <SelectValue>
+                {filters.lifecycle === "all" ? "全部状态" : PROJECT_LIFECYCLE_LABELS[filters.lifecycle]}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">全部状态</SelectItem>
@@ -243,9 +259,11 @@ export function ProjectList({
           </Select>
 
           {(isGov || role === "admin" || role === "author") && (
-            <Select value={editor} onValueChange={setEditor}>
+            <Select value={filters.editor} onValueChange={(value) => updateFilters({ editor: value })}>
               <SelectTrigger className="w-32">
-                <SelectValue>{editor === "all" ? "全部编辑" : editorList.find((item) => item.id === editor)?.name}</SelectValue>
+                <SelectValue>
+                  {filters.editor === "all" ? "全部编辑" : editorList.find((item) => item.id === filters.editor)?.name}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">全部编辑</SelectItem>
@@ -259,9 +277,11 @@ export function ProjectList({
           )}
 
           {(isGov || role === "admin" || role === "editor") && (
-            <Select value={author} onValueChange={setAuthor}>
+            <Select value={filters.author} onValueChange={(value) => updateFilters({ author: value })}>
               <SelectTrigger className="w-32">
-                <SelectValue>{author === "all" ? "全部作者" : authorList.find((item) => item.id === author)?.name}</SelectValue>
+                <SelectValue>
+                  {filters.author === "all" ? "全部作者" : authorList.find((item) => item.id === filters.author)?.name}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">全部作者</SelectItem>
@@ -274,14 +294,30 @@ export function ProjectList({
             </Select>
           )}
 
-          <Select value={overdue} onValueChange={(value) => setOverdue(value as "all" | "yes" | "no")}>
+          <Select value={filters.overdue} onValueChange={(value) => updateFilters({ overdue: value as "all" | "yes" | "no" })}>
             <SelectTrigger className="w-32">
-              <SelectValue>{overdue === "all" ? "是否逾期" : overdue === "yes" ? "已逾期" : "未逾期"}</SelectValue>
+              <SelectValue>{filters.overdue === "all" ? "是否逾期" : filters.overdue === "yes" ? "已逾期" : "未逾期"}</SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">是否逾期</SelectItem>
               <SelectItem value="yes">已逾期</SelectItem>
               <SelectItem value="no">未逾期</SelectItem>
+            </SelectContent>
+          </Select>
+
+          <Select
+            value={String(filters.pageSize)}
+            onValueChange={(value) => updateFilters({ pageSize: positiveInteger(value, 20) })}
+          >
+            <SelectTrigger className="w-28">
+              <SelectValue>{filters.pageSize} 条/页</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {[20, 50, 100].map((size) => (
+                <SelectItem key={size} value={String(size)}>
+                  {size} 条/页
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </div>
@@ -305,7 +341,7 @@ export function ProjectList({
               </tr>
             </thead>
             <tbody>
-              {isLoading && (
+              {loading && (
                 <tr>
                   <td colSpan={10} className="px-4 py-10 text-center text-muted-foreground">
                     正在加载项目...
@@ -313,7 +349,7 @@ export function ProjectList({
                 </tr>
               )}
 
-              {!isLoading && filtered.length === 0 && (
+              {!loading && items.length === 0 && (
                 <tr>
                   <td colSpan={10} className="px-4 py-10 text-center text-muted-foreground">
                     暂无符合条件的项目
@@ -321,8 +357,8 @@ export function ProjectList({
                 </tr>
               )}
 
-              {!isLoading &&
-                filtered.map((project) => {
+              {!loading &&
+                items.map((project) => {
                   const detailHref = isGov ? `/governance/projects/${project.id}` : `/projects/${project.id}`
 
                   return (
@@ -385,6 +421,33 @@ export function ProjectList({
                 })}
             </tbody>
           </table>
+        </div>
+        <div className="flex flex-col gap-3 border-t border-border px-4 py-3 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+          <span>
+            共 {pagination.total} 个项目，第 {pagination.page} / {pagination.totalPages} 页
+          </span>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="bg-transparent"
+              disabled={loading || pagination.page <= 1}
+              onClick={() => updateFilters({ page: Math.max(1, pagination.page - 1) }, false)}
+            >
+              <ChevronLeft className="mr-1 size-3.5" />
+              上一页
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="bg-transparent"
+              disabled={loading || pagination.page >= pagination.totalPages}
+              onClick={() => updateFilters({ page: Math.min(pagination.totalPages, pagination.page + 1) }, false)}
+            >
+              下一页
+              <ChevronRight className="ml-1 size-3.5" />
+            </Button>
+          </div>
         </div>
       </Card>
     </div>

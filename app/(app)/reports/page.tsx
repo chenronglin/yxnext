@@ -39,41 +39,26 @@ type RangeKey = "7d" | "30d" | "90d" | "all"
 export default function ReportsPage() {
   const { role } = useRole()
   const [range, setRange] = useState<RangeKey>("30d")
-  const [dimension, setDimension] = useState("project")
 
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
         breadcrumb={["统计报表"]}
         title="统计报表"
-        description="按角色和权限展示统计数据，支持切换时间范围与统计维度"
+        description="按角色和权限展示统计数据，支持切换时间范围"
         actions={
-          <div className="flex gap-2">
-            <Select value={range} onValueChange={(value) => setRange(value as RangeKey)}>
-              <SelectTrigger className="w-32">
-                <SelectValue>{RANGE_LABELS[range]}</SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {Object.keys(RANGE_LABELS).map((r) => (
-                  <SelectItem key={r} value={r}>
-                    {RANGE_LABELS[r]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={dimension} onValueChange={setDimension}>
-              <SelectTrigger className="w-28">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="project">项目</SelectItem>
-                <SelectItem value="doc">Doc</SelectItem>
-                <SelectItem value="author">作者</SelectItem>
-                <SelectItem value="editor">编辑</SelectItem>
-                <SelectItem value="stage">阶段</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+          <Select value={range} onValueChange={(value) => setRange(value as RangeKey)}>
+            <SelectTrigger className="w-32">
+              <SelectValue>{RANGE_LABELS[range]}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {Object.keys(RANGE_LABELS).map((r) => (
+                <SelectItem key={r} value={r}>
+                  {RANGE_LABELS[r]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         }
       />
 

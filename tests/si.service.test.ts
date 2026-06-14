@@ -4,6 +4,7 @@ const { mockPrisma } = vi.hoisted(() => {
   const prisma = {
     siPreissue: {
       findMany: vi.fn(),
+      count: vi.fn(),
     },
   }
 
@@ -33,6 +34,7 @@ describe("si.service", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockPrisma.siPreissue.findMany.mockResolvedValue([])
+    mockPrisma.siPreissue.count.mockResolvedValue(0)
   })
 
   it("作者列预发记录时不能用 authorId 参数覆盖本人归属过滤", async () => {
@@ -42,6 +44,16 @@ describe("si.service", () => {
 
     // 作者端 authorId 必须固定为当前登录用户，防止通过查询参数读取其他作者的预发记录。
     expect(mockPrisma.siPreissue.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          authorId: 200n,
+          status: {
+            not: "recalled",
+          },
+        }),
+      }),
+    )
+    expect(mockPrisma.siPreissue.count).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
           authorId: 200n,

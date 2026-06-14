@@ -34,6 +34,7 @@ import { cn } from "@/lib/utils"
 type RevisionPluginState = {
   lastId: string | null
   lastGroupId: string | null
+  lastKind: NovelRevisionKind | null
   lastPos: number | null
 }
 
@@ -140,6 +141,21 @@ function rangeContainsText(state: EditorState, range: TextRange) {
   })
 
   return hasText
+}
+
+function rangeContainsCommentMark(state: EditorState, range: TextRange) {
+  let hasComment = false
+
+  state.doc.nodesBetween(range.from, range.to, (node) => {
+    if (!node.isText) {
+      return true
+    }
+
+    hasComment = node.marks.some((mark) => mark.type.name === "comment")
+    return !hasComment
+  })
+
+  return hasComment
 }
 
 function collectRevisionTextSegments(state: EditorState, range: TextRange) {
@@ -391,6 +407,22 @@ function applyTextWithinInsertedRevision(view: EditorView, text: string, range: 
   return true
 }
 
+function applyPlainTextWithoutRevision(view: EditorView, text: string, range: TextRange) {
+  if (!text) {
+    return false
+  }
+
+  const { state } = view
+  const textNode = state.schema.text(text, getTypingMarks(state))
+  const tr = state.tr.replaceWith(range.from, range.to, textNode)
+  const cursorPos = range.from + textNode.nodeSize
+
+  // 关闭追踪时也不能让光标继承旧 revision mark；这里保留普通格式，只过滤修订身份。
+  tr.setSelection(TextSelection.create(tr.doc, cursorPos))
+  view.dispatch(tr.scrollIntoView())
+  return true
+}
+
 export function applyInsertedText(
   view: EditorView,
   text: string,
@@ -486,6 +518,8 @@ export function markDeletedRange(
   let lastId = pluginState?.lastId
   let lastGroupId = pluginState?.lastGroupId
   let lastPos = pluginState?.lastPos
+  const lastKind = pluginState?.lastKind
+  const operationGroupId = createPrefixedId("revision_group")
 
   let hasChanges = false
   let lastMarkedAttrs: RevisionAttributes | null = null
@@ -497,12 +531,12 @@ export function markDeletedRange(
       tr.delete(from, to)
       hasChanges = true
     } else {
-      const canReuseLastRevision = Boolean(lastId && (from === lastPos || to === lastPos))
+      const canReuseLastRevision = Boolean(lastKind === "delete" && lastId && (from === lastPos || to === lastPos))
       const attrs = makeRevisionAttrs(
         options,
         "delete",
         "deleted",
-        canReuseLastRevision ? lastGroupId : undefined,
+        canReuseLastRevision ? lastGroupId : operationGroupId,
         canReuseLastRevision ? lastId : undefined,
       )
       const mark = createRevisionMark(state, attrs)
@@ -1012,10 +1046,10 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
       new Plugin<RevisionPluginState>({
         key: revisionTrackingKey,
         state: {
-          init: () => ({ lastId: null, lastGroupId: null, lastPos: null }),
+          init: () => ({ lastId: null, lastGroupId: null, lastKind: null, lastPos: null }),
           apply(transaction, value, _oldState, newState) {
             if (transaction.selectionSet && !transaction.docChanged && !transaction.getMeta(revisionTrackingKey)) {
-              return { lastId: null, lastGroupId: null, lastPos: null }
+              return { lastId: null, lastGroupId: null, lastKind: null, lastPos: null }
             }
 
             const meta = transaction.getMeta(revisionTrackingKey) as RevisionPluginMeta | undefined
@@ -1024,6 +1058,7 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
               return {
                 lastId: meta.id,
                 lastGroupId: meta.groupId,
+                lastKind: meta.kind,
                 lastPos: meta.kind === "delete" ? meta.from : meta.to,
               }
             }
@@ -1041,6 +1076,10 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
               return false
             }
 
+            if (!this.options.enabled) {
+              return applyPlainTextWithoutRevision(view, text, normalizeRange(view.state, from, to))
+            }
+
             return applyInsertedText(view, text, normalizeRange(view.state, from, to), this.options)
           },
           handlePaste: (view, event) => {
@@ -1049,6 +1088,10 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
             }
 
             const text = plainTextFromClipboard(event)
+
+            if (!this.options.enabled) {
+              return text ? applyPlainTextWithoutRevision(view, text, rangeFromSelection(view.state, view.state.selection)) : false
+            }
 
             return text
               ? applyInsertedText(view, text, rangeFromSelection(view.state, view.state.selection), this.options, {
@@ -1069,6 +1112,16 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
                 : event.key === "Backspace"
                   ? normalizeRange(state, state.selection.from - 1, state.selection.from)
               : forwardDeleteRangeSkippingDeletedText(state, state.selection.from)
+
+            if (rangeContainsCommentMark(state, targetRange)) {
+              // 批注锚点如果随正文删除，会让右侧讨论栏失去定位；这里先要求用户确认，避免误删批注语义。
+              const confirmed = window.confirm("选中内容包含批注标记，删除会一并移除批注定位。确认继续吗？")
+
+              if (!confirmed) {
+                event.preventDefault()
+                return true
+              }
+            }
 
             return markDeletedRange(state, targetRange, this.options, view.dispatch, event.key === "Delete" ? "end" : "start")
           },

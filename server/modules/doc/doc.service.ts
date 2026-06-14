@@ -11,8 +11,7 @@ import {
   makeSingleDocKey,
   translateUniqueConstraintError,
 } from "@/server/shared/invariant-keys"
-import { syncActiveProjectTimelineStatuses } from "@/server/shared/project-stage-timeline"
-import { createNovelDocV1, isNovelDocV1 } from "@/lib/novel-doc"
+import { createNovelDocV1, deriveNovelDocProjection, isNovelDocV1 } from "@/lib/novel-doc"
 import type { ApiCurrentUser } from "@/server/shared/current-user"
 import type {
   DocCurrentView,
@@ -452,20 +451,20 @@ function normalizeSavePayload(input: SaveDocInput) {
     })
   }
 
-  const cleanText = input.cleanText ?? input.plainText
-  const exportText = input.exportText ?? cleanText ?? input.plainText
+  const projection = deriveNovelDocProjection(input.contentJson)
 
   return {
     contentSchemaVersion: DEFAULT_CONTENT_SCHEMA_VERSION,
-    contentJson: input.contentJson as Prisma.InputJsonObject,
-    wordCount: input.wordCount,
-    plainText: input.plainText,
-    cleanText,
-    exportText,
-    summary: trimToNull(input.summary ?? null),
-    commentCount: input.commentCount ?? 0,
-    suggestionCount: input.suggestionCount ?? 0,
-    revisionMarkCount: input.revisionMarkCount ?? 0,
+    // 保存接口不再信任前端投影；前端只提交编辑器 JSON，服务端统一重导文本和计数。
+    contentJson: projection.contentJson as unknown as Prisma.InputJsonObject,
+    wordCount: projection.wordCount,
+    plainText: projection.plainText,
+    cleanText: projection.cleanText,
+    exportText: projection.exportText,
+    summary: projection.summary,
+    commentCount: projection.commentCount,
+    suggestionCount: projection.suggestionCount,
+    revisionMarkCount: projection.revisionMarkCount,
   }
 }
 
@@ -1170,8 +1169,6 @@ async function advanceProjectAfterApprove(tx: TxClient, doc: WorkflowDocRecord, 
 }
 
 export async function getCurrentDocView(actor: ApiCurrentUser, docIdValue: string): Promise<DocCurrentView> {
-  await syncActiveProjectTimelineStatuses()
-
   const docId = parseBigIntId(docIdValue, "Doc ID")
   const doc = await findVisibleDocOrThrow(prisma, actor, docId)
 
@@ -1179,8 +1176,6 @@ export async function getCurrentDocView(actor: ApiCurrentUser, docIdValue: strin
 }
 
 export async function listDocRevisions(actor: ApiCurrentUser, docIdValue: string): Promise<DocRevisionListResponse> {
-  await syncActiveProjectTimelineStatuses()
-
   const docId = parseBigIntId(docIdValue, "Doc ID")
   const doc = await findVisibleDocOrThrow(prisma, actor, docId)
 
@@ -1206,8 +1201,6 @@ export async function getDocRevisionDetail(
   docIdValue: string,
   revisionIdValue: string,
 ): Promise<DocRevisionDetail> {
-  await syncActiveProjectTimelineStatuses()
-
   const docId = parseBigIntId(docIdValue, "Doc ID")
   const revisionId = parseBigIntId(revisionIdValue, "Revision ID")
   const doc = await findVisibleDocOrThrow(prisma, actor, docId)

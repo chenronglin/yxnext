@@ -2,13 +2,16 @@
 
 import { useState } from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 
 import { PageHeader } from "@/components/page-header"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
+import { useConfirmDialog, useToast } from "@/components/ui/app-feedback"
 import { Card } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import { cn, formatDateOnly } from "@/lib/utils"
+import { fetchJson } from "@/lib/api"
 import type { SiItem, SiVersion } from "@/types/si"
 import { ChevronLeft, Eye, Undo2 } from "lucide-react"
 
@@ -22,7 +25,36 @@ function PreviewField({ label, value }: { label: string; value: string }) {
 }
 
 export function SiVersions({ si, versions }: { si: SiItem; versions: SiVersion[] }) {
+  const router = useRouter()
+  const confirm = useConfirmDialog()
+  const toast = useToast()
   const [activeVersion, setActiveVersion] = useState<SiVersion | null>(versions[0] ?? null)
+  const [rollingBack, setRollingBack] = useState(false)
+
+  async function handleRollback(version: SiVersion) {
+    if (version.current || rollingBack) return
+
+    const confirmed = await confirm({
+      title: "确认回退 SI 版本",
+      description: `将《${si.title}》回退到 V${version.version}，系统会生成一条新的回退版本记录。`,
+      confirmText: "确认回退",
+    })
+
+    if (!confirmed) return
+
+    setRollingBack(true)
+
+    try {
+      // 回退由后端事务完成：更新 SI 主记录、写新版本快照、保留 rollback 来源。
+      await fetchJson(`/api/si/${si.id}/versions/${version.id}/rollback`, { method: "POST" })
+      toast({ type: "success", title: "SI 已回退到选定版本" })
+      router.refresh()
+    } catch (error) {
+      toast({ type: "error", title: error instanceof Error ? error.message : "版本回退失败，请稍后重试" })
+    } finally {
+      setRollingBack(false)
+    }
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -84,10 +116,9 @@ export function SiVersions({ si, versions }: { si: SiItem; versions: SiVersion[]
                     <Eye className="mr-1 size-3.5" />
                     只读查看
                   </Button>
-                  <Button size="sm" disabled title="回退能力不属于第 3 批">
-                    {/* 第 3 批只要求读版本与转项目，不包含版本回退能力。 */}
+                  <Button size="sm" disabled={activeVersion.current || rollingBack} onClick={() => void handleRollback(activeVersion)}>
                     <Undo2 className="mr-1 size-3.5" />
-                    回退到此版本
+                    {rollingBack ? "回退中..." : "回退到此版本"}
                   </Button>
                 </div>
               </div>

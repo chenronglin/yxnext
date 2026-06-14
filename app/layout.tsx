@@ -1,6 +1,7 @@
 import { Analytics } from '@vercel/analytics/next'
 import type { Metadata } from 'next'
 
+import { AppFeedbackProvider } from '@/components/ui/app-feedback'
 import './globals.css'
 
 export const metadata: Metadata = {
@@ -34,7 +35,7 @@ export default function RootLayout({
   return (
     <html lang="zh-CN" className="bg-background">
       <body className="font-sans antialiased">
-        {children}
+        <AppFeedbackProvider>{children}</AppFeedbackProvider>
         {process.env.NODE_ENV === 'production' && <Analytics />}
       </body>
     </html>

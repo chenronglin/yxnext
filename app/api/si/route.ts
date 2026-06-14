@@ -19,6 +19,8 @@ export async function GET(request: NextRequest) {
       keyword: searchParams.get("keyword"),
       status: searchParams.get("status"),
       mainType: searchParams.get("mainType"),
+      page: searchParams.get("page"),
+      pageSize: searchParams.get("pageSize"),
     })
 
     return ok(result)

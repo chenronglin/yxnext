@@ -6,6 +6,7 @@ import { Eye, KeyRound, Pencil, Plus, Power, Search } from "lucide-react"
 import { PageHeader } from "@/components/page-header"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
+import { useConfirmDialog } from "@/components/ui/app-feedback"
 import { Card } from "@/components/ui/card"
 import {
   Dialog,
@@ -63,6 +64,7 @@ const EMPTY_FORM: UserFormState = {
 }
 
 export default function UsersPage() {
+  const confirm = useConfirmDialog()
   const [users, setUsers] = useState<ManagedUser[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
@@ -188,9 +190,15 @@ export default function UsersPage() {
   }
 
   async function handleToggleStatus(user: ManagedUser) {
-    const confirmed = window.confirm(
-      user.status === "active" ? `确认禁用用户「${user.name}」吗？` : `确认启用用户「${user.name}」吗？`,
-    )
+    const confirmed = await confirm({
+      title: user.status === "active" ? "确认禁用用户" : "确认启用用户",
+      description:
+        user.status === "active"
+          ? `禁用后，用户「${user.name}」将不能继续登录。`
+          : `启用后，用户「${user.name}」可以重新登录。`,
+      confirmText: user.status === "active" ? "确认禁用" : "确认启用",
+      tone: user.status === "active" ? "danger" : "default",
+    })
 
     if (!confirmed || submitting) return
 
@@ -218,7 +226,11 @@ export default function UsersPage() {
   }
 
   async function handleResetPassword(user: ManagedUser) {
-    const confirmed = window.confirm(`确认重置用户「${user.name}」的密码吗？`)
+    const confirmed = await confirm({
+      title: "确认重置密码",
+      description: `重置后，用户「${user.name}」需要使用临时密码登录并修改密码。`,
+      confirmText: "确认重置",
+    })
     if (!confirmed || submitting) return
 
     setSubmitting(true)

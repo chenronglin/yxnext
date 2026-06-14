@@ -10,8 +10,8 @@ import { prisma } from "@/server/db/prisma"
 import { ApiError } from "@/server/shared/api-response"
 import { buildDocxBuffer } from "@/server/shared/docx-export"
 import { makeActiveBindingKey, makeActiveDocKey, translateUniqueConstraintError } from "@/server/shared/invariant-keys"
-import { syncActiveProjectTimelineStatuses } from "@/server/shared/project-stage-timeline"
 import { assertRole } from "@/server/shared/current-user"
+import { makePaginationMeta, parsePagination } from "@/server/shared/pagination"
 import { createNovelDocV1, textToNovelParagraphs } from "@/lib/novel-doc"
 import type { ApiCurrentUser } from "@/server/shared/current-user"
 import type {
@@ -87,6 +87,13 @@ type ProjectStagePlansInput = {
 
 type ProjectTransitionAction = "complete" | "archive" | "cancel" | "restore"
 
+const PROJECT_TRANSITION_MATRIX: Record<ProjectTransitionAction, ProjectLifecycle[]> = {
+  complete: ["active"],
+  archive: ["active", "completed"],
+  cancel: ["active"],
+  restore: ["archived", "cancelled"],
+}
+
 type ProjectFilters = {
   keyword?: string | null
   stage?: string | null
@@ -94,6 +101,8 @@ type ProjectFilters = {
   editorId?: string | null
   authorId?: string | null
   overdue?: string | null
+  page?: string | null
+  pageSize?: string | null
 }
 
 type AuditFilters = {
@@ -188,6 +197,118 @@ type ProjectRecord = Prisma.ProjectGetPayload<{ include: typeof projectInclude }
 
 function ensureAdmin(actor: ApiCurrentUser) {
   assertRole(actor, ["admin"])
+}
+
+async function assertManagedUserRoleChangeAllowed(input: {
+  userId: bigint
+  currentRole: Role
+  nextRole: Role
+  status: UserStatus
+}) {
+  if (input.currentRole === input.nextRole) {
+    return
+  }
+
+  if (input.currentRole === "admin" && input.nextRole !== "admin" && input.status === "active") {
+    const activeAdminTotal = await prisma.user.count({
+      where: {
+        role: "admin",
+        status: "active",
+      },
+    })
+
+    if (activeAdminTotal <= 1) {
+      throw new ApiError({
+        status: 409,
+        code: "LAST_ADMIN_ROLE_CHANGE_FORBIDDEN",
+        message: "系统至少需要保留一个活动管理员",
+      })
+    }
+  }
+
+  if (input.currentRole === "editor" && input.nextRole !== "editor") {
+    const [bindingTotal, projectTotal, preissueTotal, reviewDocTotal] = await Promise.all([
+      prisma.editorAuthorBinding.count({
+        where: {
+          editorId: input.userId,
+          status: "active",
+        },
+      }),
+      prisma.project.count({
+        where: {
+          editorId: input.userId,
+          lifecycleStatus: "active",
+        },
+      }),
+      prisma.siPreissue.count({
+        where: {
+          editorId: input.userId,
+          status: "preissued",
+        },
+      }),
+      prisma.doc.count({
+        where: {
+          holderRole: "editor",
+          status: "submitted",
+          project: {
+            editorId: input.userId,
+            lifecycleStatus: "active",
+          },
+        },
+      }),
+    ])
+
+    if (bindingTotal + projectTotal + preissueTotal + reviewDocTotal > 0) {
+      throw new ApiError({
+        status: 409,
+        code: "USER_ROLE_CHANGE_BLOCKED",
+        message: "该编辑仍有关联作者、在管项目、活动预发或待审稿件，请先解绑、改派或处理后再变更角色",
+      })
+    }
+  }
+
+  if (input.currentRole === "author" && input.nextRole !== "author") {
+    const [bindingTotal, projectTotal, preissueTotal, draftDocTotal] = await Promise.all([
+      prisma.editorAuthorBinding.count({
+        where: {
+          authorId: input.userId,
+          status: "active",
+        },
+      }),
+      prisma.project.count({
+        where: {
+          authorId: input.userId,
+          lifecycleStatus: "active",
+        },
+      }),
+      prisma.siPreissue.count({
+        where: {
+          authorId: input.userId,
+          status: "preissued",
+        },
+      }),
+      prisma.doc.count({
+        where: {
+          holderRole: "author",
+          status: {
+            in: ["draft", "rejected"],
+          },
+          project: {
+            authorId: input.userId,
+            lifecycleStatus: "active",
+          },
+        },
+      }),
+    ])
+
+    if (bindingTotal + projectTotal + preissueTotal + draftDocTotal > 0) {
+      throw new ApiError({
+        status: 409,
+        code: "USER_ROLE_CHANGE_BLOCKED",
+        message: "该作者仍有关联编辑、在写项目、活动预发或待改稿件，请先解绑、改派或处理后再变更角色",
+      })
+    }
+  }
 }
 
 function trimToNull(value: string | null | undefined) {
@@ -852,8 +973,6 @@ async function ensureUserByRole(tx: TxClient, userId: bigint, role: Role) {
 }
 
 async function dashboardStats(range: RangeKey = "30d"): Promise<DashboardStats> {
-  await syncActiveProjectTimelineStatuses()
-
   const since = startDateByRange(range)
   const today = startOfToday()
 
@@ -1202,6 +1321,7 @@ export async function updateManagedUser(actor: ApiCurrentUser, userIdValue: stri
   const email = trimToNull(input.email) ?? existing.email
   const name = trimToNull(input.name) ?? existing.displayName ?? existing.username
   const biography = input.biography === undefined ? existing.biography : trimToNull(input.biography)
+  const nextRole = input.role ?? existing.role
 
   const collision = await prisma.user.findFirst({
     where: {
@@ -1223,56 +1343,82 @@ export async function updateManagedUser(actor: ApiCurrentUser, userIdValue: stri
     })
   }
 
-  const updated = await prisma.$transaction(async (tx) => {
-    const saved = await tx.user.update({
-      where: {
-        userId,
-      },
-      data: {
-        username,
-        email,
-        role: input.role ?? existing.role,
-        displayName: name,
-        phone: input.phone === undefined ? existing.phone : trimToNull(input.phone),
-        biography,
-      },
-      select: {
-        userId: true,
-        username: true,
-        displayName: true,
-        role: true,
-        status: true,
-        email: true,
-        phone: true,
-        biography: true,
-        lastLoginAt: true,
-        createdAt: true,
-      },
-    })
-
-    await writeOperationLog(tx, {
-      actor,
-      action: "admin.user.update",
-      entityType: "user",
-      entityId: userId,
-      beforeJson: {
-        username: existing.username,
-        role: existing.role,
-        email: existing.email,
-        phone: existing.phone,
-        biography: existing.biography,
-      },
-      afterJson: {
-        username: saved.username,
-        role: saved.role,
-        email: saved.email,
-        phone: saved.phone,
-        biography: saved.biography,
-      },
-    })
-
-    return saved
+  await assertManagedUserRoleChangeAllowed({
+    userId,
+    currentRole: existing.role,
+    nextRole,
+    status: existing.status,
   })
+
+  const updated = await (async () => {
+    try {
+      return await prisma.$transaction(async (tx) => {
+        const saved = await tx.user.update({
+          where: {
+            userId,
+          },
+          data: {
+            username,
+            email,
+            role: nextRole,
+            displayName: name,
+            phone: input.phone === undefined ? existing.phone : trimToNull(input.phone),
+            biography,
+          },
+          select: {
+            userId: true,
+            username: true,
+            displayName: true,
+            role: true,
+            status: true,
+            email: true,
+            phone: true,
+            biography: true,
+            lastLoginAt: true,
+            createdAt: true,
+          },
+        })
+
+        await writeOperationLog(tx, {
+          actor,
+          action: "admin.user.update",
+          entityType: "user",
+          entityId: userId,
+          beforeJson: {
+            username: existing.username,
+            role: existing.role,
+            email: existing.email,
+            phone: existing.phone,
+            biography: existing.biography,
+          },
+          afterJson: {
+            username: saved.username,
+            role: saved.role,
+            email: saved.email,
+            phone: saved.phone,
+            biography: saved.biography,
+          },
+        })
+
+        return saved
+      })
+    } catch (error) {
+      throw (
+        translateUniqueConstraintError(error, [
+          {
+            constraintIncludes: ["username"],
+            code: "USER_EXISTS",
+            message: "用户名已存在",
+          },
+          {
+            constraintIncludes: ["email"],
+            code: "USER_EXISTS",
+            message: "邮箱已存在",
+          },
+        ]) ?? error
+      )
+    }
+  })()
 
   return {
     user: toManagedUser(updated),
@@ -2304,70 +2450,75 @@ export async function listAuditLogs(actor: ApiCurrentUser, filters: AuditFilters
 
 export async function listGovernanceProjects(actor: ApiCurrentUser, filters: ProjectFilters = {}) {
   ensureAdmin(actor)
-  await syncActiveProjectTimelineStatuses()
-
   const keyword = trimToNull(filters.keyword)
   const stage = trimToNull(filters.stage)
   const lifecycle = trimToNull(filters.lifecycle)
   const editorId = filters.editorId && filters.editorId !== "all" ? parseBigIntId(filters.editorId, "编辑 ID") : null
   const authorId = filters.authorId && filters.authorId !== "all" ? parseBigIntId(filters.authorId, "作者 ID") : null
   const overdue = trimToNull(filters.overdue)
+  const pagination = parsePagination(filters)
 
-  const projects = await prisma.project.findMany({
-    where: {
-      ...(keyword
-        ? {
-            OR: [
-              { title: { contains: keyword } },
-              { sourceSi: { title: { contains: keyword } } },
-            ],
-          }
-        : {}),
-      ...(lifecycle && lifecycle !== "all"
-        ? { lifecycleStatus: lifecycle as Prisma.ProjectWhereInput["lifecycleStatus"] }
-        : {}),
-      ...(overdue === "yes" && (!lifecycle || lifecycle === "all") ? { lifecycleStatus: "active" } : {}),
-      ...(editorId ? { editorId } : {}),
-      ...(authorId ? { authorId } : {}),
-      ...(stage && stage !== "all"
-        ? {
-            currentStage:
-              stage === "completed"
-                ? "completed"
-                : (uiStageToStageCode[stage as Exclude<ProjectStage, "completed">] as Prisma.ProjectWhereInput["currentStage"]),
-          }
-        : {}),
-      ...(overdue === "yes"
+  // 管理员列表可能覆盖全库项目，必须让数据库完成筛选、排序和分页，前端只展示当前页。
+  const where: Prisma.ProjectWhereInput = {
+    ...(keyword
+      ? {
+          OR: [
+            { title: { contains: keyword } },
+            { sourceSi: { title: { contains: keyword } } },
+          ],
+        }
+      : {}),
+    ...(lifecycle && lifecycle !== "all"
+      ? { lifecycleStatus: lifecycle as Prisma.ProjectWhereInput["lifecycleStatus"] }
+      : {}),
+    ...(overdue === "yes" && (!lifecycle || lifecycle === "all") ? { lifecycleStatus: "active" } : {}),
+    ...(editorId ? { editorId } : {}),
+    ...(authorId ? { authorId } : {}),
+    ...(stage && stage !== "all"
+      ? {
+          currentStage:
+            stage === "completed"
+              ? "completed"
+              : (uiStageToStageCode[stage as Exclude<ProjectStage, "completed">] as Prisma.ProjectWhereInput["currentStage"]),
+        }
+      : {}),
+    ...(overdue === "yes"
+      ? {
+          stagePlans: {
+            some: {
+              timelineStatus: "overdue",
+            },
+          },
+        }
+      : overdue === "no"
         ? {
             stagePlans: {
-              some: {
+              none: {
                 timelineStatus: "overdue",
               },
             },
           }
-        : overdue === "no"
-          ? {
-              stagePlans: {
-                none: {
-                  timelineStatus: "overdue",
-                },
-              },
-            }
-          : {}),
-    },
-    include: projectInclude,
-    orderBy: {
-      updatedAt: "desc",
-    },
-  })
+        : {}),
+  }
 
-  const [editors, authors] = await Promise.all([
+  const [projects, total, editors, authors] = await Promise.all([
+    prisma.project.findMany({
+      where,
+      include: projectInclude,
+      orderBy: {
+        updatedAt: "desc",
+      },
+      skip: pagination.skip,
+      take: pagination.take,
+    }),
+    prisma.project.count({ where }),
     activeUserOptionsByRole("editor"),
     activeUserOptionsByRole("author"),
   ])
 
   return {
     items: projects.map(toProjectItem),
+    ...makePaginationMeta(total, pagination),
     editors,
     authors,
   }
@@ -2375,8 +2526,6 @@ export async function listGovernanceProjects(actor: ApiCurrentUser, filters: Pro
 
 export async function getGovernanceProjectDetail(actor: ApiCurrentUser, projectIdValue: string) {
   ensureAdmin(actor)
-  await syncActiveProjectTimelineStatuses()
-
   const projectId = parseBigIntId(projectIdValue, "项目 ID")
   const project = await prisma.project.findUnique({
     where: {
@@ -2700,6 +2849,14 @@ export async function transitionGovernanceProject(
     })
   }
 
+  if (!PROJECT_TRANSITION_MATRIX[action].includes(project.lifecycleStatus)) {
+    throw new ApiError({
+      status: 409,
+      code: "PROJECT_TRANSITION_FORBIDDEN",
+      message: "当前项目生命周期不允许执行该操作",
+    })
+  }
+
   if (action === "complete" && project.releaseStatus !== "approved") {
     throw new ApiError({
       status: 409,
@@ -2901,8 +3058,6 @@ export async function transitionGovernanceProject(
 
 export async function downloadGovernanceProjectFinal(actor: ApiCurrentUser, projectIdValue: string) {
   ensureAdmin(actor)
-  await syncActiveProjectTimelineStatuses()
-
   const projectId = parseBigIntId(projectIdValue, "项目 ID")
   const project = await prisma.project.findUnique({
     where: {

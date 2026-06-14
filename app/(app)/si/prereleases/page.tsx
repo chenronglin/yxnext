@@ -1,8 +1,8 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useState } from "react"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 
 import { PageHeader } from "@/components/page-header"
 import { StatusBadge } from "@/components/status-badge"
@@ -41,7 +41,7 @@ import {
   type PrereleaseRecord,
   type PrereleaseStatus,
 } from "@/types/si"
-import { AlertTriangle, ArrowRightCircle, ExternalLink, Eye, Search, Undo2 } from "lucide-react"
+import { AlertTriangle, ArrowRightCircle, ChevronLeft, ChevronRight, ExternalLink, Eye, Search, Undo2 } from "lucide-react"
 
 type BoundAuthorsResponse = {
   authors: BoundAuthor[]
@@ -49,6 +49,10 @@ type BoundAuthorsResponse = {
 
 type PreissueListResponse = {
   records: PrereleaseRecord[]
+  page: number
+  pageSize: number
+  total: number
+  totalPages: number
 }
 
 type ConvertProjectResponse = {
@@ -57,31 +61,76 @@ type ConvertProjectResponse = {
   }
 }
 
+type PreissueFilterState = {
+  keyword: string
+  author: string
+  status: PrereleaseStatus | "all"
+  page: number
+  pageSize: number
+}
+
+function positiveInteger(value: string | null, fallback: number) {
+  const parsed = Number(value)
+
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
+}
+
+function readFilterState(searchParams: URLSearchParams): PreissueFilterState {
+  return {
+    keyword: searchParams.get("keyword") ?? "",
+    author: searchParams.get("authorId") ?? "all",
+    status: (searchParams.get("status") as PrereleaseStatus | "all" | null) ?? "all",
+    page: positiveInteger(searchParams.get("page"), 1),
+    pageSize: positiveInteger(searchParams.get("pageSize"), 20),
+  }
+}
+
+function buildQuery(filters: PreissueFilterState) {
+  const params = new URLSearchParams()
+
+  if (filters.keyword.trim()) params.set("keyword", filters.keyword.trim())
+  if (filters.author !== "all") params.set("authorId", filters.author)
+  if (filters.status !== "all") params.set("status", filters.status)
+  if (filters.page > 1) params.set("page", String(filters.page))
+  if (filters.pageSize !== 20) params.set("pageSize", String(filters.pageSize))
+
+  return params
+}
+
 export default function PrereleaseRecordsPage() {
   const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
   const [records, setRecords] = useState<PrereleaseRecord[]>([])
   const [authors, setAuthors] = useState<BoundAuthor[]>([])
   const [loading, setLoading] = useState(true)
-  const [keyword, setKeyword] = useState("")
-  const [author, setAuthor] = useState("all")
-  const [status, setStatus] = useState<PrereleaseStatus | "all">("all")
+  const [filters, setFilters] = useState<PreissueFilterState>(() => readFilterState(searchParams))
+  const [pagination, setPagination] = useState({ page: filters.page, pageSize: filters.pageSize, total: 0, totalPages: 1 })
   const [withdrawTarget, setWithdrawTarget] = useState<PrereleaseRecord | null>(null)
   const [convertTarget, setConvertTarget] = useState<PrereleaseRecord | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null)
 
-  async function loadPageData() {
+  async function loadPageData(nextFilters = filters) {
     // 预发记录页依赖两份数据：记录列表本身，以及筛选下拉里展示的绑定作者列表。
     setLoading(true)
     setMessage(null)
 
     try {
+      const params = buildQuery(nextFilters)
+      const query = params.toString()
       const [recordsResponse, authorsResponse] = await Promise.all([
-        fetchJson<PreissueListResponse>("/api/si-prepublish"),
+        fetchJson<PreissueListResponse>(query ? `/api/si-prepublish?${query}` : "/api/si-prepublish"),
         fetchJson<BoundAuthorsResponse>("/api/si/bound-authors"),
       ])
 
       setRecords(recordsResponse.records)
+      setPagination({
+        page: recordsResponse.page,
+        pageSize: recordsResponse.pageSize,
+        total: recordsResponse.total,
+        totalPages: recordsResponse.totalPages,
+      })
       setAuthors(authorsResponse.authors)
     } catch (error) {
       setMessage({
@@ -94,17 +143,40 @@ export default function PrereleaseRecordsPage() {
   }
 
   useEffect(() => {
-    void loadPageData()
-  }, [])
+    setFilters(readFilterState(searchParams))
+  }, [searchParams])
 
-  const filtered = useMemo(() => {
-    return records.filter((record) => {
-      if (keyword && !record.siTitle.includes(keyword)) return false
-      if (author !== "all" && record.authorId !== author) return false
-      if (status !== "all" && record.status !== status) return false
-      return true
-    })
-  }, [records, keyword, author, status])
+  useEffect(() => {
+    const nextParams = buildQuery(filters)
+    const nextQuery = nextParams.toString()
+    const currentQuery = searchParams.toString()
+
+    // 预发记录的筛选条件写入 URL，方便编辑和管理员复现同一批记录。
+    if (nextQuery !== currentQuery) {
+      router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false })
+    }
+  }, [filters, pathname, router, searchParams])
+
+  useEffect(() => {
+    let cancelled = false
+    const timer = window.setTimeout(async () => {
+      if (cancelled) return
+      await loadPageData(filters)
+    }, 250)
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [filters])
+
+  function updateFilters(patch: Partial<PreissueFilterState>, resetPage = true) {
+    setFilters((current) => ({
+      ...current,
+      ...patch,
+      page: resetPage ? 1 : patch.page ?? current.page,
+    }))
+  }
 
   async function handleWithdraw() {
     if (!withdrawTarget || submitting) return
@@ -189,16 +261,18 @@ export default function PrereleaseRecordsPage() {
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
-            value={keyword}
-            onChange={(event) => setKeyword(event.target.value)}
+            value={filters.keyword}
+            onChange={(event) => updateFilters({ keyword: event.target.value })}
             placeholder="搜索 SI 标题"
             className="pl-9"
           />
         </div>
         <div className="flex flex-wrap gap-3">
-          <Select value={author} onValueChange={setAuthor}>
+          <Select value={filters.author} onValueChange={(value) => updateFilters({ author: value })}>
             <SelectTrigger className="w-36">
-              <SelectValue>{author === "all" ? "全部作者" : authors.find((item) => item.id === author)?.name}</SelectValue>
+              <SelectValue>
+                {filters.author === "all" ? "全部作者" : authors.find((item) => item.id === filters.author)?.name}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">全部作者</SelectItem>
@@ -209,15 +283,30 @@ export default function PrereleaseRecordsPage() {
               ))}
             </SelectContent>
           </Select>
-          <Select value={status} onValueChange={(value) => setStatus(value as PrereleaseStatus | "all")}>
+          <Select value={filters.status} onValueChange={(value) => updateFilters({ status: value as PrereleaseStatus | "all" })}>
             <SelectTrigger className="w-36">
-              <SelectValue>{status === "all" ? "全部状态" : PRERELEASE_STATUS_LABELS[status]}</SelectValue>
+              <SelectValue>{filters.status === "all" ? "全部状态" : PRERELEASE_STATUS_LABELS[filters.status]}</SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">全部状态</SelectItem>
               {(Object.keys(PRERELEASE_STATUS_LABELS) as PrereleaseStatus[]).map((item) => (
                 <SelectItem key={item} value={item}>
                   {PRERELEASE_STATUS_LABELS[item]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select
+            value={String(filters.pageSize)}
+            onValueChange={(value) => updateFilters({ pageSize: positiveInteger(value, 20) })}
+          >
+            <SelectTrigger className="w-28">
+              <SelectValue>{filters.pageSize} 条/页</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {[20, 50, 100].map((size) => (
+                <SelectItem key={size} value={String(size)}>
+                  {size} 条/页
                 </SelectItem>
               ))}
             </SelectContent>
@@ -247,7 +336,7 @@ export default function PrereleaseRecordsPage() {
                   </TableCell>
                 </TableRow>
               )}
-              {!loading && filtered.length === 0 && (
+              {!loading && records.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={7} className="py-10 text-center text-sm text-muted-foreground">
                     暂无符合条件的预发记录
@@ -255,7 +344,7 @@ export default function PrereleaseRecordsPage() {
                 </TableRow>
               )}
               {!loading &&
-                filtered.map((record) => (
+                records.map((record) => (
                   <TableRow key={record.recordId}>
                     <TableCell className="font-medium text-foreground">{record.siTitle}</TableCell>
                     <TableCell>{record.authorName}</TableCell>
@@ -311,6 +400,34 @@ export default function PrereleaseRecordsPage() {
                 ))}
             </TableBody>
           </Table>
+        </div>
+      </Card>
+
+      <Card className="flex flex-col gap-3 p-4 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+        <span>
+          共 {pagination.total} 条预发记录，第 {pagination.page} / {pagination.totalPages} 页
+        </span>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="bg-transparent"
+            disabled={loading || pagination.page <= 1}
+            onClick={() => updateFilters({ page: Math.max(1, pagination.page - 1) }, false)}
+          >
+            <ChevronLeft className="mr-1 size-3.5" />
+            上一页
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="bg-transparent"
+            disabled={loading || pagination.page >= pagination.totalPages}
+            onClick={() => updateFilters({ page: Math.min(pagination.totalPages, pagination.page + 1) }, false)}
+          >
+            下一页
+            <ChevronRight className="ml-1 size-3.5" />
+          </Button>
         </div>
       </Card>
 

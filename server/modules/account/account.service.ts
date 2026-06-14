@@ -6,6 +6,7 @@ import { Prisma } from "@prisma/client"
 import { revokeAllUserSessionsByUserId } from "@/server/auth/session"
 import { prisma } from "@/server/db/prisma"
 import { ApiError } from "@/server/shared/api-response"
+import { translateUniqueConstraintError } from "@/server/shared/invariant-keys"
 import type { ApiCurrentUser } from "@/server/shared/current-user"
 import type { AccountBindingInfo, AccountProfile } from "@/types/account"
 
@@ -167,40 +168,52 @@ export async function updateAccountProfile(actor: ApiCurrentUser, input: UpdateA
     }
   }
 
-  await prisma.$transaction(async (tx) => {
-    await tx.user.update({
-      where: {
-        userId: actor.userId,
-      },
-      data: {
-        displayName: nextName ?? existing.displayName,
-        email: nextEmail ?? existing.email,
-        phone: input.phone !== undefined ? nextPhone : existing.phone,
-        biography: input.biography !== undefined ? nextBiography : existing.biography,
-        avatarUrl: input.avatarUrl !== undefined ? nextAvatarUrl : existing.avatarUrl,
-      },
-    })
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: {
+          userId: actor.userId,
+        },
+        data: {
+          displayName: nextName ?? existing.displayName,
+          email: nextEmail ?? existing.email,
+          phone: input.phone !== undefined ? nextPhone : existing.phone,
+          biography: input.biography !== undefined ? nextBiography : existing.biography,
+          avatarUrl: input.avatarUrl !== undefined ? nextAvatarUrl : existing.avatarUrl,
+        },
+      })
 
-    await writeOperationLog(tx, {
-      actor,
-      action: "account.profile.update",
-      entityId: actor.userId,
-      beforeJson: {
-        displayName: existing.displayName,
-        email: existing.email,
-        phone: existing.phone,
-        biography: existing.biography,
-        avatarUrl: existing.avatarUrl,
-      },
-      afterJson: {
-        displayName: nextName ?? existing.displayName,
-        email: nextEmail ?? existing.email,
-        phone: input.phone !== undefined ? nextPhone : existing.phone,
-        biography: input.biography !== undefined ? nextBiography : existing.biography,
-        avatarUrl: input.avatarUrl !== undefined ? nextAvatarUrl : existing.avatarUrl,
-      },
+      await writeOperationLog(tx, {
+        actor,
+        action: "account.profile.update",
+        entityId: actor.userId,
+        beforeJson: {
+          displayName: existing.displayName,
+          email: existing.email,
+          phone: existing.phone,
+          biography: existing.biography,
+          avatarUrl: existing.avatarUrl,
+        },
+        afterJson: {
+          displayName: nextName ?? existing.displayName,
+          email: nextEmail ?? existing.email,
+          phone: input.phone !== undefined ? nextPhone : existing.phone,
+          biography: input.biography !== undefined ? nextBiography : existing.biography,
+          avatarUrl: input.avatarUrl !== undefined ? nextAvatarUrl : existing.avatarUrl,
+        },
+      })
     })
-  })
+  } catch (error) {
+    throw (
+      translateUniqueConstraintError(error, [
+        {
+          constraintIncludes: ["email"],
+          code: "ACCOUNT_EMAIL_CONFLICT",
+          message: "该邮箱已被其他账号使用",
+        },
+      ]) ?? error
+    )
+  }
 
   return getAccountProfile(actor)
 }
