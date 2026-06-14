@@ -6,6 +6,8 @@ import Link from "next/link"
 import { PageHeader } from "@/components/page-header"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
 import { StatusBadge } from "@/components/status-badge"
 import { StageProgress } from "@/components/project/stage-progress"
 import { StagePlanTable } from "@/components/project/stage-plan-table"
@@ -21,11 +23,14 @@ import {
   type ProjectChapterLocator,
   type ProjectDetail as ProjectDetailView,
 } from "@/types/project"
-import { Plus, Unlock, CheckCircle2, Download, Lock, FileText, History, BookOpen, Layers3 } from "lucide-react"
+import { Plus, Unlock, CheckCircle2, Download, Lock, FileText, History, BookOpen, Trash2 } from "lucide-react"
 
 type ProjectDetailResponse = {
   project: ProjectDetailView
 }
+
+// 章节弹窗统一按屏幕二分之一显示，新增和删除保持一致的视觉宽度。
+const CHAPTER_DIALOG_WIDTH_CLASS = "w-[50vw] max-w-[50vw] sm:max-w-[50vw]"
 
 export function ProjectDetail({ id }: { id: string }) {
   const { role } = useRole()
@@ -33,6 +38,14 @@ export function ProjectDetail({ id }: { id: string }) {
   const [loading, setLoading] = useState(true)
   const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null)
   const [workingAction, setWorkingAction] = useState<null | "unlock" | "complete">(null)
+  const [chapterDialogOpen, setChapterDialogOpen] = useState(false)
+  const [creatingChapter, setCreatingChapter] = useState(false)
+  const [newChapter, setNewChapter] = useState({
+    title: "",
+    chapterNo: "",
+  })
+  const [deleteTarget, setDeleteTarget] = useState<ProjectChapterLocator | null>(null)
+  const [deletingChapterId, setDeletingChapterId] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -78,11 +91,11 @@ export function ProjectDetail({ id }: { id: string }) {
       project.totalChapters > 0 &&
       project.releaseDocStatus === "locked",
   )
-  const canComplete = Boolean(project && project.releaseDocStatus === "approved" && (role === "editor" || role === "admin"))
+  const canComplete = Boolean(project && !readonly && project.releaseDocStatus === "approved" && (role === "editor" || role === "admin"))
   // 正文章节的新建和结构调整只由作者发起，编辑进入章节页后只处理稿件协作和审核。
-  const canManageChapters = Boolean(project && project.stage === "chapter" && role === "author")
+  const canManageChapters = Boolean(project && !readonly && project.stage === "chapter" && role === "author")
   const canExportProject = role === "editor" || role === "admin"
-  const hasActionItems = canManageChapters || canUnlockRelease || canComplete || canExportProject
+  const hasActionItems = canUnlockRelease || canComplete || canExportProject
 
   async function refreshProject(successText?: string) {
     const response = await fetchJson<ProjectDetailResponse>(`/api/projects/${id}`)
@@ -139,6 +152,113 @@ export function ProjectDetail({ id }: { id: string }) {
       })
     } finally {
       setWorkingAction(null)
+    }
+  }
+
+  function resetChapterForm() {
+    setNewChapter({
+      title: "",
+      chapterNo: "",
+    })
+  }
+
+  function openChapterDialog() {
+    // 新增章节从项目详情页直接发起，避免作者再进入单独的章节管理页面。
+    setMessage(null)
+    setChapterDialogOpen(true)
+  }
+
+  async function handleCreateChapter() {
+    if (!project) {
+      return
+    }
+
+    const title = newChapter.title.trim()
+    const chapterNoText = newChapter.chapterNo.trim()
+    const parsedChapterNo = chapterNoText ? Number(chapterNoText) : null
+
+    if (!title) {
+      setMessage({
+        type: "error",
+        text: "请输入章节标题",
+      })
+      return
+    }
+
+    if (!chapterNoText) {
+      setMessage({
+        type: "error",
+        text: "请输入章节号",
+      })
+      return
+    }
+
+    if (parsedChapterNo !== null && (!Number.isInteger(parsedChapterNo) || parsedChapterNo <= 0)) {
+      setMessage({
+        type: "error",
+        text: "章节号必须是正整数",
+      })
+      return
+    }
+
+    setCreatingChapter(true)
+    setMessage(null)
+
+    try {
+      const response = await fetchJson<ProjectDetailResponse>(`/api/projects/${project.id}/chapters`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          title,
+          chapterNo: parsedChapterNo,
+        }),
+      })
+
+      setProject(response.project)
+      resetChapterForm()
+      setChapterDialogOpen(false)
+      setMessage({
+        type: "success",
+        text: "章节已创建",
+      })
+    } catch (error) {
+      setMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "章节创建失败",
+      })
+    } finally {
+      setCreatingChapter(false)
+    }
+  }
+
+  async function handleDeleteChapter() {
+    if (!project || !deleteTarget) {
+      return
+    }
+
+    setDeletingChapterId(deleteTarget.docId)
+    setMessage(null)
+
+    try {
+      const response = await fetchJson<ProjectDetailResponse>(`/api/projects/${project.id}/chapters/${deleteTarget.docId}`, {
+        method: "DELETE",
+      })
+
+      setProject(response.project)
+      setDeleteTarget(null)
+      setMessage({
+        type: "success",
+        text: "章节已删除",
+      })
+    } catch (error) {
+      setMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "章节删除失败",
+      })
+    } finally {
+      setDeletingChapterId(null)
     }
   }
 
@@ -208,15 +328,6 @@ export function ProjectDetail({ id }: { id: string }) {
               </div>
             ) : hasActionItems ? (
               <div className="grid grid-cols-2 gap-2">
-                {canManageChapters && (
-                  <Button asChild size="sm" variant="outline" className="h-7 w-full justify-center bg-transparent px-2 text-xs">
-                    <Link href={`/projects/${project.id}/chapters`}>
-                      <Plus className="mr-1 size-3.5" />
-                      新增章节
-                    </Link>
-                  </Button>
-                )}
-
                 {(role === "editor" || role === "admin") && (
                   <Button
                     size="sm"
@@ -254,7 +365,7 @@ export function ProjectDetail({ id }: { id: string }) {
               </div>
             ) : (
               <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs leading-5 text-muted-foreground">
-                当前阶段暂无可执行操作。
+                当前阶段暂无项目级操作。
               </div>
             )}
           </div>
@@ -265,9 +376,115 @@ export function ProjectDetail({ id }: { id: string }) {
         <StageProgress project={project} />
       </Card>
 
-      <ProjectDocumentPanel project={project} />
+      <ProjectDocumentPanel
+        project={project}
+        canManageChapters={canManageChapters}
+        deletingChapterId={deletingChapterId}
+        onCreateChapter={openChapterDialog}
+        onDeleteChapter={setDeleteTarget}
+      />
 
       <StagePlanTable project={project} editable={false} />
+
+      <Dialog
+        open={chapterDialogOpen}
+        onOpenChange={(open) => {
+          if (creatingChapter) {
+            return
+          }
+
+          setChapterDialogOpen(open)
+
+          if (!open) {
+            resetChapterForm()
+          }
+        }}
+      >
+        <DialogContent className={CHAPTER_DIALOG_WIDTH_CLASS}>
+          <DialogHeader>
+            <DialogTitle>新增章节</DialogTitle>
+            <DialogDescription>填写章节号和章节标题，创建后会立即显示在正文章节列表中。</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3 md:grid-cols-[140px_minmax(0,1fr)]">
+            <div className="grid gap-1.5">
+              <label className="text-xs font-medium text-muted-foreground" htmlFor="chapter-no">
+                章节号
+              </label>
+              <Input
+                id="chapter-no"
+                type="number"
+                inputMode="numeric"
+                min={1}
+                step={1}
+                value={newChapter.chapterNo}
+                onChange={(event) => setNewChapter((current) => ({ ...current, chapterNo: event.target.value }))}
+                placeholder="例如：4"
+                disabled={creatingChapter}
+              />
+            </div>
+            <div className="grid gap-1.5">
+              <label className="text-xs font-medium text-muted-foreground" htmlFor="chapter-title">
+                章节标题
+              </label>
+              <Input
+                id="chapter-title"
+                value={newChapter.title}
+                onChange={(event) => setNewChapter((current) => ({ ...current, title: event.target.value }))}
+                placeholder="例如：第四章 暗巷的修士"
+                disabled={creatingChapter}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              className="bg-transparent"
+              disabled={creatingChapter}
+              onClick={() => setChapterDialogOpen(false)}
+            >
+              取消
+            </Button>
+            <Button type="button" disabled={creatingChapter} onClick={() => void handleCreateChapter()}>
+              <Plus className="mr-1.5 size-4" />
+              {creatingChapter ? "创建中..." : "创建章节"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(deleteTarget)} onOpenChange={(open) => !open && !deletingChapterId && setDeleteTarget(null)}>
+        <DialogContent className={CHAPTER_DIALOG_WIDTH_CLASS}>
+          <DialogHeader>
+            <DialogTitle>确认删除章节</DialogTitle>
+            <DialogDescription>仅未提交的草稿章节可以删除；删除后会归档当前草稿并取消相关待办。</DialogDescription>
+          </DialogHeader>
+          {deleteTarget && (
+            <div className="rounded-md border border-border bg-muted px-4 py-3 text-sm text-foreground">
+              {deleteTarget.title}
+            </div>
+          )}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              className="bg-transparent"
+              disabled={Boolean(deletingChapterId)}
+              onClick={() => setDeleteTarget(null)}
+            >
+              取消
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={!deleteTarget || Boolean(deletingChapterId)}
+              onClick={() => void handleDeleteChapter()}
+            >
+              {deletingChapterId ? "删除中..." : "确认删除"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -281,7 +498,19 @@ function HeaderField({ label, children }: { label: string; children: React.React
   )
 }
 
-function ProjectDocumentPanel({ project }: { project: ProjectDetailView }) {
+function ProjectDocumentPanel({
+  project,
+  canManageChapters,
+  deletingChapterId,
+  onCreateChapter,
+  onDeleteChapter,
+}: {
+  project: ProjectDetailView
+  canManageChapters: boolean
+  deletingChapterId: string | null
+  onCreateChapter: () => void
+  onDeleteChapter: (chapter: ProjectChapterLocator) => void
+}) {
   const fixedDocs = [
     {
       key: "synopsis",
@@ -315,12 +544,12 @@ function ProjectDocumentPanel({ project }: { project: ProjectDetailView }) {
           <h2 className="text-sm font-semibold text-foreground">项目文档</h2>
           <p className="mt-1 text-xs text-muted-foreground">正在进行中和已定稿的项目，都可以从这里进入对应文档页面。</p>
         </div>
-        <Button asChild size="sm" variant="outline" className="bg-transparent">
-          <Link href={`/projects/${project.id}/chapters`}>
-            <Layers3 className="mr-1.5 size-4" />
-            章节管理
-          </Link>
-        </Button>
+        {canManageChapters && (
+          <Button type="button" size="sm" variant="outline" className="bg-transparent" onClick={onCreateChapter}>
+            <Plus className="mr-1.5 size-4" />
+            新增章节
+          </Button>
+        )}
       </div>
 
       <div className="grid gap-0 lg:grid-cols-[360px_minmax(0,1fr)]">
@@ -364,7 +593,14 @@ function ProjectDocumentPanel({ project }: { project: ProjectDetailView }) {
                 </thead>
                 <tbody>
                   {chapters.map((chapter) => (
-                    <ChapterEntry key={chapter.docId} projectId={project.id} chapter={chapter} />
+                    <ChapterEntry
+                      key={chapter.docId}
+                      projectId={project.id}
+                      chapter={chapter}
+                      canManageChapters={canManageChapters}
+                      deleting={deletingChapterId === chapter.docId}
+                      onDeleteChapter={onDeleteChapter}
+                    />
                   ))}
                 </tbody>
               </table>
@@ -405,8 +641,22 @@ function DocEntry({
   )
 }
 
-function ChapterEntry({ projectId, chapter }: { projectId: string; chapter: ProjectChapterLocator }) {
+function ChapterEntry({
+  projectId,
+  chapter,
+  canManageChapters,
+  deleting,
+  onDeleteChapter,
+}: {
+  projectId: string
+  chapter: ProjectChapterLocator
+  canManageChapters: boolean
+  deleting: boolean
+  onDeleteChapter: (chapter: ProjectChapterLocator) => void
+}) {
   const chapterLabel = chapter.chapterNo ? `第 ${chapter.chapterNo} 章` : `排序 ${chapter.sortOrder}`
+  // “未提交”在 Doc 状态上对应草稿；退回章节已经经历过提交，不在项目详情列表里提供删除入口。
+  const canDeleteChapter = canManageChapters && chapter.status === "draft"
 
   return (
     <tr className="border-b border-border last:border-b-0 hover:bg-muted/30">
@@ -444,6 +694,19 @@ function ChapterEntry({ projectId, chapter }: { projectId: string; chapter: Proj
               <BookOpen className="size-3.5" />
             </Link>
           </Button>
+          {canDeleteChapter && (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-7 px-2 text-red-600 hover:text-red-600"
+              title="删除未提交章节"
+              disabled={deleting}
+              onClick={() => onDeleteChapter(chapter)}
+            >
+              <Trash2 className="size-3.5" />
+            </Button>
+          )}
         </div>
       </td>
     </tr>
