@@ -11,6 +11,7 @@ import { StageProgress } from "@/components/project/stage-progress"
 import { StagePlanTable } from "@/components/project/stage-plan-table"
 import { useRole } from "@/components/role-provider"
 import { fetchJson } from "@/lib/api"
+import { formatDateOnly } from "@/lib/utils"
 import { DOC_STATUS_LABELS, HOLDER_ROLE_LABELS, PROJECT_LIFECYCLE_LABELS, PROJECT_STAGE_LABELS } from "@/types/domain"
 import type { BadgeTone } from "@/types/domain"
 import {
@@ -78,9 +79,8 @@ export function ProjectDetail({ id }: { id: string }) {
       project.releaseDocStatus === "locked",
   )
   const canComplete = Boolean(project && project.releaseDocStatus === "approved" && (role === "editor" || role === "admin"))
-  const canManageChapters = Boolean(
-    project && project.stage === "chapter" && (role === "admin" || role === "editor" || role === "author"),
-  )
+  // 正文章节的新建和结构调整只由作者发起，编辑进入章节页后只处理稿件协作和审核。
+  const canManageChapters = Boolean(project && project.stage === "chapter" && role === "author")
   const canExportProject = role === "editor" || role === "admin"
   const hasActionItems = canManageChapters || canUnlockRelease || canComplete || canExportProject
 
@@ -193,7 +193,7 @@ export function ProjectDetail({ id }: { id: string }) {
             <span className="text-sm text-foreground">{project.author}</span>
           </HeaderField>
           <HeaderField label="创建时间">
-            <span className="text-sm text-foreground">{formatDate(project.createdAt)}</span>
+            <span className="text-sm text-foreground">{formatDateOnly(project.createdAt)}</span>
           </HeaderField>
         </Card>
 
@@ -279,11 +279,6 @@ function HeaderField({ label, children }: { label: string; children: React.React
       {children}
     </div>
   )
-}
-
-function formatDate(value: string | null) {
-  if (!value) return "—"
-  return value.split(/[T ]/)[0]
 }
 
 function ProjectDocumentPanel({ project }: { project: ProjectDetailView }) {

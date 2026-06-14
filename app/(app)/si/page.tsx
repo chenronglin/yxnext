@@ -17,6 +17,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { fetchJson } from "@/lib/api"
+import { formatDateOnly } from "@/lib/utils"
 import { SI_STATUS_LABELS, type SiStatus } from "@/types/domain"
 import { DEFAULT_MAIN_TYPES, SI_STATUS_TONE, type SiItem } from "@/types/si"
 import { Archive, Eye, History, Lock, Pencil, Plus, Search, Send, Trash2 } from "lucide-react"
@@ -186,7 +187,7 @@ export default function SiLibraryPage() {
                     <span>Trope：{item.trope}</span>
                     <span>适配作者：{item.authors.length > 0 ? item.authors.join("、") : "未指定"}</span>
                     <span>预发数量：{item.prereleaseCount}</span>
-                    <span>更新：{new Date(item.updatedAt).toLocaleString("zh-CN")}</span>
+                    <span>更新：{formatDateOnly(item.updatedAt)}</span>
                   </div>
                 </div>
 

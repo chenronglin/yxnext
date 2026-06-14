@@ -6,6 +6,7 @@ import { StatCard } from "@/components/stat-card"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { StatusBadge } from "@/components/status-badge"
 import { fetchJson } from "@/lib/api"
+import { formatDateOnly } from "@/lib/utils"
 import type { WorkspaceDashboardPayload } from "@/types/workbench"
 import { AlertTriangle, FileCheck2, FolderKanban, Library, Send, Undo2, Clock } from "lucide-react"
 
@@ -45,8 +46,8 @@ export function EditorDashboard() {
     <div className="flex flex-col gap-6">
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard label="负责项目数" value={stats?.responsibleProjectTotal ?? "..."} icon={FolderKanban} href="/projects" />
-        <StatCard label="待审核 Doc" value={stats?.pendingReviewDocTotal ?? "..."} icon={FileCheck2} tone="warning" href="/review" />
-        <StatCard label="退回 Doc" value={stats?.returnedDocTotal ?? "..."} icon={Undo2} tone="warning" href="/todos" />
+        <StatCard label="待审核 Doc" value={stats?.pendingReviewDocTotal ?? "..."} icon={FileCheck2} tone="warning" href="/todos?type=review" />
+        <StatCard label="退回 Doc" value={stats?.returnedDocTotal ?? "..."} icon={Undo2} tone="warning" href="/todos?type=returned" />
         <StatCard label="即将到期项目" value={stats?.dueSoonProjectTotal ?? "..."} icon={Clock} tone="warning" href="/projects" />
       </div>
 
@@ -67,7 +68,7 @@ export function EditorDashboard() {
                 <span className="text-sm text-foreground">{item.title}</span>
                 <StatusBadge label={item.action} tone={item.tone} />
               </div>
-              <span className="text-xs text-muted-foreground">{item.time}</span>
+              <span className="text-xs text-muted-foreground">{formatDateOnly(item.time)}</span>
             </div>
           ))}
           {!stats && <div className="py-3 text-sm text-muted-foreground">正在加载最近处理记录...</div>}

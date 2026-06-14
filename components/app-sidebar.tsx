@@ -7,7 +7,6 @@ import { cn } from "@/lib/utils"
 import { useRole } from "@/components/role-provider"
 import { useSidebar } from "@/components/sidebar-provider"
 import { NAV_BY_ROLE } from "@/config/navigation"
-import { ROLE_LABELS } from "@/types/domain"
 
 function isNavItemActive(pathname: string, href: string, allHrefs: string[]) {
   // 先判断当前菜单自身是否命中：支持精确命中和“详情页仍归属当前菜单”的子路径命中。
@@ -42,7 +41,7 @@ export function AppSidebar() {
   const allHrefs = items.map((item) => item.href)
 
   const navList = (mode: "desktop" | "mobile") => (
-    <nav className="flex-1 overflow-y-auto px-3 pb-4">
+    <nav className="flex-1 overflow-y-auto px-3 pb-4 pt-3">
       <ul className="flex flex-col gap-0.5">
         {items.map((item) => {
           const active = isNavItemActive(pathname, item.href, allHrefs)
@@ -93,11 +92,6 @@ export function AppSidebar() {
                 <span className="whitespace-nowrap text-[11px] text-muted-foreground">协作管理与审稿平台</span>
               </div>
             </div>
-            <div className="px-5 py-3">
-              <span className="inline-flex items-center rounded-md bg-sidebar-accent px-2 py-0.5 text-xs font-medium text-sidebar-accent-foreground">
-                {ROLE_LABELS[role]}视图
-              </span>
-            </div>
             {navList("mobile")}
           </aside>
         </div>
@@ -128,17 +122,6 @@ export function AppSidebar() {
           </div>
         )}
       </div>
-
-      {/* Role Label */}
-      {!collapsed ? (
-        <div className="px-5 py-3 animate-in fade-in duration-300">
-          <span className="inline-flex items-center rounded-md bg-sidebar-accent px-2 py-0.5 text-xs font-medium text-sidebar-accent-foreground">
-            {ROLE_LABELS[role]}视图
-          </span>
-        </div>
-      ) : (
-        <div className="h-4" />
-      )}
 
       {/* Navigation Menu */}
       {navList("desktop")}

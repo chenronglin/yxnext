@@ -8,7 +8,7 @@ import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
-import { cn } from "@/lib/utils"
+import { cn, formatDateOnly } from "@/lib/utils"
 import type { SiItem, SiVersion } from "@/types/si"
 import { ChevronLeft, Eye, Undo2 } from "lucide-react"
 
@@ -64,7 +64,7 @@ export function SiVersions({ si, versions }: { si: SiItem; versions: SiVersion[]
                   </div>
                   <div className="mt-2 space-y-1 text-xs text-muted-foreground">
                     <p>保存人：{version.savedBy}</p>
-                    <p>保存时间：{new Date(version.savedAt).toLocaleString("zh-CN")}</p>
+                    <p>保存时间：{formatDateOnly(version.savedAt)}</p>
                     {version.note && <p>说明：{version.note}</p>}
                   </div>
                 </Card>

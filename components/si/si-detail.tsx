@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import { fetchJson } from "@/lib/api"
+import { formatDateOnly } from "@/lib/utils"
 import { SI_STATUS_LABELS } from "@/types/domain"
 import {
   PRERELEASE_STATUS_LABELS,
@@ -126,7 +127,7 @@ export function SiDetail({ si }: { si: SiItem }) {
       <PageHeader
         breadcrumb={["SI 选题策划库", si.title]}
         title={si.title}
-        description={`创建编辑：${si.createdBy} · 创建于 ${new Date(si.createdAt).toLocaleString("zh-CN")}`}
+        description={`创建编辑：${si.createdBy} · 创建于 ${formatDateOnly(si.createdAt)}`}
         actions={
           <div className="flex flex-wrap items-center gap-2">
             {editable ? (
@@ -211,7 +212,7 @@ export function SiDetail({ si }: { si: SiItem }) {
                     </div>
                     <p className="text-xs text-muted-foreground">预发说明：{record.note || "—"}</p>
                     <p className="text-xs text-muted-foreground">
-                      预发时间：{new Date(record.prereleasedAt).toLocaleString("zh-CN")}
+                      预发时间：{formatDateOnly(record.prereleasedAt)}
                     </p>
                   </div>
                   <div className="flex shrink-0 flex-wrap items-center gap-2">
@@ -261,11 +262,11 @@ export function SiDetail({ si }: { si: SiItem }) {
             </div>
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">创建时间</span>
-              <span className="text-foreground">{new Date(si.createdAt).toLocaleString("zh-CN")}</span>
+              <span className="text-foreground">{formatDateOnly(si.createdAt)}</span>
             </div>
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">最近更新</span>
-              <span className="text-foreground">{new Date(si.updatedAt).toLocaleString("zh-CN")}</span>
+              <span className="text-foreground">{formatDateOnly(si.updatedAt)}</span>
             </div>
           </Card>
 

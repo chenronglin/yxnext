@@ -20,14 +20,11 @@ import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { fetchJson } from "@/lib/api"
+import { formatDateOnly } from "@/lib/utils"
 import type { ApprovalRequest } from "@/types/admin"
 
 type ApprovalsResponse = {
   requests: ApprovalRequest[]
-}
-
-function formatDateTime(value: string) {
-  return new Date(value).toLocaleString("zh-CN")
 }
 
 export default function ApprovalsPage() {
@@ -198,7 +195,7 @@ export default function ApprovalsPage() {
                     </div>
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
                       <span>联系方式：{request.contact}</span>
-                      <span>申请时间：{formatDateTime(request.appliedAt)}</span>
+                      <span>申请时间：{formatDateOnly(request.appliedAt)}</span>
                     </div>
                     <p className="text-sm text-muted-foreground">个人简介：{request.biography || "—"}</p>
                   </div>
@@ -246,7 +243,7 @@ export default function ApprovalsPage() {
                   </div>
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
                     <span>联系方式：{request.contact}</span>
-                    <span>申请时间：{formatDateTime(request.appliedAt)}</span>
+                    <span>申请时间：{formatDateOnly(request.appliedAt)}</span>
                   </div>
                   <p className="text-sm text-muted-foreground">个人简介：{request.biography || "—"}</p>
                   {request.rejectReason && <p className="text-sm text-red-600">驳回原因：{request.rejectReason}</p>}
@@ -267,7 +264,7 @@ export default function ApprovalsPage() {
               <DetailRow label="笔名" value={detail.penName} />
               <DetailRow label="账号" value={detail.username} />
               <DetailRow label="联系方式" value={detail.contact} />
-              <DetailRow label="申请时间" value={formatDateTime(detail.appliedAt)} />
+              <DetailRow label="申请时间" value={formatDateOnly(detail.appliedAt)} />
               <DetailRow label="状态" value={detail.status === "pending" ? "待审批" : "已驳回"} />
               <DetailRow label="个人简介" value={detail.biography || "—"} />
               <DetailRow label="驳回原因" value={detail.rejectReason ?? "—"} />

@@ -1,15 +1,15 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import Link from "next/link"
+import { useRouter } from "next/navigation"
 
 import { PageHeader } from "@/components/page-header"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { StatusBadge } from "@/components/status-badge"
-import { cn } from "@/lib/utils"
+import { cn, formatDateOnly } from "@/lib/utils"
 import { fetchJson } from "@/lib/api"
-import { CheckCheck, X, ExternalLink } from "lucide-react"
+import { CheckCheck } from "lucide-react"
 import type { NotificationCategory, NotificationItemView } from "@/types/workbench"
 
 type NotificationsResponse = {
@@ -43,17 +43,13 @@ const FILTERS: { key: NotificationCategory | "all"; label: string }[] = [
   { key: "forgot_password_request", label: TYPE_LABELS.forgot_password_request },
 ]
 
-function formatDateTime(value: string) {
-  return new Date(value).toLocaleString("zh-CN")
-}
-
 export default function NotificationsPage() {
+  const router = useRouter()
   const [items, setItems] = useState<NotificationItemView[]>([])
   const [loading, setLoading] = useState(true)
   const [markingAllRead, setMarkingAllRead] = useState(false)
   const [filter, setFilter] = useState<NotificationCategory | "all">("all")
   const [readFilter, setReadFilter] = useState<"all" | "unread" | "read">("all")
-  const [selected, setSelected] = useState<NotificationItemView | null>(null)
   const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null)
 
   useEffect(() => {
@@ -87,18 +83,17 @@ export default function NotificationsPage() {
     setItems((current) => current.map((entry) => (entry.id === item.id ? { ...entry, read: true } : entry)))
   }
 
-  async function openDetail(item: NotificationItemView) {
-    setSelected(item)
-
-    if (item.read) return
-
+  async function openNotificationTarget(item: NotificationItemView) {
     try {
+      // 通知点击就是业务跳转；已读状态只做伴随更新，失败也不阻断用户进入对应文稿或项目页面。
       await markOneRead(item)
     } catch (requestError) {
       setMessage({
         type: "error",
         text: requestError instanceof Error ? requestError.message : "通知已读状态更新失败",
       })
+    } finally {
+      router.push(item.href)
     }
   }
 
@@ -207,9 +202,9 @@ export default function NotificationsPage() {
           filtered.map((item) => (
             <Card
               key={item.id}
-              onClick={() => void openDetail(item)}
+              onClick={() => void openNotificationTarget(item)}
               className={cn(
-                "flex cursor-pointer items-start gap-3 p-4 transition-colors hover:border-primary/40",
+                "flex cursor-pointer items-start gap-3 p-4 transition-colors hover:border-primary/40 hover:bg-secondary/30",
                 !item.read && "border-l-2 border-l-primary",
               )}
             >
@@ -222,43 +217,12 @@ export default function NotificationsPage() {
                   </span>
                   <StatusBadge label={TYPE_LABELS[item.category]} tone="neutral" />
                 </div>
-                <span className="text-xs text-muted-foreground">{formatDateTime(item.time)}</span>
+                <span className="text-xs text-muted-foreground">{formatDateOnly(item.time)}</span>
+                {item.detail && <span className="line-clamp-2 text-sm leading-6 text-muted-foreground">{item.detail}</span>}
               </div>
             </Card>
           ))}
       </div>
-
-      {selected && (
-        <div className="fixed inset-0 z-50 flex">
-          <div className="flex-1 bg-black/30" onClick={() => setSelected(null)} aria-hidden />
-          <aside className="flex h-full w-full max-w-md flex-col bg-background shadow-xl">
-            <div className="flex items-center justify-between border-b border-border px-5 py-4">
-              <h2 className="text-base font-semibold text-foreground">通知详情</h2>
-              <button
-                onClick={() => setSelected(null)}
-                className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary"
-                aria-label="关闭"
-              >
-                <X className="size-5" />
-              </button>
-            </div>
-            <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-5">
-              <StatusBadge label={TYPE_LABELS[selected.category]} tone="info" />
-              <h3 className="text-base font-medium text-foreground">{selected.title}</h3>
-              <p className="text-sm leading-relaxed text-muted-foreground">{selected.detail}</p>
-              <p className="text-xs text-muted-foreground">{formatDateTime(selected.time)}</p>
-            </div>
-            <div className="border-t border-border p-5">
-              <Button asChild className="w-full">
-                <Link href={selected.href}>
-                  <ExternalLink className="mr-1.5 size-4" />
-                  查看相关内容
-                </Link>
-              </Button>
-            </div>
-          </aside>
-        </div>
-      )}
     </div>
   )
 }

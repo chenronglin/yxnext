@@ -9,6 +9,7 @@ import { Separator } from "@/components/ui/separator"
 import { getSiPreissue } from "@/server/modules/si/si.service"
 import { ApiError } from "@/server/shared/api-response"
 import { requireServerCurrentUser } from "@/server/shared/current-user"
+import { formatDateOnly } from "@/lib/utils"
 import { PRERELEASE_STATUS_LABELS, PRERELEASE_STATUS_TONE } from "@/types/si"
 import { ChevronLeft, ExternalLink, Clock } from "lucide-react"
 
@@ -34,7 +35,7 @@ export default async function MySiDetailPage({ params }: { params: Promise<{ rec
         <PageHeader
           breadcrumb={["我的 SI", si.title]}
           title={si.title}
-          description={`预发编辑：${si.editorName} · 预发于 ${new Date(si.prereleasedAt).toLocaleString("zh-CN")}`}
+          description={`预发编辑：${si.editorName} · 预发于 ${formatDateOnly(si.prereleasedAt)}`}
           actions={
             <Button asChild variant="outline" className="bg-transparent">
               <Link href="/my-si">
@@ -73,7 +74,7 @@ export default async function MySiDetailPage({ params }: { params: Promise<{ rec
               </div>
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">预发时间</span>
-                <span className="text-foreground">{new Date(si.prereleasedAt).toLocaleString("zh-CN")}</span>
+                <span className="text-foreground">{formatDateOnly(si.prereleasedAt)}</span>
               </div>
             </Card>
 

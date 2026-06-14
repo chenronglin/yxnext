@@ -5,6 +5,7 @@ import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { StatusBadge } from "@/components/status-badge"
+import { formatDateOnly } from "@/lib/utils"
 import { STAGE_PLAN_TONE, type ProjectItem } from "@/types/project"
 import { PROJECT_STAGE_LABELS, STAGE_PLAN_STATUS_LABELS } from "@/types/domain"
 import { Pencil, Save, X } from "lucide-react"
@@ -118,8 +119,8 @@ export function StagePlanTable({ project, editable = false, onSave, saving = fal
                   )}
                 </td>
                 <td className="px-4 py-3 text-muted-foreground">{plan.timingNote}</td>
-                <td className="px-4 py-3 text-muted-foreground">{formatDate(plan.startAt)}</td>
-                <td className="px-4 py-3 text-muted-foreground">{formatDate(plan.finishedAt)}</td>
+                <td className="px-4 py-3 text-muted-foreground">{formatDateOnly(plan.startAt)}</td>
+                <td className="px-4 py-3 text-muted-foreground">{formatDateOnly(plan.finishedAt)}</td>
                 <td className="px-4 py-3">
                   <StatusBadge label={STAGE_PLAN_STATUS_LABELS[plan.status]} tone={STAGE_PLAN_TONE[plan.status]} />
                 </td>
@@ -130,9 +131,4 @@ export function StagePlanTable({ project, editable = false, onSave, saving = fal
       </div>
     </Card>
   )
-}
-
-function formatDate(value: string | null) {
-  if (!value) return "—"
-  return value.split(/[T ]/)[0]
 }

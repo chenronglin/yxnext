@@ -13,6 +13,7 @@ import { PageHeader } from "@/components/page-header"
 import { StatCard } from "@/components/stat-card"
 import { useRole } from "@/components/role-provider"
 import { fetchJson } from "@/lib/api"
+import { formatDateOnly } from "@/lib/utils"
 import type { AdminReportStats } from "@/types/admin"
 import type { WorkspaceReportPayload } from "@/types/workbench"
 import {
@@ -215,8 +216,8 @@ function EditorReport({ range }: { range: RangeKey }) {
       {message && <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">{message}</div>}
       <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
         <StatCard label="负责项目数" value={stats?.projectTotal ?? "..."} icon={FolderKanban} href="/projects" />
-        <StatCard label="待审核 Doc" value={stats?.pendingReviewDocTotal ?? "..."} icon={FileText} tone="warning" href="/review" />
-        <StatCard label="退回 Doc" value={stats?.returnedDocTotal ?? "..."} icon={RotateCcw} />
+        <StatCard label="待审核 Doc" value={stats?.pendingReviewDocTotal ?? "..."} icon={FileText} tone="warning" href="/todos?type=review" />
+        <StatCard label="退回 Doc" value={stats?.returnedDocTotal ?? "..."} icon={RotateCcw} href="/todos?type=returned" />
         <StatCard label="即将到期项目" value={stats?.dueSoonProjectTotal ?? "..."} icon={Clock} tone="warning" />
         <StatCard label="已逾期项目" value={stats?.overdueProjectTotal ?? "..."} icon={AlertTriangle} tone="danger" />
       </div>
@@ -300,7 +301,7 @@ function RankCard({ title, rows }: { title: string; rows: { name: string; value:
               </span>
               <span className="text-foreground">{row.name}</span>
             </div>
-            <span className="text-xs text-muted-foreground">{row.value}</span>
+            <span className="text-xs text-muted-foreground">{formatDateOnly(row.value)}</span>
           </li>
         ))}
       </ul>

@@ -24,6 +24,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { fetchJson } from "@/lib/api"
+import { formatDateOnly } from "@/lib/utils"
 import type { Binding } from "@/types/admin"
 import type { ProjectPersonOption } from "@/types/project"
 
@@ -31,10 +32,6 @@ type BindingsResponse = {
   bindings: Binding[]
   editors: ProjectPersonOption[]
   authors: ProjectPersonOption[]
-}
-
-function formatDateTime(value: string) {
-  return new Date(value).toLocaleString("zh-CN")
 }
 
 export default function BindingsPage() {
@@ -209,7 +206,7 @@ export default function BindingsPage() {
                         tone={binding.status === "active" ? "success" : "neutral"}
                       />
                     </td>
-                    <td className="px-4 py-3 text-muted-foreground">{formatDateTime(binding.createdAt)}</td>
+                    <td className="px-4 py-3 text-muted-foreground">{formatDateOnly(binding.createdAt)}</td>
                     <td className="px-4 py-3 text-muted-foreground">{binding.operator}</td>
                     <td className="px-4 py-3 text-right">
                       {binding.status === "active" && (

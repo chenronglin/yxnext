@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { fetchJson } from "@/lib/api"
+import { formatDateOnly } from "@/lib/utils"
 import { ROLE_LABELS, USER_STATUS_LABELS, type Role, type UserStatus } from "@/types/domain"
 import { ROLE_TONE, USER_STATUS_TONE, type ManagedUser } from "@/types/admin"
 
@@ -59,10 +60,6 @@ const EMPTY_FORM: UserFormState = {
   phone: "",
   biography: "",
   password: "",
-}
-
-function formatDateTime(value: string | null) {
-  return value ? new Date(value).toLocaleString("zh-CN") : "—"
 }
 
 export default function UsersPage() {
@@ -358,8 +355,8 @@ export default function UsersPage() {
                       <StatusBadge label={USER_STATUS_LABELS[user.status]} tone={USER_STATUS_TONE[user.status]} />
                     </td>
                     <td className="px-4 py-3 text-muted-foreground">{user.contact}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{formatDateTime(user.lastLogin)}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{formatDateTime(user.createdAt)}</td>
+                    <td className="px-4 py-3 text-muted-foreground">{formatDateOnly(user.lastLogin)}</td>
+                    <td className="px-4 py-3 text-muted-foreground">{formatDateOnly(user.createdAt)}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
                         <Button
@@ -529,8 +526,8 @@ export default function UsersPage() {
               <DetailRow label="手机号" value={detailUser.phone ?? "—"} />
               <DetailRow label="联系方式" value={detailUser.contact} />
               <DetailRow label="个人简介" value={detailUser.biography ?? "—"} />
-              <DetailRow label="最近登录" value={formatDateTime(detailUser.lastLogin)} />
-              <DetailRow label="创建时间" value={formatDateTime(detailUser.createdAt)} />
+              <DetailRow label="最近登录" value={formatDateOnly(detailUser.lastLogin)} />
+              <DetailRow label="创建时间" value={formatDateOnly(detailUser.createdAt)} />
             </dl>
           )}
         </DialogContent>

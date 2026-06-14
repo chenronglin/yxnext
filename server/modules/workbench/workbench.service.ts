@@ -121,6 +121,11 @@ function notificationCategory(rawType: string): NotificationCategory {
   return "system"
 }
 
+function docEditorHref(projectId: bigint, docId: bigint) {
+  // Doc 协作的真实工作面是文稿编辑页，所有通知、待办和兼容跳转都统一落到这个地址。
+  return `/projects/${projectId.toString()}/docs/${docId.toString()}`
+}
+
 function notificationHref(input: {
   category: NotificationCategory
   projectId: bigint | null
@@ -143,11 +148,15 @@ function notificationHref(input: {
     return `/projects/${input.projectId.toString()}`
   }
 
-  if (input.category === "doc_submit") {
-    return input.docId ? `/review?docId=${input.docId.toString()}` : "/review"
+  if (
+    (input.category === "doc_submit" || input.category === "doc_return" || input.category === "doc_approve") &&
+    input.projectId &&
+    input.docId
+  ) {
+    return docEditorHref(input.projectId, input.docId)
   }
 
-  if ((input.category === "doc_return" || input.category === "doc_approve") && input.projectId) {
+  if ((input.category === "doc_submit" || input.category === "doc_return" || input.category === "doc_approve") && input.projectId) {
     return `/projects/${input.projectId.toString()}`
   }
 
@@ -313,7 +322,7 @@ export async function listTodos(actor: ApiCurrentUser) {
         createdAt: todo.createdAt.toISOString(),
         read: todo.isRead,
         readAt: toIsoString(todo.readAt),
-        href: `/review?docId=${todo.doc.docId.toString()}`,
+        href: docEditorHref(todo.project.projectId, todo.doc.docId),
       })
     }
 
@@ -331,7 +340,7 @@ export async function listTodos(actor: ApiCurrentUser) {
         createdAt: todo.createdAt.toISOString(),
         read: todo.isRead,
         readAt: toIsoString(todo.readAt),
-        href: `/projects/${todo.project.projectId.toString()}`,
+        href: docEditorHref(todo.project.projectId, todo.doc.docId),
       })
     }
 

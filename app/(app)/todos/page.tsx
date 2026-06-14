@@ -2,13 +2,14 @@
 
 import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
+import { useSearchParams } from "next/navigation"
 
 import { useRole } from "@/components/role-provider"
 import { PageHeader } from "@/components/page-header"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { StatusBadge } from "@/components/status-badge"
-import { cn } from "@/lib/utils"
+import { cn, formatDateOnly } from "@/lib/utils"
 import { fetchJson } from "@/lib/api"
 import { CheckCheck, ChevronRight } from "lucide-react"
 import type { TodoItemView, TodoType } from "@/types/workbench"
@@ -33,17 +34,29 @@ const TYPE_LABELS: Record<TodoType, string> = {
   approval: "注册审批",
 }
 
-function formatDateTime(value: string) {
-  return value === "—" ? value : new Date(value).toLocaleString("zh-CN")
+function normalizeTodoType(value: string | null): TodoType | "all" {
+  // 统计卡片会带 type 查询参数进入待办页，这里只接受页面真实支持的分类，避免错误参数造成空白状态。
+  if (value === "review" || value === "returned" || value === "approval" || value === "si" || value === "warning" || value === "overdue") {
+    return value
+  }
+
+  return "all"
 }
 
 export default function TodosPage() {
   const { role } = useRole()
-  const [active, setActive] = useState<TodoType | "all">("all")
+  const searchParams = useSearchParams()
+  const requestedType = searchParams.get("type")
+  const [active, setActive] = useState<TodoType | "all">(() => normalizeTodoType(requestedType))
   const [loading, setLoading] = useState(true)
   const [markingAllRead, setMarkingAllRead] = useState(false)
   const [items, setItems] = useState<TodoItemView[]>([])
   const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null)
+
+  useEffect(() => {
+    // 用户从看板或报表通过查询参数进入时，列表直接切到对应任务类型。
+    setActive(normalizeTodoType(requestedType))
+  }, [requestedType])
 
   useEffect(() => {
     async function loadTodos() {
@@ -176,9 +189,9 @@ export default function TodosPage() {
                     {item.relatedType}：{item.relatedName}
                   </span>
                   <span>发起人：{item.from}</span>
-                  <span>截止：{formatDateTime(item.due)}</span>
-                  <span>创建：{formatDateTime(item.createdAt)}</span>
-                  <span>已读：{item.readAt ? formatDateTime(item.readAt) : "未读"}</span>
+                  <span>截止：{formatDateOnly(item.due)}</span>
+                  <span>创建：{formatDateOnly(item.createdAt)}</span>
+                  <span>已读：{item.readAt ? formatDateOnly(item.readAt) : "未读"}</span>
                 </div>
               </div>
               <Button asChild size="sm" variant="outline" className="shrink-0 bg-transparent">

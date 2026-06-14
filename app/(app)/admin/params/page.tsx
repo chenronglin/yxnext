@@ -19,6 +19,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { fetchJson } from "@/lib/api"
+import { formatDateOnly } from "@/lib/utils"
 import type { StagePlanDefaultItem, SysParam } from "@/types/admin"
 
 type MainTypeResponse = {
@@ -45,10 +46,6 @@ const EMPTY_MAIN_TYPE_FORM: MainTypeFormState = {
   value: "",
   order: "0",
   status: "active",
-}
-
-function formatDateTime(value: string) {
-  return value ? new Date(value).toLocaleString("zh-CN") : "—"
 }
 
 export default function ParamsPage() {
@@ -307,7 +304,7 @@ export default function ParamsPage() {
                           />
                         </td>
                         <td className="px-4 py-3 text-muted-foreground">{item.order}</td>
-                        <td className="px-4 py-3 text-muted-foreground">{formatDateTime(item.createdAt)}</td>
+                        <td className="px-4 py-3 text-muted-foreground">{formatDateOnly(item.createdAt)}</td>
                         <td className="px-4 py-3">
                           <div className="flex items-center justify-end gap-1">
                             <Button size="sm" variant="ghost" className="h-8 px-2" title="编辑" onClick={() => openEditDialog(item)}>
@@ -410,7 +407,7 @@ export default function ParamsPage() {
                             }
                           />
                         </td>
-                        <td className="px-4 py-3 text-muted-foreground">{formatDateTime(item.updatedAt)}</td>
+                        <td className="px-4 py-3 text-muted-foreground">{formatDateOnly(item.updatedAt)}</td>
                       </tr>
                     ))}
                 </tbody>

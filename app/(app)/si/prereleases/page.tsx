@@ -33,6 +33,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { fetchJson } from "@/lib/api"
+import { formatDateOnly } from "@/lib/utils"
 import {
   PRERELEASE_STATUS_LABELS,
   PRERELEASE_STATUS_TONE,
@@ -268,7 +269,7 @@ export default function PrereleaseRecordsPage() {
                       />
                     </TableCell>
                     <TableCell className="hidden text-muted-foreground lg:table-cell">
-                      {new Date(record.prereleasedAt).toLocaleString("zh-CN")}
+                      {formatDateOnly(record.prereleasedAt)}
                     </TableCell>
                     <TableCell>{record.projectName ?? "—"}</TableCell>
                     <TableCell>

@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/select"
 import { useRole } from "@/components/role-provider"
 import { fetchJson } from "@/lib/api"
+import { formatDateOnly } from "@/lib/utils"
 import { PROJECT_LIFECYCLE_LABELS, PROJECT_STAGE_LABELS } from "@/types/domain"
 import {
   PROJECT_LIFECYCLE_TONE,
@@ -347,9 +348,9 @@ export function ProjectList({
                         <StatusBadge label={STAGE_PLAN_STATUS_LABELS[project.planStatus]} tone={STAGE_PLAN_TONE[project.planStatus]} />
                       </td>
                       <td className="px-4 py-3 text-muted-foreground">
-                        {isGov ? project.finishedAt ?? "—" : `${project.pendingDocs} 项`}
+                        {isGov ? formatDateOnly(project.finishedAt) : `${project.pendingDocs} 项`}
                       </td>
-                      <td className="px-4 py-3 text-muted-foreground">{project.updatedAt}</td>
+                      <td className="px-4 py-3 text-muted-foreground">{formatDateOnly(project.updatedAt)}</td>
                       <td className="px-4 py-3">
                         <div className="flex items-center justify-end gap-1">
                           <Link

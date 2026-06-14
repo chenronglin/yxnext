@@ -1,8 +1,8 @@
 import type { BadgeTone, Role } from "@/types/domain"
 import type { DashboardStats, AdminReportStats } from "@/types/admin"
 
-// 审稿工作台列表需要同时展示项目、Doc、作者和提交摘要，
-// 因此这里把页面真正消费的字段收成一个稳定对象，避免前端直接拼 Prisma 结构。
+// 待审 Doc 队列需要同时展示项目、Doc、作者和提交摘要，
+// 因此这里把队列真正消费的字段收成一个稳定对象，避免前端直接拼 Prisma 结构。
 export interface ReviewQueueItem {
   docId: string
   projectId: string

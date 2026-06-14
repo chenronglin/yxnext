@@ -22,16 +22,13 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { fetchJson } from "@/lib/api"
+import { formatDateOnly } from "@/lib/utils"
 import { ROLE_LABELS } from "@/types/domain"
 import { ROLE_TONE, type AuditLog } from "@/types/admin"
 
 type AuditResponse = {
   logs: AuditLog[]
   actions: string[]
-}
-
-function formatDateTime(value: string) {
-  return new Date(value).toLocaleString("zh-CN")
 }
 
 export default function AuditPage() {
@@ -155,7 +152,7 @@ export default function AuditPage() {
                     className="cursor-pointer border-b border-border last:border-0 hover:bg-muted/30"
                     onClick={() => setDetail(log)}
                   >
-                    <td className="px-4 py-3 text-muted-foreground">{formatDateTime(log.time)}</td>
+                    <td className="px-4 py-3 text-muted-foreground">{formatDateOnly(log.time)}</td>
                     <td className="px-4 py-3 font-medium text-foreground">{log.operator}</td>
                     <td className="px-4 py-3">
                       <StatusBadge label={ROLE_LABELS[log.role]} tone={ROLE_TONE[log.role]} />
@@ -179,7 +176,7 @@ export default function AuditPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>日志详情</DialogTitle>
-            <DialogDescription>{detail ? formatDateTime(detail.time) : "—"}</DialogDescription>
+            <DialogDescription>{detail ? formatDateOnly(detail.time) : "—"}</DialogDescription>
           </DialogHeader>
           {detail && (
             <dl className="grid grid-cols-3 gap-y-3 text-sm">

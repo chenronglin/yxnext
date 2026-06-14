@@ -101,7 +101,7 @@ describe("workbench.service", () => {
         type: "review",
         read: false,
         readAt: null,
-        href: "/review?docId=88",
+        href: "/projects/99/docs/88",
       }),
     ])
   })

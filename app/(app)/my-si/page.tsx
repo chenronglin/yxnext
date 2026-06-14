@@ -16,6 +16,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { fetchJson } from "@/lib/api"
+import { formatDateOnly } from "@/lib/utils"
 import { PRERELEASE_STATUS_LABELS, PRERELEASE_STATUS_TONE, type PrereleaseRecord } from "@/types/si"
 import { ExternalLink, Eye, Search } from "lucide-react"
 
@@ -125,7 +126,7 @@ export default function MySiPage() {
               <div className="space-y-1.5 text-xs text-muted-foreground">
                 <p>预发编辑：{record.editorName}</p>
                 <p className="line-clamp-2">预发说明：{record.note || "—"}</p>
-                <p>预发时间：{new Date(record.prereleasedAt).toLocaleString("zh-CN")}</p>
+                <p>预发时间：{formatDateOnly(record.prereleasedAt)}</p>
               </div>
 
               <div className="mt-auto flex items-center gap-2">

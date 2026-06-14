@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { PageHeader } from "@/components/page-header"
 import { StatusBadge } from "@/components/status-badge"
 import { fetchJson } from "@/lib/api"
+import { formatDateOnly } from "@/lib/utils"
 import type { DocRevisionListResponse } from "@/types/doc"
 import { ROLE_LABELS } from "@/types/domain"
 import { docTypeLabel } from "@/components/doc/doc-client-shared"
@@ -101,7 +102,7 @@ export function DocVersionList({ projectId, docRef }: { projectId: string; docRe
                       <span className="font-mono text-sm font-semibold text-foreground">R{revision.revisionNo}</span>
                       <StatusBadge label={revisionActionLabel(revision.action)} tone={revisionActionTone(revision.action)} />
                       {revision.isFinal && <StatusBadge label="阶段有效内容" tone="success" />}
-                      <span className="ml-auto text-xs text-muted-foreground">{revision.createdAt}</span>
+                      <span className="ml-auto text-xs text-muted-foreground">{formatDateOnly(revision.createdAt)}</span>
                     </div>
                     <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-muted-foreground">
                       <span>

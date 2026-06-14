@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { StatusBadge } from "@/components/status-badge"
 import { useRole } from "@/components/role-provider"
 import { fetchJson } from "@/lib/api"
+import { formatDateOnly } from "@/lib/utils"
 import { DOC_STATUS_LABELS, HOLDER_ROLE_LABELS, STAGE_PLAN_STATUS_LABELS, type HolderRole } from "@/types/domain"
 import { DOC_STATUS_TONE, STAGE_PLAN_TONE, type ChapterDoc } from "@/types/project"
 import { Plus, FileText, History, BookOpen, Trash2, ArrowUpDown, Lock, ChevronUp, ChevronDown } from "lucide-react"
@@ -47,7 +48,8 @@ export default function ChaptersPage({ params }: { params: Promise<{ id: string 
     chapterNo: "",
   })
 
-  const canManage = role === "author" || role === "editor" || role === "admin"
+  // 章节结构属于作者创作范围；编辑在这里只能进入已有 Doc 审稿，不提供新增、排序和删除入口。
+  const canEditChapterStructure = role === "author"
   const unlocked = data?.stageGateStatus !== "locked"
   const orderedIds = useMemo(() => data?.chapters.map((chapter) => chapter.id) ?? [], [data?.chapters])
 
@@ -237,7 +239,7 @@ export default function ChaptersPage({ params }: { params: Promise<{ id: string 
             </Card>
           )}
 
-          {canManage && (
+          {canEditChapterStructure && (
             <Card className="flex flex-col gap-4 p-4">
               <div className="flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-foreground">新增章节</h2>
@@ -297,7 +299,7 @@ export default function ChaptersPage({ params }: { params: Promise<{ id: string 
               {!loading && data?.chapters.length === 0 && (
                 <tr>
                   <td colSpan={8} className="px-4 py-10 text-center text-muted-foreground">
-                    暂无章节，可以先新增章节后再进入正文协作。
+                    {canEditChapterStructure ? "暂无章节，可以先新增章节后再进入正文协作。" : "暂无章节，请等待作者创建章节后再进入正文协作。"}
                   </td>
                 </tr>
               )}
@@ -322,7 +324,7 @@ export default function ChaptersPage({ params }: { params: Promise<{ id: string 
                     <td className="px-4 py-3 text-xs text-muted-foreground">
                       {chapter.lastOperator}
                       <br />
-                      {chapter.lastOperatedAt}
+                      {formatDateOnly(chapter.lastOperatedAt)}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
@@ -341,7 +343,7 @@ export default function ChaptersPage({ params }: { params: Promise<{ id: string 
                             <BookOpen className="size-3.5" />
                           </Link>
                         </Button>
-                        {canManage && (
+                        {canEditChapterStructure && (
                           <>
                             <Button
                               size="sm"

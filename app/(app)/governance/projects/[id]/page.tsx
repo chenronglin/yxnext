@@ -36,6 +36,7 @@ import {
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { fetchJson } from "@/lib/api"
+import { formatDateOnly } from "@/lib/utils"
 import {
   PROJECT_LIFECYCLE_LABELS,
   PROJECT_STAGE_LABELS,
@@ -56,10 +57,6 @@ type GovernanceDetailResponse = {
 }
 
 type GovAction = "editor" | "author" | "complete" | "archive" | "cancel" | "restore" | null
-
-function formatDateTime(value: string | null) {
-  return value ? new Date(value).toLocaleString("zh-CN") : "—"
-}
 
 export default function GovernanceDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
@@ -321,7 +318,7 @@ export default function GovernanceDetailPage({ params }: { params: Promise<{ id:
               <span className="text-sm text-foreground">{project.author}</span>
             </Field>
             <Field label="创建时间">
-              <span className="text-sm text-foreground">{formatDateTime(project.createdAt)}</span>
+              <span className="text-sm text-foreground">{formatDateOnly(project.createdAt)}</span>
             </Field>
           </Card>
 
@@ -361,7 +358,7 @@ export default function GovernanceDetailPage({ params }: { params: Promise<{ id:
                   <li key={log.id} className="flex flex-col gap-1 px-4 py-3">
                     <div className="flex items-center justify-between">
                       <span className="font-medium text-foreground">{log.action}</span>
-                      <span className="text-xs text-muted-foreground">{formatDateTime(log.time)}</span>
+                      <span className="text-xs text-muted-foreground">{formatDateOnly(log.time)}</span>
                     </div>
                     <span className="text-xs text-muted-foreground">
                       {log.operator}：{log.before} → {log.after}

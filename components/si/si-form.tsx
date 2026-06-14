@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { fetchJson } from "@/lib/api"
-import { cn } from "@/lib/utils"
+import { cn, formatDateOnly } from "@/lib/utils"
 import { SI_STATUS_LABELS } from "@/types/domain"
 import { DEFAULT_MAIN_TYPES, SI_STATUS_TONE, type BoundAuthor, type SiItem } from "@/types/si"
 import { Check, ChevronLeft, Save, SendHorizonal, X } from "lucide-react"
@@ -487,7 +487,7 @@ export function SiForm({ mode, initial }: SiFormProps) {
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">最近更新</span>
               <span className="text-foreground">
-                {activeSi ? new Date(activeSi.updatedAt).toLocaleString("zh-CN") : "—"}
+                {formatDateOnly(activeSi?.updatedAt)}
               </span>
             </div>
           </Card>

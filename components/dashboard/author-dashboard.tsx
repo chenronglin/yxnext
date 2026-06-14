@@ -6,6 +6,7 @@ import { StatCard } from "@/components/stat-card"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { StatusBadge } from "@/components/status-badge"
 import { fetchJson } from "@/lib/api"
+import { formatDateOnly } from "@/lib/utils"
 import type { WorkspaceDashboardPayload } from "@/types/workbench"
 import { BarChart3, FilePen, FileText, FileUp, FolderKanban, Undo2 } from "lucide-react"
 
@@ -70,7 +71,7 @@ export function AuthorDashboard() {
                 <span className="text-sm text-foreground">{item.title}</span>
                 <StatusBadge label={item.action} tone={item.tone} />
               </div>
-              <span className="text-xs text-muted-foreground">{item.time}</span>
+              <span className="text-xs text-muted-foreground">{formatDateOnly(item.time)}</span>
             </div>
           ))}
           {!stats && <div className="py-3 text-sm text-muted-foreground">正在加载最近提交记录...</div>}
