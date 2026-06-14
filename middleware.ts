@@ -9,6 +9,32 @@ function isSessionId(value: string | undefined | null): value is string {
   return Boolean(value && SESSION_ID_PATTERN.test(value))
 }
 
+function firstHeaderValue(value: string | null) {
+  // 反向代理可能按逗号追加多级转发值；这里只取最靠近客户端的第一个值，避免和 Origin 比较时被尾部值干扰。
+  return value?.split(",")[0]?.trim() || null
+}
+
+function getRequestOrigin(request: NextRequest) {
+  const forwardedProto = firstHeaderValue(request.headers.get("x-forwarded-proto"))
+  const forwardedHost = firstHeaderValue(request.headers.get("x-forwarded-host"))
+  const host = firstHeaderValue(request.headers.get("host"))
+  const protocol = forwardedProto || request.nextUrl.protocol.replace(/:$/, "")
+  const effectiveHost = forwardedHost || host
+
+  // Next 在 HOSTNAME=0.0.0.0 启动时会把 request.nextUrl.origin 解析成 0.0.0.0；
+  // 浏览器真实请求的 Origin 却是公网 IP 或域名。这里用请求头还原外部访问地址，兼容裸端口和 Nginx/负载均衡部署。
+  if (!effectiveHost) {
+    return request.nextUrl.origin
+  }
+
+  try {
+    return new URL(`${protocol}://${effectiveHost}`).origin
+  } catch {
+    // 如果 Host 头异常，回退到 Next 的解析结果，让后续同源判断继续按保守路径处理。
+    return request.nextUrl.origin
+  }
+}
+
 function isSameOriginMutation(request: NextRequest) {
   if (!request.nextUrl.pathname.startsWith("/api/") || !MUTATING_METHODS.has(request.method)) {
     return true
@@ -22,7 +48,7 @@ function isSameOriginMutation(request: NextRequest) {
   }
 
   try {
-    return new URL(origin).origin === request.nextUrl.origin
+    return new URL(origin).origin === getRequestOrigin(request)
   } catch {
     return false
   }
