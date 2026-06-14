@@ -9,6 +9,22 @@ function isSessionId(value: string | undefined | null): value is string {
   return Boolean(value && SESSION_ID_PATTERN.test(value))
 }
 
+function isSecureSessionCookieEnabled() {
+  const configuredValue = process.env.SESSION_COOKIE_SECURE?.trim().toLowerCase()
+
+  // middleware 负责滑动续期 cookie，必须和登录接口使用同一套 Secure 规则；
+  // HTTP 裸端口部署时显式设为 false，HTTPS 生产部署则默认保持 Secure。
+  if (configuredValue === "false" || configuredValue === "0" || configuredValue === "no" || configuredValue === "off") {
+    return false
+  }
+
+  if (configuredValue === "true" || configuredValue === "1" || configuredValue === "yes" || configuredValue === "on") {
+    return true
+  }
+
+  return process.env.NODE_ENV === "production"
+}
+
 function firstHeaderValue(value: string | null) {
   // 反向代理可能按逗号追加多级转发值；这里只取最靠近客户端的第一个值，避免和 Origin 比较时被尾部值干扰。
   return value?.split(",")[0]?.trim() || null
@@ -93,7 +109,7 @@ export function middleware(request: NextRequest) {
       value: sessionId,
       httpOnly: true,
       sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
+      secure: isSecureSessionCookieEnabled(),
       path: "/",
       maxAge: SESSION_MAX_AGE_SECONDS,
     })

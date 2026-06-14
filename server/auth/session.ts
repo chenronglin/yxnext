@@ -22,6 +22,23 @@ const REVOKED_SESSION_RETENTION_MS = 60 * 60 * 24 * 30 * 1000
 // 会话 ID 使用 32 字节随机数转 64 位 hex，刚好匹配 user_sessions.session_id 的 CHAR(64) 设计。
 const SESSION_ID_PATTERN = /^[a-f0-9]{64}$/
 
+function isSecureSessionCookieEnabled() {
+  const configuredValue = process.env.SESSION_COOKIE_SECURE?.trim().toLowerCase()
+
+  // 线上 HTTPS 部署应保持 Secure cookie；裸 IP + HTTP 调试时可在 .env 中显式设为 false，
+  // 否则浏览器会拒绝保存 Secure cookie，表现为登录成功后立刻又回到登录页。
+  if (configuredValue === "false" || configuredValue === "0" || configuredValue === "no" || configuredValue === "off") {
+    return false
+  }
+
+  // 如果运维显式开启，则不受 NODE_ENV 影响，便于 HTTPS 预发环境也使用 Secure cookie。
+  if (configuredValue === "true" || configuredValue === "1" || configuredValue === "yes" || configuredValue === "on") {
+    return true
+  }
+
+  return process.env.NODE_ENV === "production"
+}
+
 type SessionUserRecord = {
   userId: bigint
   username: string
@@ -78,7 +95,7 @@ export function setSessionCookie(response: NextResponse, sessionId: string, expi
     value: sessionId,
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: isSecureSessionCookieEnabled(),
     path: "/",
     expires: expiresAt,
   })
@@ -91,7 +108,7 @@ export function clearSessionCookie(response: NextResponse) {
     value: "",
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: isSecureSessionCookieEnabled(),
     path: "/",
     maxAge: 0,
   })
