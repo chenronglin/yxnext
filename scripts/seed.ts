@@ -394,6 +394,11 @@ async function resetDatabaseTables(prisma: PrismaClient) {
         rollbackFromVersionId: null,
       },
     })
+    await tx.user.updateMany({
+      data: {
+        approvedBy: null,
+      },
+    })
     await tx.siPreissue.updateMany({
       data: {
         projectId: null,
