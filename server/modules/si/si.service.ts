@@ -12,7 +12,7 @@ import {
   translateUniqueConstraintError,
 } from "@/server/shared/invariant-keys"
 import { makePaginationMeta, parsePagination } from "@/server/shared/pagination"
-import { createNovelDocV1, createNovelHeading, textToNovelParagraphs } from "@/lib/novel-doc"
+import { createNovelDocV1 } from "@/lib/novel-doc"
 import type { ApiCurrentUser } from "@/server/shared/current-user"
 import type { PrereleaseRecord, PrereleaseStatus, SiItem, SiVersion } from "@/types/si"
 
@@ -485,32 +485,17 @@ function readSnapshotBigIntArray(snapshot: Prisma.JsonValue, key: string) {
 
 function makeSynopsisDocContent(input: {
   docId: bigint
-  title: string
-  freshTwist: string | null
-  coreSynopsis: string | null
   now: Date
 }) {
-  // SI 转项目是新稿入口，必须直接生成 V1 根 attrs，避免作者打开后落入旧稿只读模式。
-  const synopsisText = input.coreSynopsis || `《${input.title}》梗概待作者完善。`
-  const twistText = input.freshTwist ? `Fresh Twist：${input.freshTwist}` : null
-
+  // SI 转项目只是创建“作者即将开始写”的梗概工作稿，不再把编辑写的 SI 正文预填进编辑器。
+  // 这里仍然生成 Novel Editor V1 根 attrs，避免作者打开空稿时被识别为旧格式只读稿。
   return createNovelDocV1({
     docId: input.docId,
     docType: "synopsis",
     title: "梗概",
     createdAt: input.now,
     updatedAt: input.now,
-    content: [
-      createNovelHeading({ text: "梗概", level: 1 }),
-      ...textToNovelParagraphs(synopsisText),
-      ...(twistText ? textToNovelParagraphs(twistText) : []),
-    ],
   }) as unknown as Prisma.InputJsonObject
-}
-
-function countWordsForChineseText(text: string | null) {
-  // 中文创作场景下先用字符数作为 word_count 的近似值，真实富文本统计后续由 Doc 模块统一负责。
-  return text?.replace(/\s/g, "").length ?? 0
 }
 
 async function writeOperationLog(tx: TxClient, input: OperationLogInput) {
@@ -1555,8 +1540,6 @@ export async function convertSiPreissueToProject(actor: ApiCurrentUser, recordId
         }),
       })
 
-      const wordCount = countWordsForChineseText(coreSynopsis)
-
       const doc = await tx.doc.create({
         data: {
           projectId: project.projectId,
@@ -1565,13 +1548,14 @@ export async function convertSiPreissueToProject(actor: ApiCurrentUser, recordId
           title: "梗概",
           status: "draft",
           holderRole: "author",
-          currentWordCount: wordCount,
-          currentPlainText: coreSynopsis || null,
-          currentCleanText: coreSynopsis || null,
-          summary: freshTwist || null,
-          lastAction: "author_save",
-          lastActorId: existing.authorId,
-          lastActionAt: now,
+          // 作者进入梗概阶段时需要一张真正的空稿；来源 SI 只保留在项目元信息 intro 中，不写入正文。
+          currentWordCount: 0,
+          currentPlainText: null,
+          currentCleanText: null,
+          summary: null,
+          lastAction: null,
+          lastActorId: null,
+          lastActionAt: null,
           // 梗概 Doc 属于“项目内唯一单据”，创建时必须把唯一键写实，交给数据库做最后兜底。
           singleDocKey: makeSingleDocKey(project.projectId, "synopsis"),
         },
@@ -1579,9 +1563,6 @@ export async function convertSiPreissueToProject(actor: ApiCurrentUser, recordId
 
       const contentJson = makeSynopsisDocContent({
         docId: doc.docId,
-        title,
-        freshTwist: freshTwist || null,
-        coreSynopsis: coreSynopsis || null,
         now,
       })
 
@@ -1592,11 +1573,11 @@ export async function convertSiPreissueToProject(actor: ApiCurrentUser, recordId
           ownerUserId: existing.authorId,
           contentSchemaVersion: SYNOPSIS_DOC_SCHEMA_VERSION,
           contentJson,
-          wordCount,
-          plainText: coreSynopsis || null,
-          cleanText: coreSynopsis || null,
-          exportText: coreSynopsis || null,
-          summary: freshTwist || null,
+          wordCount: 0,
+          plainText: null,
+          cleanText: null,
+          exportText: null,
+          summary: null,
           status: "active",
           // 当前工作稿唯一键直接复用 docId，保证同一 Doc 同时只能存在一条 active 草稿。
           activeDocKey: makeActiveDocKey(doc.docId),

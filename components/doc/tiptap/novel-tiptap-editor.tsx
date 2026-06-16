@@ -3,7 +3,7 @@
 import { EditorContent, useEditor } from "@tiptap/react"
 import { BubbleMenu } from "@tiptap/react/menus"
 import type { Editor } from "@tiptap/core"
-import { Bold, Eraser, Heading1, Heading2, Heading3, Italic, MessageSquarePlus, Pilcrow, Quote, Save, Strikethrough, Trash2, UnderlineIcon } from "lucide-react"
+import { Bold, ChevronDown, Eraser, Heading1, Heading2, Heading3, Italic, MessageSquarePlus, Palette, Pilcrow, Quote, Save, Strikethrough, Trash2, UnderlineIcon } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
 
 import { addCommentToRange, createNovelEditorExtensions, insertEditSuggestionAfterSelection, isRevisionTrackingEnabled } from "@/components/doc/tiptap/extensions"
@@ -36,6 +36,16 @@ type PendingComment = {
   from: number
   to: number
 }
+
+const DEFAULT_TEXT_COLOR = "#2563eb"
+
+const TEXT_COLOR_OPTIONS = [
+  { label: "蓝色", value: DEFAULT_TEXT_COLOR },
+  { label: "红色", value: "#dc2626" },
+  { label: "绿色", value: "#16a34a" },
+  { label: "橙色", value: "#ea580c" },
+  { label: "紫色", value: "#9333ea" },
+] as const
 
 function stringifyContent(value: NovelDocJson) {
   // 受控 value 只用于判断外部内容是否真的变化，避免 setContent 打断用户光标。
@@ -96,8 +106,11 @@ function SelectionBubble({
 }) {
   const [pendingComment, setPendingComment] = useState<PendingComment | null>(null)
   const [commentDraft, setCommentDraft] = useState("")
+  const [colorMenuOpen, setColorMenuOpen] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const revisionTracking = isRevisionTrackingEnabled(editor)
+  const activeTextColor = editor.getAttributes("textStyle").color
+  const selectedTextColor = typeof activeTextColor === "string" ? activeTextColor : null
 
   useEffect(() => {
     if (pendingComment) {
@@ -126,6 +139,20 @@ function SelectionBubble({
     }
   }
 
+  function applyTextColor(color: string) {
+    // 标色属于正文排版信息，不是协作讨论信息；这里写入 Tiptap 的 textStyle/color mark。
+    // 自动保存会把完整 contentJson 落库，因此颜色会随文档保存；右侧批注区只扫描 comment/revision mark，
+    // 不会把这种普通格式 mark 渲染成批注或修订条目。
+    editor.chain().focus().setColor(color).run()
+    setColorMenuOpen(false)
+  }
+
+  function clearTextColor() {
+    // 仅清除文字颜色 mark，避免“清除标色”误删加粗、批注、修订等其它语义 mark。
+    editor.chain().focus().unsetColor().run()
+    setColorMenuOpen(false)
+  }
+
   return (
     <>
       <BubbleMenu
@@ -133,7 +160,7 @@ function SelectionBubble({
         options={{ placement: "top" }}
         shouldShow={({ editor: currentEditor, state }) => currentEditor.isEditable && !state.selection.empty}
       >
-        <div className="flex max-w-[92vw] items-center gap-1 rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg">
+        <div className="relative flex max-w-[92vw] items-center gap-1 rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg">
           <ToolbarButton
             title="批注"
             onClick={() => {
@@ -177,6 +204,56 @@ function SelectionBubble({
           <ToolbarButton title="删除线" active={editor.isActive("strike")} onClick={() => editor.chain().focus().toggleStrike().run()}>
             <Strikethrough className="size-4" />
           </ToolbarButton>
+          <div className="flex items-center overflow-hidden rounded-md border border-transparent">
+            <ToolbarButton title="标色（默认蓝色）" active={selectedTextColor === DEFAULT_TEXT_COLOR} onClick={() => applyTextColor(DEFAULT_TEXT_COLOR)}>
+              <Palette className="size-4" style={{ color: selectedTextColor ?? DEFAULT_TEXT_COLOR }} />
+            </ToolbarButton>
+            <button
+              className={cn(
+                "inline-flex h-8 w-5 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                colorMenuOpen && "bg-primary/10 text-primary",
+              )}
+              type="button"
+              title="选择标色"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => setColorMenuOpen((open) => !open)}
+            >
+              <ChevronDown className="size-3.5" />
+            </button>
+          </div>
+          {colorMenuOpen && (
+            <div
+              className="absolute right-1 top-[calc(100%+0.35rem)] z-50 grid w-36 gap-1 rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-xl"
+              onMouseDown={(event) => event.preventDefault()}
+            >
+              {TEXT_COLOR_OPTIONS.map((option) => {
+                const active = selectedTextColor === option.value
+
+                return (
+                  <button
+                    key={option.value}
+                    className={cn(
+                      "flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                      active && "bg-primary/10 text-primary",
+                    )}
+                    type="button"
+                    onClick={() => applyTextColor(option.value)}
+                  >
+                    <span className="size-3.5 rounded-full border border-foreground/15" style={{ backgroundColor: option.value }} />
+                    <span>{option.label}</span>
+                  </button>
+                )
+              })}
+              <button
+                className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                type="button"
+                onClick={clearTextColor}
+              >
+                <span className="size-3.5 rounded-full border border-dashed border-muted-foreground/60 bg-background" />
+                <span>清除标色</span>
+              </button>
+            </div>
+          )}
           <ToolbarButton title="清除格式" onClick={() => editor.chain().focus().unsetAllMarks().clearNodes().run()}>
             <Eraser className="size-4" />
           </ToolbarButton>
