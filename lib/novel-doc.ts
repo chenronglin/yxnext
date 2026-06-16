@@ -66,7 +66,7 @@ export interface NovelDocProjection {
   revisionMarkCount: number
 }
 
-type NovelMarkJson = {
+export type NovelMarkJson = {
   type: string
   attrs?: Record<string, unknown>
 }
@@ -95,6 +95,10 @@ const NOVEL_DOC_TYPES: NovelDocType[] = ["synopsis", "outline", "chapter", "rele
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+export function isNovelTextNode(value: NovelContentNode): value is NovelTextNode {
+  return value.type === "text" && "text" in value && typeof value.text === "string"
 }
 
 function isNovelDocType(value: unknown): value is NovelDocType {
@@ -223,6 +227,66 @@ function cloneBlockWithId(block: NovelBlockNode) {
     ...block,
     attrs,
   }
+}
+
+function shouldDropTextForCleanExport(marks: NovelMarkJson[]) {
+  return marks.some(
+    (mark) =>
+      mark.type === "revision" &&
+      (mark.attrs?.role === "deleted" || mark.attrs?.role === "original"),
+  )
+}
+
+function removeCollaborationMarks(marks: NovelMarkJson[]) {
+  const cleanMarks = marks.filter((mark) => mark.type !== "comment" && mark.type !== "revision")
+
+  return cleanMarks.length > 0 ? cleanMarks : undefined
+}
+
+function cleanInlineContentForExport(content: NovelContentNode[] | undefined): NovelContentNode[] {
+  const result: NovelContentNode[] = []
+
+  for (const child of content ?? []) {
+    if (!isRecord(child)) {
+      continue
+    }
+
+    const node = child as NovelContentNode
+
+    if (isNovelTextNode(node)) {
+      const marks = (Array.isArray(child.marks) ? child.marks : []).filter(
+        (mark): mark is NovelMarkJson => isRecord(mark) && typeof mark.type === "string",
+      )
+
+      if (shouldDropTextForCleanExport(marks)) {
+        continue
+      }
+
+      result.push({
+        ...node,
+        marks: removeCollaborationMarks(marks),
+      })
+      continue
+    }
+
+    result.push({
+      ...node,
+      content: cleanInlineContentForExport(Array.isArray(node.content) ? node.content : []),
+    })
+  }
+
+  return result
+}
+
+export function extractCleanNovelDocBlocks(doc: NovelDocJson): NovelBlockNode[] {
+  // 富文本导出使用正文 JSON 作为格式来源，但批注、修订和编辑建议属于协作层语义，不能进入交付稿。
+  // 这里保留段落、标题和普通文字格式；删除态修订与替换前原文会被过滤，插入态文字则作为清稿正文保留。
+  return doc.content
+    .filter((block) => block.type !== "editSuggestion")
+    .map((block) => ({
+      ...block,
+      content: cleanInlineContentForExport(block.content),
+    }))
 }
 
 export function ensureNovelBlockIds(doc: NovelDocJson): NovelDocJson {

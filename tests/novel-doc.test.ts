@@ -5,6 +5,7 @@ import {
   createNovelParagraph,
   deriveNovelDocProjection,
   ensureNovelBlockIds,
+  extractCleanNovelDocBlocks,
   isNovelDocV1,
   type NovelDocJson,
 } from "@/lib/novel-doc"
@@ -144,5 +145,69 @@ describe("Novel Editor Tiptap JSON v1", () => {
     expect(projection.commentCount).toBe(1)
     expect(projection.suggestionCount).toBe(1)
     expect(projection.revisionMarkCount).toBe(3)
+  })
+
+  it("导出清稿块时保留作者分段和普通格式，同时移除协作标记", () => {
+    const doc = makeDoc([
+      {
+        type: "heading",
+        attrs: { id: "block_h_1", level: 2 },
+        content: [{ type: "text", text: "章节小标题", marks: [{ type: "bold" }] }],
+      },
+      {
+        type: "paragraph",
+        attrs: { id: "block_p_1" },
+        content: [
+          {
+            type: "text",
+            text: "保留蓝色文字",
+            marks: [
+              { type: "comment", attrs: { id: "comment_1", body: "不进入导出" } },
+              { type: "textStyle", attrs: { color: "#2563eb" } },
+            ],
+          },
+        ],
+      },
+      {
+        type: "paragraph",
+        attrs: { id: "block_p_2" },
+        content: [
+          {
+            type: "text",
+            text: "删除内容",
+            marks: [{ type: "revision", attrs: { id: "revision_1", role: "deleted", kind: "delete" } }],
+          },
+          {
+            type: "text",
+            text: "新增内容",
+            marks: [{ type: "revision", attrs: { id: "revision_2", role: "inserted", kind: "insert" } }],
+          },
+        ],
+      },
+      {
+        type: "editSuggestion",
+        attrs: {
+          id: "suggestion_1",
+          body: "编辑建议不进入终稿导出",
+        },
+      },
+    ])
+
+    const blocks = extractCleanNovelDocBlocks(doc)
+
+    expect(blocks).toHaveLength(3)
+    expect(blocks[0]).toMatchObject({
+      type: "heading",
+      attrs: { level: 2 },
+      content: [{ type: "text", text: "章节小标题", marks: [{ type: "bold" }] }],
+    })
+    expect(blocks[1]).toMatchObject({
+      type: "paragraph",
+      content: [{ type: "text", text: "保留蓝色文字", marks: [{ type: "textStyle", attrs: { color: "#2563eb" } }] }],
+    })
+    expect(blocks[2]).toMatchObject({
+      type: "paragraph",
+      content: [{ type: "text", text: "新增内容" }],
+    })
   })
 })

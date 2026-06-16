@@ -12,7 +12,7 @@ import { buildDocxBuffer } from "@/server/shared/docx-export"
 import { makeActiveBindingKey, makeActiveDocKey, translateUniqueConstraintError } from "@/server/shared/invariant-keys"
 import { assertRole } from "@/server/shared/current-user"
 import { makePaginationMeta, parsePagination } from "@/server/shared/pagination"
-import { createNovelDocV1, textToNovelParagraphs } from "@/lib/novel-doc"
+import { createNovelDocV1, isNovelDocV1, textToNovelParagraphs } from "@/lib/novel-doc"
 import type { ApiCurrentUser } from "@/server/shared/current-user"
 import type {
   AdminReportStats,
@@ -3090,6 +3090,8 @@ export async function downloadGovernanceProjectFinal(actor: ApiCurrentUser, proj
     releaseDoc?.finalRevision?.cleanText ??
     releaseDoc?.finalRevision?.plainText ??
     ""
+  const finalRevisionContentJson = releaseDoc?.finalRevision?.contentJson
+  const finalContentJson = isNovelDocV1(finalRevisionContentJson) ? finalRevisionContentJson : null
 
   if (!finalText.trim()) {
     throw new ApiError({
@@ -3107,6 +3109,7 @@ export async function downloadGovernanceProjectFinal(actor: ApiCurrentUser, proj
         {
           title: "终稿",
           body: finalText,
+          contentJson: finalContentJson,
         },
       ],
     }),

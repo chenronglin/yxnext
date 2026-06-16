@@ -12,7 +12,7 @@ import {
   translateUniqueConstraintError,
 } from "@/server/shared/invariant-keys"
 import { buildDocxBuffer } from "@/server/shared/docx-export"
-import { createNovelDocV1, createNovelHeading, textToNovelParagraphs } from "@/lib/novel-doc"
+import { createNovelDocV1, createNovelHeading, extractCleanNovelDocBlocks, isNovelDocV1, textToNovelParagraphs, type NovelDocJson } from "@/lib/novel-doc"
 import type { ApiCurrentUser } from "@/server/shared/current-user"
 import { makePaginationMeta, parsePagination } from "@/server/shared/pagination"
 import type { DocStatus, HolderRole, ProjectLifecycle, ProjectStage, StagePlanStatus } from "@/types/domain"
@@ -499,19 +499,29 @@ function makeReleaseDocContent(chapters: ChapterRecord[], input: { docId: bigint
     createdAt: input.now,
     updatedAt: input.now,
     content: chapters.flatMap((chapter) => {
+      const sourceJson = pickRevisionExportContentJson(chapter)
       const body =
         chapter.finalRevision?.cleanText ??
         chapter.finalRevision?.plainText ??
         chapter.currentCleanText ??
         chapter.currentPlainText ??
         ""
+      // 质检稿是从作者已通过章节汇总出来的工作稿，必须优先复制章节富文本块，保留作者原始分段、标题和普通文字格式。
+      // 如果历史章节没有 Novel Editor V1 JSON，再回退到旧的纯文本拆段逻辑，避免旧数据无法进入质检。
+      const sourceBlocks = sourceJson ? extractCleanNovelDocBlocks(sourceJson) : []
 
       return [
         createNovelHeading({ text: chapter.title, level: 1 }),
-        ...textToNovelParagraphs(body),
+        ...(sourceBlocks.length > 0 ? sourceBlocks : textToNovelParagraphs(body)),
       ]
     }),
   }) as unknown as Prisma.InputJsonObject
+}
+
+function pickRevisionExportContentJson(doc: ChapterRecord | null | undefined): NovelDocJson | null {
+  const contentJson = doc?.finalRevision?.contentJson
+
+  return isNovelDocV1(contentJson) ? contentJson : null
 }
 
 function pickRevisionExportText(doc: ChapterRecord | null | undefined) {
@@ -531,10 +541,11 @@ function makeMarkdownSection(title: string, body: string) {
   return `# ${title}\n\n${body.trim()}\n`
 }
 
-function makeDocxSection(title: string, body: string) {
+function makeDocxSection(title: string, body: string, contentJson?: NovelDocJson | null) {
   return {
     title,
     body: body.trim(),
+    contentJson,
   }
 }
 
@@ -1514,7 +1525,7 @@ export async function exportProjectContent(
         filename: `${project.title}-梗概.docx`,
         content: await buildDocxBuffer({
           title: `${project.title} - 梗概`,
-          sections: [makeDocxSection("梗概", body)],
+          sections: [makeDocxSection("梗概", body, pickRevisionExportContentJson(synopsisDoc))],
         }),
         contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       }
@@ -1542,7 +1553,7 @@ export async function exportProjectContent(
         filename: `${project.title}-细纲.docx`,
         content: await buildDocxBuffer({
           title: `${project.title} - 细纲`,
-          sections: [makeDocxSection("细纲", body)],
+          sections: [makeDocxSection("细纲", body, pickRevisionExportContentJson(outlineDoc))],
         }),
         contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       }
@@ -1567,7 +1578,7 @@ export async function exportProjectContent(
     const sections = chapterDocs
       .map((doc) => {
         const body = pickRevisionExportText(doc)
-        return body?.trim() ? makeDocxSection(doc.title, body) : null
+        return body?.trim() ? makeDocxSection(doc.title, body, pickRevisionExportContentJson(doc)) : null
       })
       .filter((item): item is ReturnType<typeof makeDocxSection> => Boolean(item))
 
@@ -1612,7 +1623,7 @@ export async function exportProjectContent(
         filename: `${project.title}-质检.docx`,
         content: await buildDocxBuffer({
           title: `${project.title} - 质检`,
-          sections: [makeDocxSection("质检", body)],
+          sections: [makeDocxSection("质检", body, pickRevisionExportContentJson(releaseDoc))],
         }),
         contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       }
@@ -1647,7 +1658,7 @@ export async function exportProjectContent(
       filename: `${project.title}.docx`,
       content: await buildDocxBuffer({
         title: project.title,
-        sections: [makeDocxSection("终稿", finalBody)],
+        sections: [makeDocxSection("终稿", finalBody, pickRevisionExportContentJson(releaseDoc))],
       }),
       contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     }
