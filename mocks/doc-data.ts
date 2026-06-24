@@ -1,6 +1,6 @@
 // 阅享平台 - Doc 编辑器共享 Mock 数据与辅助函数
 import type { DocStatus, HolderRole, BadgeTone, Role } from "@/types/domain"
-import { DOC_STATUS_LABELS } from "@/types/domain"
+import { DOC_STATUS_LABEL_KEYS } from "@/types/domain"
 
 // Doc 类型直接对齐真实数据库编码，避免 mock 继续保留 manuscript / qc 别名。
 export type DocType = "synopsis" | "outline" | "chapter" | "release"
@@ -266,4 +266,4 @@ export function getRevision(projectId: string, docType: DocType, revisionId: str
   return getDoc(projectId, docType).revisions.find((r) => r.id === revisionId)
 }
 
-export { DOC_STATUS_LABELS }
+export { DOC_STATUS_LABEL_KEYS }

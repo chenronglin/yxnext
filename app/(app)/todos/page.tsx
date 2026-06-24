@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button"
 import { StatusBadge } from "@/components/status-badge"
 import { cn, formatDateOnly } from "@/lib/utils"
 import { fetchJson } from "@/lib/api"
+import { useT } from "@/hooks/use-t"
 import { CheckCheck, ChevronRight } from "lucide-react"
 import type { TodoItemView, TodoType } from "@/types/workbench"
 
@@ -18,20 +19,20 @@ type TodosResponse = {
   items: TodoItemView[]
 }
 
-const TASK_TABS: { key: TodoType | "all"; label: string; adminOnly?: boolean }[] = [
-  { key: "all", label: "全部" },
-  { key: "review", label: "Doc 待审" },
-  { key: "returned", label: "退回待改" },
-  { key: "approval", label: "注册审批", adminOnly: true },
+const TASK_TABS: { key: TodoType | "all"; labelKey: string; adminOnly?: boolean }[] = [
+  { key: "all", labelKey: "common.all" },
+  { key: "review", labelKey: "todos.tab.review" },
+  { key: "returned", labelKey: "todos.tab.returned" },
+  { key: "approval", labelKey: "todos.type.approval", adminOnly: true },
 ]
 
-const TYPE_LABELS: Record<TodoType, string> = {
-  si: "SI 相关",
-  review: "Doc 待审",
-  returned: "退回待改",
-  warning: "阶段预警",
-  overdue: "逾期",
-  approval: "注册审批",
+const TYPE_LABEL_KEYS: Record<TodoType, `todos.type.${TodoType}`> = {
+  si: "todos.type.si",
+  review: "todos.type.review",
+  returned: "todos.type.returned",
+  warning: "todos.type.warning",
+  overdue: "todos.type.overdue",
+  approval: "todos.type.approval",
 }
 
 function normalizeTodoType(value: string | null): TodoType | "all" {
@@ -44,6 +45,7 @@ function normalizeTodoType(value: string | null): TodoType | "all" {
 }
 
 export default function TodosPage() {
+  const t = useT()
   const { role } = useRole()
   const searchParams = useSearchParams()
   const requestedType = searchParams.get("type")
@@ -70,7 +72,7 @@ export default function TodosPage() {
       } catch (requestError) {
         setMessage({
           type: "error",
-          text: requestError instanceof Error ? requestError.message : "待办读取失败",
+          text: requestError instanceof Error ? requestError.message : t("todos.loadFailed"),
         })
       } finally {
         setLoading(false)
@@ -97,12 +99,12 @@ export default function TodosPage() {
       )
       setMessage({
         type: "success",
-        text: "当前待办已全部标记为已读",
+        text: t("todos.markAllReadSuccess"),
       })
     } catch (requestError) {
       setMessage({
         type: "error",
-        text: requestError instanceof Error ? requestError.message : "批量已读失败",
+        text: requestError instanceof Error ? requestError.message : t("todos.markAllReadFailed"),
       })
     } finally {
       setMarkingAllRead(false)
@@ -123,13 +125,17 @@ export default function TodosPage() {
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        breadcrumb={["待我处理"]}
-        title="待我处理"
-        description="聚合需要你处理的真实持久化任务，点击可跳转对应业务页面"
+        breadcrumb={[t("todos.title")]}
+        title={t("todos.title")}
+        description={t("todos.description")}
         actions={
           <Button variant="outline" className="bg-transparent" disabled={markingAllRead} onClick={() => void handleMarkAllRead()}>
             <CheckCheck className="mr-1.5 size-4" />
-            {markingAllRead ? "处理中..." : `批量标记已读${unreadCount > 0 ? ` (${unreadCount})` : ""}`}
+            {markingAllRead
+              ? t("common.processing")
+              : unreadCount > 0
+                ? t("todos.markAllReadWithCount", { count: unreadCount })
+                : t("todos.markAllRead")}
           </Button>
         }
       />
@@ -158,15 +164,15 @@ export default function TodosPage() {
                 : "bg-secondary text-secondary-foreground hover:bg-secondary/70",
             )}
           >
-            {tab.label}
+            {t(tab.labelKey)}
           </button>
         ))}
       </div>
 
       <div className="flex flex-col gap-3">
-        {loading && <Card className="p-10 text-center text-sm text-muted-foreground">正在加载待办...</Card>}
+        {loading && <Card className="p-10 text-center text-sm text-muted-foreground">{t("todos.loading")}</Card>}
         {!loading && filteredItems.length === 0 && (
-          <Card className="p-10 text-center text-sm text-muted-foreground">当前分类暂无待处理任务</Card>
+          <Card className="p-10 text-center text-sm text-muted-foreground">{t("todos.empty")}</Card>
         )}
         {!loading &&
           filteredItems.map((item) => (
@@ -180,23 +186,23 @@ export default function TodosPage() {
               <div className="flex flex-col gap-2">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-sm font-medium text-foreground">{item.title}</span>
-                  <StatusBadge label={TYPE_LABELS[item.type]} tone="neutral" />
+                  <StatusBadge label={t(TYPE_LABEL_KEYS[item.type])} tone="neutral" />
                   <StatusBadge label={item.status} tone={item.statusTone} />
-                  {!item.read && <StatusBadge label="未读" tone="info" />}
+                  {!item.read && <StatusBadge label={t("common.unread")} tone="info" />}
                 </div>
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
                   <span>
-                    {item.relatedType}：{item.relatedName}
+                    {item.relatedType}: {item.relatedName}
                   </span>
-                  <span>发起人：{item.from}</span>
-                  <span>截止：{formatDateOnly(item.due)}</span>
-                  <span>创建：{formatDateOnly(item.createdAt)}</span>
-                  <span>已读：{item.readAt ? formatDateOnly(item.readAt) : "未读"}</span>
+                  <span>{t("todos.from")}: {item.from}</span>
+                  <span>{t("todos.due")}: {formatDateOnly(item.due)}</span>
+                  <span>{t("todos.created")}: {formatDateOnly(item.createdAt)}</span>
+                  <span>{t("todos.readAt")}: {item.readAt ? formatDateOnly(item.readAt) : t("common.unread")}</span>
                 </div>
               </div>
               <Button asChild size="sm" variant="outline" className="shrink-0 bg-transparent">
                 <Link href={item.href}>
-                  处理
+                  {t("todos.action")}
                   <ChevronRight className="ml-1 size-4" />
                 </Link>
               </Button>

@@ -1,4 +1,5 @@
 import type { Role } from "@/types/domain"
+import type { I18nKey } from "@/lib/i18n/dictionary"
 import {
   LayoutDashboard,
   ListChecks,
@@ -19,44 +20,44 @@ import {
 } from "lucide-react"
 
 export interface NavItem {
-  label: string
+  labelKey: I18nKey
   href: string
   icon: LucideIcon
 }
 
 const adminNav: NavItem[] = [
-  { label: "首页看板", href: "/dashboard", icon: LayoutDashboard },
-  { label: "待我处理", href: "/todos", icon: ListChecks },
-  { label: "项目治理", href: "/governance/projects", icon: FolderKanban },
-  { label: "用户管理", href: "/admin/users", icon: Users },
-  { label: "作者审批", href: "/admin/approvals", icon: UserCheck },
-  { label: "编辑-作者绑定", href: "/admin/bindings", icon: Link2 },
-  { label: "参数管理", href: "/admin/params", icon: Settings2 },
-  { label: "审计日志", href: "/admin/audit", icon: ScrollText },
-  { label: "统计报表", href: "/reports", icon: BarChart3 },
-  { label: "通知中心", href: "/notifications", icon: Bell },
-  { label: "AI 助手", href: "/ai", icon: Bot },
-  { label: "个人设置", href: "/settings", icon: UserCog },
+  { labelKey: "nav.dashboard", href: "/dashboard", icon: LayoutDashboard },
+  { labelKey: "nav.todos", href: "/todos", icon: ListChecks },
+  { labelKey: "nav.governanceProjects", href: "/governance/projects", icon: FolderKanban },
+  { labelKey: "nav.users", href: "/admin/users", icon: Users },
+  { labelKey: "nav.approvals", href: "/admin/approvals", icon: UserCheck },
+  { labelKey: "nav.bindings", href: "/admin/bindings", icon: Link2 },
+  { labelKey: "nav.params", href: "/admin/params", icon: Settings2 },
+  { labelKey: "nav.audit", href: "/admin/audit", icon: ScrollText },
+  { labelKey: "nav.reports", href: "/reports", icon: BarChart3 },
+  { labelKey: "nav.notifications", href: "/notifications", icon: Bell },
+  { labelKey: "nav.ai", href: "/ai", icon: Bot },
+  { labelKey: "nav.settings", href: "/settings", icon: UserCog },
 ]
 
 const editorNav: NavItem[] = [
-  { label: "首页看板", href: "/dashboard", icon: LayoutDashboard },
-  { label: "待我处理", href: "/todos", icon: ListChecks },
-  { label: "SI 选题策划库", href: "/si", icon: Library },
-  { label: "SI 预发记录", href: "/si/prereleases", icon: Send },
-  { label: "我的项目", href: "/projects", icon: FolderKanban },
-  { label: "通知中心", href: "/notifications", icon: Bell },
-  { label: "AI 助手", href: "/ai", icon: Bot },
-  { label: "个人设置", href: "/settings", icon: UserCog },
+  { labelKey: "nav.dashboard", href: "/dashboard", icon: LayoutDashboard },
+  { labelKey: "nav.todos", href: "/todos", icon: ListChecks },
+  { labelKey: "nav.siLibrary", href: "/si", icon: Library },
+  { labelKey: "nav.siPrereleases", href: "/si/prereleases", icon: Send },
+  { labelKey: "nav.myProjects", href: "/projects", icon: FolderKanban },
+  { labelKey: "nav.notifications", href: "/notifications", icon: Bell },
+  { labelKey: "nav.ai", href: "/ai", icon: Bot },
+  { labelKey: "nav.settings", href: "/settings", icon: UserCog },
 ]
 
 const authorNav: NavItem[] = [
-  { label: "首页看板", href: "/dashboard", icon: LayoutDashboard },
-  { label: "待我处理", href: "/todos", icon: ListChecks },
-  { label: "我的 SI", href: "/my-si", icon: BookMarked },
-  { label: "我的项目", href: "/projects", icon: FolderKanban },
-  { label: "通知中心", href: "/notifications", icon: Bell },
-  { label: "个人设置", href: "/settings", icon: UserCog },
+  { labelKey: "nav.dashboard", href: "/dashboard", icon: LayoutDashboard },
+  { labelKey: "nav.todos", href: "/todos", icon: ListChecks },
+  { labelKey: "nav.mySi", href: "/my-si", icon: BookMarked },
+  { labelKey: "nav.myProjects", href: "/projects", icon: FolderKanban },
+  { labelKey: "nav.notifications", href: "/notifications", icon: Bell },
+  { labelKey: "nav.settings", href: "/settings", icon: UserCog },
 ]
 
 export const NAV_BY_ROLE: Record<Role, NavItem[]> = {

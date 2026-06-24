@@ -22,6 +22,6 @@ export async function DELETE(request: NextRequest, context: ChapterRouteContext)
 
     return ok(result)
   } catch (error) {
-    return fail(error)
+    return fail(error, request)
   }
 }

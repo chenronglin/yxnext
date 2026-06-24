@@ -21,8 +21,9 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import { fetchJson } from "@/lib/api"
 import { cn, formatDateOnly } from "@/lib/utils"
-import { SI_STATUS_LABELS } from "@/types/domain"
+import { SI_STATUS_LABEL_KEYS } from "@/types/domain"
 import { DEFAULT_MAIN_TYPES, SI_STATUS_TONE, type BoundAuthor, type SiItem } from "@/types/si"
+import { useT } from "@/hooks/use-t"
 import { Check, ChevronLeft, Save, SendHorizonal, X } from "lucide-react"
 
 interface SiFormProps {
@@ -49,6 +50,7 @@ const TROPE_USER_CACHE_KEY = "trope-user-cached-tags"
 const LEGACY_TROPE_CACHE_KEY = "trope-cached-tags"
 
 export function SiForm({ mode, initial }: SiFormProps) {
+  const t = useT()
   const router = useRouter()
   const { user } = useRole()
   const [savedSi, setSavedSi] = useState<SiItem | undefined>(initial)
@@ -476,7 +478,7 @@ export function SiForm({ mode, initial }: SiFormProps) {
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">当前状态</span>
               <StatusBadge
-                label={activeSi ? SI_STATUS_LABELS[activeSi.status] : "草稿"}
+                label={activeSi ? t(SI_STATUS_LABEL_KEYS[activeSi.status]) : t("domain.siStatus.draft")}
                 tone={activeSi ? SI_STATUS_TONE[activeSi.status] : "neutral"}
               />
             </div>

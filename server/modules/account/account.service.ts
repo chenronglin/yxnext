@@ -9,6 +9,7 @@ import { ApiError } from "@/server/shared/api-response"
 import { translateUniqueConstraintError } from "@/server/shared/invariant-keys"
 import type { ApiCurrentUser } from "@/server/shared/current-user"
 import type { AccountBindingInfo, AccountProfile } from "@/types/account"
+import type { Locale } from "@/lib/i18n/config"
 
 type TxClient = Prisma.TransactionClient
 
@@ -44,6 +45,7 @@ function toAccountProfile(user: {
   phone: string | null
   biography: string | null
   avatarUrl: string | null
+  preferredLocale: string
 }): AccountProfile {
   return {
     id: user.userId.toString(),
@@ -55,6 +57,7 @@ function toAccountProfile(user: {
     phone: user.phone,
     biography: user.biography,
     avatarUrl: user.avatarUrl,
+    preferredLocale: user.preferredLocale === "en-US" ? "en-US" : "zh-CN",
   }
 }
 
@@ -98,6 +101,7 @@ export async function getAccountProfile(actor: ApiCurrentUser) {
       phone: true,
       biography: true,
       avatarUrl: true,
+      preferredLocale: true,
     },
   })
 
@@ -133,6 +137,7 @@ export async function updateAccountProfile(actor: ApiCurrentUser, input: UpdateA
       phone: true,
       biography: true,
       avatarUrl: true,
+      preferredLocale: true,
       role: true,
       status: true,
     },
@@ -216,6 +221,53 @@ export async function updateAccountProfile(actor: ApiCurrentUser, input: UpdateA
   }
 
   return getAccountProfile(actor)
+}
+
+export async function updateAccountPreferredLocale(actor: ApiCurrentUser, preferredLocale: Locale) {
+  const existing = await prisma.user.findUnique({
+    where: {
+      userId: actor.userId,
+    },
+    select: {
+      userId: true,
+      preferredLocale: true,
+    },
+  })
+
+  if (!existing) {
+    throw new ApiError({
+      status: 404,
+      code: "USER_NOT_FOUND",
+      message: "当前用户不存在",
+    })
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.user.update({
+      where: {
+        userId: actor.userId,
+      },
+      data: {
+        preferredLocale,
+      },
+    })
+
+    await writeOperationLog(tx, {
+      actor,
+      action: "account.locale.update",
+      entityId: actor.userId,
+      beforeJson: {
+        preferredLocale: existing.preferredLocale,
+      },
+      afterJson: {
+        preferredLocale,
+      },
+    })
+  })
+
+  return {
+    preferredLocale,
+  }
 }
 
 export async function changeAccountPassword(actor: ApiCurrentUser, input: ChangePasswordInput) {

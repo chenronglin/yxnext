@@ -6,7 +6,8 @@ import { PageHeader } from "@/components/page-header"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import { ROLE_LABELS } from "@/types/domain"
+import { ROLE_LABEL_KEYS } from "@/types/domain"
+import { useT } from "@/hooks/use-t"
 import { cn } from "@/lib/utils"
 import {
   Sparkles,
@@ -126,6 +127,7 @@ const PRESETS = [
 ]
 
 export default function AiPage() {
+  const t = useT()
   const { user } = useRole()
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState("")
@@ -223,7 +225,7 @@ export default function AiPage() {
       <PageHeader
         breadcrumb={["AI 助手"]}
         title="AI 助手"
-        description={`基于大语言模型，辅助${ROLE_LABELS[user.role]}进行高效的小说创作与协同审稿`}
+        description={t("ai.description", { roleLabel: t(ROLE_LABEL_KEYS[user.role]) })}
         actions={
           <Button variant="outline" size="sm" onClick={handleClear} className="bg-transparent text-muted-foreground hover:text-foreground">
             <Trash2 className="mr-1.5 size-4" />

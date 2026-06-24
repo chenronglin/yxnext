@@ -22,6 +22,6 @@ export async function GET(request: NextRequest, context: DocRevisionDetailRouteC
 
     return ok(result)
   } catch (error) {
-    return fail(error)
+    return fail(error, request)
   }
 }

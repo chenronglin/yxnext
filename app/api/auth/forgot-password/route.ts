@@ -52,6 +52,6 @@ export async function POST(request: NextRequest) {
 
     return ok(result)
   } catch (error) {
-    return fail(error)
+    return fail(error, request)
   }
 }

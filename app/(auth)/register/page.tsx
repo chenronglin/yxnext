@@ -10,8 +10,10 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { fetchJson } from "@/lib/api"
+import { useT } from "@/hooks/use-t"
 
 export default function RegisterPage() {
+  const t = useT()
   const router = useRouter()
   const [form, setForm] = useState({
     username: "",
@@ -32,11 +34,11 @@ export default function RegisterPage() {
     e.preventDefault()
     setError("")
     if (!form.username.trim() || !form.email.trim() || !form.password || !form.penName.trim()) {
-      setError("请完整填写必填项")
+      setError(t("auth.register.required"))
       return
     }
     if (form.password !== form.confirm) {
-      setError("两次输入的密码不一致")
+      setError(t("auth.register.passwordMismatch"))
       return
     }
 
@@ -61,7 +63,7 @@ export default function RegisterPage() {
 
       router.push("/account-status?status=pending&from=register")
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "注册申请提交失败，请稍后重试")
+      setError(requestError instanceof Error ? requestError.message : t("auth.register.failed"))
     } finally {
       setSubmitting(false)
     }
@@ -70,8 +72,8 @@ export default function RegisterPage() {
   return (
     <Card className="border-border shadow-sm">
       <CardHeader>
-        <CardTitle className="text-lg">注册申请</CardTitle>
-        <CardDescription>提交注册申请，管理员审批通过后可进入平台</CardDescription>
+        <CardTitle className="text-lg">{t("auth.register.title")}</CardTitle>
+        <CardDescription>{t("auth.register.description")}</CardDescription>
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
@@ -84,14 +86,14 @@ export default function RegisterPage() {
 
           <div className="flex flex-col gap-2">
             <Label htmlFor="username">
-              用户名 / 登录账号 <span className="text-destructive">*</span>
+              {t("auth.register.username")} <span className="text-destructive">{t("common.requiredMark")}</span>
             </Label>
             <Input id="username" value={form.username} onChange={(e) => update("username", e.target.value)} />
           </div>
 
           <div className="flex flex-col gap-2">
             <Label htmlFor="email">
-              邮箱 <span className="text-destructive">*</span>
+              {t("auth.register.email")} <span className="text-destructive">{t("common.requiredMark")}</span>
             </Label>
             <Input
               id="email"
@@ -105,7 +107,7 @@ export default function RegisterPage() {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="flex flex-col gap-2">
               <Label htmlFor="password">
-                密码 <span className="text-destructive">*</span>
+                {t("auth.register.password")} <span className="text-destructive">{t("common.requiredMark")}</span>
               </Label>
               <Input
                 id="password"
@@ -116,7 +118,7 @@ export default function RegisterPage() {
             </div>
             <div className="flex flex-col gap-2">
               <Label htmlFor="confirm">
-                确认密码 <span className="text-destructive">*</span>
+                {t("auth.register.confirmPassword")} <span className="text-destructive">{t("common.requiredMark")}</span>
               </Label>
               <Input
                 id="confirm"
@@ -129,40 +131,40 @@ export default function RegisterPage() {
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="flex flex-col gap-2">
-              <Label>申请角色</Label>
-              <Input value="作者（固定）" disabled />
+              <Label>{t("auth.register.role")}</Label>
+              <Input value={t("auth.register.fixedAuthor")} disabled />
             </div>
             <div className="flex flex-col gap-2">
               <Label htmlFor="penName">
-                笔名 / 真实姓名 <span className="text-destructive">*</span>
+                {t("auth.register.penName")} <span className="text-destructive">{t("common.requiredMark")}</span>
               </Label>
               <Input id="penName" value={form.penName} onChange={(e) => update("penName", e.target.value)} />
             </div>
           </div>
 
           <p className="text-xs leading-5 text-muted-foreground">
-            为避免外部注册直接申请编辑权限，公开注册入口当前只接受作者申请；编辑账号需由管理员在后台创建或后续治理调整。
+            {t("auth.register.policy")}
           </p>
 
           <div className="flex flex-col gap-2">
-            <Label htmlFor="bio">个人简介</Label>
+            <Label htmlFor="bio">{t("auth.register.bio")}</Label>
             <Textarea
               id="bio"
               rows={3}
-              placeholder="可填写擅长题材、过往作品等"
+              placeholder={t("auth.register.bioPlaceholder")}
               value={form.bio}
               onChange={(e) => update("bio", e.target.value)}
             />
           </div>
 
           <Button type="submit" className="mt-2 w-full" disabled={submitting}>
-            {submitting ? "提交中..." : "提交注册申请"}
+            {submitting ? t("auth.register.submitting") : t("auth.register.submit")}
           </Button>
 
           <p className="text-center text-sm text-muted-foreground">
-            已有账号？{" "}
+            {t("auth.register.hasAccount")}{" "}
             <Link href="/login" className="text-primary hover:underline">
-              返回登录
+              {t("auth.register.backToLogin")}
             </Link>
           </p>
         </form>

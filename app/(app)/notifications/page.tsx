@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button"
 import { StatusBadge } from "@/components/status-badge"
 import { cn, formatDateOnly } from "@/lib/utils"
 import { fetchJson } from "@/lib/api"
+import { useT } from "@/hooks/use-t"
 import { CheckCheck } from "lucide-react"
 import type { NotificationCategory, NotificationItemView } from "@/types/workbench"
 
@@ -17,33 +18,34 @@ type NotificationsResponse = {
   unreadCount: number
 }
 
-const TYPE_LABELS: Record<NotificationCategory, string> = {
-  si_prerelease: "SI 预发",
-  si_convert: "SI 转项目",
-  doc_submit: "Doc 提交待审",
-  doc_approve: "审核通过",
-  doc_return: "审核退回",
-  stage_unlock: "阶段解锁",
-  enter_qc: "进入质检",
-  project_done: "项目完成",
-  stage_warning: "阶段预警/逾期",
-  binding_change: "绑定关系变更",
-  approval_result: "注册结果",
-  approval_request: "注册审批",
-  forgot_password_request: "忘记密码",
-  system: "系统通知",
+const TYPE_LABEL_KEYS: Record<NotificationCategory, `notifications.category.${NotificationCategory}`> = {
+  si_prerelease: "notifications.category.si_prerelease",
+  si_convert: "notifications.category.si_convert",
+  doc_submit: "notifications.category.doc_submit",
+  doc_approve: "notifications.category.doc_approve",
+  doc_return: "notifications.category.doc_return",
+  stage_unlock: "notifications.category.stage_unlock",
+  enter_qc: "notifications.category.enter_qc",
+  project_done: "notifications.category.project_done",
+  stage_warning: "notifications.category.stage_warning",
+  binding_change: "notifications.category.binding_change",
+  approval_result: "notifications.category.approval_result",
+  approval_request: "notifications.category.approval_request",
+  forgot_password_request: "notifications.category.forgot_password_request",
+  system: "notifications.category.system",
 }
 
-const FILTERS: { key: NotificationCategory | "all"; label: string }[] = [
-  { key: "all", label: "全部" },
-  { key: "doc_submit", label: TYPE_LABELS.doc_submit },
-  { key: "doc_return", label: TYPE_LABELS.doc_return },
-  { key: "doc_approve", label: TYPE_LABELS.doc_approve },
-  { key: "approval_request", label: TYPE_LABELS.approval_request },
-  { key: "forgot_password_request", label: TYPE_LABELS.forgot_password_request },
+const FILTERS: { key: NotificationCategory | "all"; labelKey: string }[] = [
+  { key: "all", labelKey: "common.all" },
+  { key: "doc_submit", labelKey: TYPE_LABEL_KEYS.doc_submit },
+  { key: "doc_return", labelKey: TYPE_LABEL_KEYS.doc_return },
+  { key: "doc_approve", labelKey: TYPE_LABEL_KEYS.doc_approve },
+  { key: "approval_request", labelKey: TYPE_LABEL_KEYS.approval_request },
+  { key: "forgot_password_request", labelKey: TYPE_LABEL_KEYS.forgot_password_request },
 ]
 
 export default function NotificationsPage() {
+  const t = useT()
   const router = useRouter()
   const [items, setItems] = useState<NotificationItemView[]>([])
   const [loading, setLoading] = useState(true)
@@ -63,7 +65,7 @@ export default function NotificationsPage() {
       } catch (requestError) {
         setMessage({
           type: "error",
-          text: requestError instanceof Error ? requestError.message : "通知读取失败",
+          text: requestError instanceof Error ? requestError.message : t("notifications.loadFailed"),
         })
       } finally {
         setLoading(false)
@@ -90,7 +92,7 @@ export default function NotificationsPage() {
     } catch (requestError) {
       setMessage({
         type: "error",
-        text: requestError instanceof Error ? requestError.message : "通知已读状态更新失败",
+        text: requestError instanceof Error ? requestError.message : t("notifications.markOneFailed"),
       })
     } finally {
       router.push(item.href)
@@ -108,12 +110,12 @@ export default function NotificationsPage() {
       setItems((current) => current.map((item) => ({ ...item, read: true })))
       setMessage({
         type: "success",
-        text: "通知已全部标记为已读",
+        text: t("notifications.markAllReadSuccess"),
       })
     } catch (requestError) {
       setMessage({
         type: "error",
-        text: requestError instanceof Error ? requestError.message : "全部已读失败",
+        text: requestError instanceof Error ? requestError.message : t("notifications.markAllReadFailed"),
       })
     } finally {
       setMarkingAllRead(false)
@@ -134,13 +136,13 @@ export default function NotificationsPage() {
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        breadcrumb={["通知中心"]}
-        title="通知中心"
-        description="展示系统事件告知；Doc 三类协作通知与管理员事件通知都从真实接口读取"
+        breadcrumb={[t("notifications.title")]}
+        title={t("notifications.title")}
+        description={t("notifications.description")}
         actions={
           <Button variant="outline" className="bg-transparent" disabled={markingAllRead} onClick={() => void markAllRead()}>
             <CheckCheck className="mr-1.5 size-4" />
-            {markingAllRead ? "处理中..." : "全部已读"}
+            {markingAllRead ? t("common.processing") : t("notifications.markAllRead")}
           </Button>
         }
       />
@@ -170,7 +172,7 @@ export default function NotificationsPage() {
                   : "bg-secondary text-secondary-foreground hover:bg-secondary/70",
               )}
             >
-              {key === "all" ? "全部" : key === "unread" ? `未读 (${unreadCount})` : "已读"}
+              {key === "all" ? t("common.all") : key === "unread" ? t("notifications.filter.unreadWithCount", { count: unreadCount }) : t("common.read")}
             </button>
           ))}
         </div>
@@ -187,16 +189,16 @@ export default function NotificationsPage() {
                   : "border-border text-muted-foreground hover:bg-secondary",
               )}
             >
-              {filterItem.label}
+              {t(filterItem.labelKey)}
             </button>
           ))}
         </div>
       </div>
 
       <div className="flex flex-col gap-2">
-        {loading && <Card className="p-10 text-center text-sm text-muted-foreground">正在加载通知...</Card>}
+        {loading && <Card className="p-10 text-center text-sm text-muted-foreground">{t("notifications.loading")}</Card>}
         {!loading && filtered.length === 0 && (
-          <Card className="p-10 text-center text-sm text-muted-foreground">暂无符合条件的通知</Card>
+          <Card className="p-10 text-center text-sm text-muted-foreground">{t("notifications.empty")}</Card>
         )}
         {!loading &&
           filtered.map((item) => (
@@ -215,7 +217,7 @@ export default function NotificationsPage() {
                   <span className={cn("text-sm", item.read ? "text-muted-foreground" : "font-medium text-foreground")}>
                     {item.title}
                   </span>
-                  <StatusBadge label={TYPE_LABELS[item.category]} tone="neutral" />
+                  <StatusBadge label={t(TYPE_LABEL_KEYS[item.category])} tone="neutral" />
                 </div>
                 <span className="text-xs text-muted-foreground">{formatDateOnly(item.time)}</span>
                 {item.detail && <span className="line-clamp-2 text-sm leading-6 text-muted-foreground">{item.detail}</span>}

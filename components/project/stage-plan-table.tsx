@@ -7,7 +7,8 @@ import { Input } from "@/components/ui/input"
 import { StatusBadge } from "@/components/status-badge"
 import { formatDateOnly } from "@/lib/utils"
 import { STAGE_PLAN_TONE, type ProjectItem } from "@/types/project"
-import { PROJECT_STAGE_LABELS, STAGE_PLAN_STATUS_LABELS } from "@/types/domain"
+import { PROJECT_STAGE_LABEL_KEYS, STAGE_PLAN_STATUS_LABEL_KEYS } from "@/types/domain"
+import { useT } from "@/hooks/use-t"
 import { Pencil, Save, X } from "lucide-react"
 
 interface StagePlanTableProps {
@@ -21,6 +22,7 @@ interface StagePlanTableProps {
 }
 
 export function StagePlanTable({ project, editable = false, onSave, saving = false }: StagePlanTableProps) {
+  const t = useT()
   const [editing, setEditing] = useState(false)
   const [days, setDays] = useState<Record<string, number>>(
     Object.fromEntries(project.stagePlans.map((p) => [p.stage, p.planDays])),
@@ -59,7 +61,7 @@ export function StagePlanTable({ project, editable = false, onSave, saving = fal
   return (
     <Card className="overflow-hidden">
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
-        <h2 className="text-sm font-semibold text-foreground">阶段计划</h2>
+        <h2 className="text-sm font-semibold text-foreground">{t("project.stagePlan.title")}</h2>
         {editable &&
           (editing ? (
             <div className="flex gap-2">
@@ -75,17 +77,17 @@ export function StagePlanTable({ project, editable = false, onSave, saving = fal
                 }}
               >
                 <X className="mr-1 size-3.5" />
-                取消
+                {t("common.cancel")}
               </Button>
               <Button size="sm" className="h-8" disabled={saving} onClick={() => void handleSave()}>
                 <Save className="mr-1 size-3.5" />
-                {saving ? "保存中..." : "保存"}
+                {saving ? t("common.saving") : t("common.save")}
               </Button>
             </div>
           ) : (
             <Button size="sm" variant="outline" className="h-8 bg-transparent" onClick={() => setEditing(true)}>
               <Pencil className="mr-1 size-3.5" />
-              设置计划天数
+              {t("project.stagePlan.setDays")}
             </Button>
           ))}
       </div>
@@ -93,18 +95,18 @@ export function StagePlanTable({ project, editable = false, onSave, saving = fal
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border bg-muted/40 text-left text-xs text-muted-foreground">
-              <th className="px-4 py-3 font-medium">阶段</th>
-              <th className="px-4 py-3 font-medium">计划天数</th>
-              <th className="px-4 py-3 font-medium">计时起点</th>
-              <th className="px-4 py-3 font-medium">开始时间</th>
-              <th className="px-4 py-3 font-medium">完成时间</th>
-              <th className="px-4 py-3 font-medium">状态</th>
+              <th className="px-4 py-3 font-medium">{t("project.stagePlan.stage")}</th>
+              <th className="px-4 py-3 font-medium">{t("project.stagePlan.planDays")}</th>
+              <th className="px-4 py-3 font-medium">{t("project.stagePlan.timingStart")}</th>
+              <th className="px-4 py-3 font-medium">{t("project.stagePlan.startAt")}</th>
+              <th className="px-4 py-3 font-medium">{t("project.stagePlan.finishedAt")}</th>
+              <th className="px-4 py-3 font-medium">{t("project.stagePlan.status")}</th>
             </tr>
           </thead>
           <tbody>
             {project.stagePlans.map((plan) => (
               <tr key={plan.stage} className="border-b border-border last:border-0 hover:bg-muted/30">
-                <td className="px-4 py-3 font-medium text-foreground">{PROJECT_STAGE_LABELS[plan.stage]}</td>
+                <td className="px-4 py-3 font-medium text-foreground">{t(PROJECT_STAGE_LABEL_KEYS[plan.stage])}</td>
                 <td className="px-4 py-3">
                   {editing && plan.stage !== "completed" ? (
                     <Input
@@ -115,14 +117,14 @@ export function StagePlanTable({ project, editable = false, onSave, saving = fal
                       min={1}
                     />
                   ) : (
-                    <span className="text-muted-foreground">{plan.planDays} 天</span>
+                    <span className="text-muted-foreground">{t("project.stagePlan.daysValue", { count: plan.planDays })}</span>
                   )}
                 </td>
                 <td className="px-4 py-3 text-muted-foreground">{plan.timingNote}</td>
                 <td className="px-4 py-3 text-muted-foreground">{formatDateOnly(plan.startAt)}</td>
                 <td className="px-4 py-3 text-muted-foreground">{formatDateOnly(plan.finishedAt)}</td>
                 <td className="px-4 py-3">
-                  <StatusBadge label={STAGE_PLAN_STATUS_LABELS[plan.status]} tone={STAGE_PLAN_TONE[plan.status]} />
+                  <StatusBadge label={t(STAGE_PLAN_STATUS_LABEL_KEYS[plan.status])} tone={STAGE_PLAN_TONE[plan.status]} />
                 </td>
               </tr>
             ))}

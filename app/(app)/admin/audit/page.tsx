@@ -23,8 +23,9 @@ import {
 } from "@/components/ui/select"
 import { fetchJson } from "@/lib/api"
 import { formatDateOnly } from "@/lib/utils"
-import { ROLE_LABELS } from "@/types/domain"
+import { ROLE_LABEL_KEYS } from "@/types/domain"
 import { ROLE_TONE, type AuditLog } from "@/types/admin"
+import { useT } from "@/hooks/use-t"
 
 type AuditResponse = {
   logs: AuditLog[]
@@ -32,6 +33,7 @@ type AuditResponse = {
 }
 
 export default function AuditPage() {
+  const t = useT()
   const [logs, setLogs] = useState<AuditLog[]>([])
   const [actions, setActions] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
@@ -155,7 +157,7 @@ export default function AuditPage() {
                     <td className="px-4 py-3 text-muted-foreground">{formatDateOnly(log.time)}</td>
                     <td className="px-4 py-3 font-medium text-foreground">{log.operator}</td>
                     <td className="px-4 py-3">
-                      <StatusBadge label={ROLE_LABELS[log.role]} tone={ROLE_TONE[log.role]} />
+                      <StatusBadge label={t(ROLE_LABEL_KEYS[log.role])} tone={ROLE_TONE[log.role]} />
                     </td>
                     <td className="px-4 py-3 text-foreground">{log.action}</td>
                     <td className="px-4 py-3 text-muted-foreground">{log.target}</td>
@@ -181,7 +183,7 @@ export default function AuditPage() {
           {detail && (
             <dl className="grid grid-cols-3 gap-y-3 text-sm">
               <DetailRow label="操作人" value={detail.operator} />
-              <DetailRow label="角色" value={ROLE_LABELS[detail.role]} />
+              <DetailRow label="角色" value={t(ROLE_LABEL_KEYS[detail.role])} />
               <DetailRow label="操作类型" value={detail.action} />
               <DetailRow label="业务对象" value={detail.target} />
               <DetailRow label="变更前状态" value={detail.before} />

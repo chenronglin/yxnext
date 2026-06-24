@@ -29,6 +29,6 @@ export async function PATCH(request: NextRequest, context: AssignmentRouteContex
 
     return ok(result)
   } catch (error) {
-    return fail(error)
+    return fail(error, request)
   }
 }

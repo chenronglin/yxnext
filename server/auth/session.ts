@@ -49,6 +49,7 @@ type SessionUserRecord = {
   displayName: string | null
   phone: string | null
   avatarUrl: string | null
+  preferredLocale: string
 }
 
 type SessionWriter = {
@@ -68,6 +69,7 @@ export function toCurrentUser(user: SessionUserRecord): CurrentUser {
     status: user.status,
     email: user.email,
     phone: user.phone ?? undefined,
+    preferredLocale: user.preferredLocale === "en-US" ? "en-US" : "zh-CN",
     passwordResetRequired: user.passwordResetRequired,
   }
 }
@@ -149,6 +151,7 @@ export async function getCurrentUserBySessionId(sessionId: string | undefined | 
           displayName: true,
           phone: true,
           avatarUrl: true,
+          preferredLocale: true,
         },
       },
     },

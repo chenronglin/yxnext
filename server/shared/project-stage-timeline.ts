@@ -79,7 +79,7 @@ function makeStageWarningBody(input: {
   status: "due_soon" | "overdue"
   dueAt: Date | null
 }) {
-  const dueLabel = toIsoString(input.dueAt) ?? "未设置"
+  const dueLabel = toIsoString(input.dueAt) ?? "—"
   const stageLabel = STAGE_LABELS[input.stageCode]
 
   return input.status === "due_soon"
@@ -127,6 +127,12 @@ async function upsertStageWarningTodo(input: {
     },
     update: {
       todoType: input.status === "due_soon" ? "stage_due_soon" : "stage_overdue",
+      messageKey: input.status === "due_soon" ? "todos.stage.dueSoon" : "todos.stage.overdue",
+      messageParams: {
+        projectTitle: input.projectTitle,
+        stageCode: input.stageCode,
+        dueAt: toIsoString(input.dueAt) ?? "—",
+      },
       title,
       description,
       entityType: "project_stage_plan",
@@ -144,6 +150,12 @@ async function upsertStageWarningTodo(input: {
     create: {
       recipientUserId: input.recipientUserId,
       todoType: input.status === "due_soon" ? "stage_due_soon" : "stage_overdue",
+      messageKey: input.status === "due_soon" ? "todos.stage.dueSoon" : "todos.stage.overdue",
+      messageParams: {
+        projectTitle: input.projectTitle,
+        stageCode: input.stageCode,
+        dueAt: toIsoString(input.dueAt) ?? "—",
+      },
       title,
       description,
       projectId: input.projectId,
@@ -171,6 +183,12 @@ async function createStageWarningNotification(input: {
     data: {
       recipientUserId: input.recipientUserId,
       type: "stage_warning",
+      messageKey: input.status === "due_soon" ? "notifications.stageWarning.dueSoon" : "notifications.stageWarning.overdue",
+      messageParams: {
+        projectTitle: input.projectTitle,
+        stageCode: input.stageCode,
+        dueAt: toIsoString(input.dueAt) ?? "—",
+      },
       title: makeStageWarningTitle(input.stageCode, input.status),
       body: makeStageWarningBody({
         projectTitle: input.projectTitle,

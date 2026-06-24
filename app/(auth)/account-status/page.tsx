@@ -2,28 +2,30 @@ import Link from "next/link"
 import { Clock, XCircle, Ban } from "lucide-react"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { getServerT } from "@/lib/i18n/server"
+import type { I18nKey } from "@/lib/i18n/dictionary"
 
 type Status = "pending" | "rejected" | "disabled"
 
 const STATUS_CONFIG: Record<
   Status,
-  { title: string; desc: string; icon: typeof Clock; tone: string }
+  { titleKey: I18nKey; descKey: I18nKey; icon: typeof Clock; tone: string }
 > = {
   pending: {
-    title: "待审批",
-    desc: "您的注册申请已提交，管理员审批通过后即可进入平台。请耐心等待审批结果。",
+    titleKey: "auth.accountStatus.pending.title",
+    descKey: "auth.accountStatus.pending.desc",
     icon: Clock,
     tone: "bg-amber-100 text-amber-600",
   },
   rejected: {
-    title: "已驳回",
-    desc: "很抱歉，您的注册申请未通过审批。您可以根据下方反馈修改信息后重新提交申请。",
+    titleKey: "auth.accountStatus.rejected.title",
+    descKey: "auth.accountStatus.rejected.desc",
     icon: XCircle,
     tone: "bg-red-100 text-red-600",
   },
   disabled: {
-    title: "已禁用",
-    desc: "您的账号已被禁用，暂时无法进入业务系统。如有疑问，请联系平台管理员。",
+    titleKey: "auth.accountStatus.disabled.title",
+    descKey: "auth.accountStatus.disabled.desc",
     icon: Ban,
     tone: "bg-secondary text-secondary-foreground",
   },
@@ -40,6 +42,7 @@ export default async function AccountStatusPage({
     : "pending") as Status
   const config = STATUS_CONFIG[status]
   const Icon = config.icon
+  const t = await getServerT()
 
   return (
     <Card className="border-border shadow-sm">
@@ -50,17 +53,17 @@ export default async function AccountStatusPage({
       </CardHeader>
       <CardContent className="flex flex-col items-center gap-5 text-center">
         <div className="space-y-2">
-          <h2 className="text-lg font-semibold text-foreground">{config.title}</h2>
-          <p className="text-pretty text-sm leading-relaxed text-muted-foreground">{config.desc}</p>
+          <h2 className="text-lg font-semibold text-foreground">{t(config.titleKey)}</h2>
+          <p className="text-pretty text-sm leading-relaxed text-muted-foreground">{t(config.descKey)}</p>
         </div>
 
         <div className="flex w-full flex-col gap-2">
           <Button asChild className="w-full">
-            <Link href="/login">返回登录</Link>
+            <Link href="/login">{t("auth.register.backToLogin")}</Link>
           </Button>
           {status === "rejected" && (
             <Button asChild variant="outline" className="w-full bg-transparent">
-              <Link href="/register">修改并重新申请</Link>
+              <Link href="/register">{t("auth.accountStatus.reapply")}</Link>
             </Button>
           )}
         </div>

@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react"
 
 import { Button } from "@/components/ui/button"
+import { useT } from "@/hooks/use-t"
 import {
   Dialog,
   DialogContent,
@@ -39,6 +40,7 @@ type ToastItem = ToastOptions & {
 const FeedbackContext = createContext<FeedbackContextValue | null>(null)
 
 export function AppFeedbackProvider({ children }: { children: ReactNode }) {
+  const t = useT()
   const resolverRef = useRef<((value: boolean) => void) | null>(null)
   const [confirmOptions, setConfirmOptions] = useState<ConfirmOptions | null>(null)
   const [toasts, setToasts] = useState<ToastItem[]>([])
@@ -81,16 +83,16 @@ export function AppFeedbackProvider({ children }: { children: ReactNode }) {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <AlertTriangle className={confirmTone === "danger" ? "size-5 text-red-500" : "size-5 text-amber-500"} />
-              {confirmOptions?.title ?? "确认操作"}
+              {confirmOptions?.title ?? t("common.confirmAction")}
             </DialogTitle>
             {confirmOptions?.description && <DialogDescription>{confirmOptions.description}</DialogDescription>}
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" className="bg-transparent" onClick={() => closeConfirm(false)}>
-              {confirmOptions?.cancelText ?? "取消"}
+              {confirmOptions?.cancelText ?? t("common.cancel")}
             </Button>
             <Button variant={confirmTone === "danger" ? "destructive" : "default"} onClick={() => closeConfirm(true)}>
-              {confirmOptions?.confirmText ?? "确认"}
+              {confirmOptions?.confirmText ?? t("common.confirm")}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -18,7 +18,7 @@ import {
 import { useRole } from "@/components/role-provider"
 import { fetchJson } from "@/lib/api"
 import { formatDateOnly } from "@/lib/utils"
-import { PROJECT_LIFECYCLE_LABELS, PROJECT_STAGE_LABELS } from "@/types/domain"
+import { PROJECT_LIFECYCLE_LABEL_KEYS, PROJECT_STAGE_LABEL_KEYS, STAGE_PLAN_STATUS_LABEL_KEYS } from "@/types/domain"
 import {
   PROJECT_LIFECYCLE_TONE,
   PROJECT_STAGE_TONE,
@@ -27,7 +27,7 @@ import {
   type ProjectPersonOption,
 } from "@/types/project"
 import type { ProjectLifecycle, ProjectStage } from "@/types/domain"
-import { STAGE_PLAN_STATUS_LABELS } from "@/types/domain"
+import { useT } from "@/hooks/use-t"
 import { ChevronLeft, ChevronRight, Download, Eye, Search, Settings2 } from "lucide-react"
 
 interface ProjectListProps {
@@ -111,6 +111,7 @@ function derivePersonOptions(items: ProjectItem[], key: "editor" | "author") {
 }
 
 export function ProjectList({ variant }: ProjectListProps) {
+  const t = useT()
   const { role } = useRole()
   const router = useRouter()
   const pathname = usePathname()
@@ -227,13 +228,13 @@ export function ProjectList({ variant }: ProjectListProps) {
         <div className="flex flex-wrap gap-3">
           <Select value={filters.stage} onValueChange={(value) => updateFilters({ stage: value as ProjectStage | "all" })}>
             <SelectTrigger className="w-32">
-              <SelectValue>{filters.stage === "all" ? "全部阶段" : PROJECT_STAGE_LABELS[filters.stage]}</SelectValue>
+              <SelectValue>{filters.stage === "all" ? t("common.all") : t(PROJECT_STAGE_LABEL_KEYS[filters.stage])}</SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">全部阶段</SelectItem>
-              {(Object.keys(PROJECT_STAGE_LABELS) as ProjectStage[]).map((item) => (
+              <SelectItem value="all">{t("common.all")}</SelectItem>
+              {(Object.keys(PROJECT_STAGE_LABEL_KEYS) as ProjectStage[]).map((item) => (
                 <SelectItem key={item} value={item}>
-                  {PROJECT_STAGE_LABELS[item]}
+                  {t(PROJECT_STAGE_LABEL_KEYS[item])}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -245,14 +246,14 @@ export function ProjectList({ variant }: ProjectListProps) {
           >
             <SelectTrigger className="w-32">
               <SelectValue>
-                {filters.lifecycle === "all" ? "全部状态" : PROJECT_LIFECYCLE_LABELS[filters.lifecycle]}
+                {filters.lifecycle === "all" ? t("common.all") : t(PROJECT_LIFECYCLE_LABEL_KEYS[filters.lifecycle])}
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">全部状态</SelectItem>
-              {(Object.keys(PROJECT_LIFECYCLE_LABELS) as ProjectLifecycle[]).map((item) => (
+              <SelectItem value="all">{t("common.all")}</SelectItem>
+              {(Object.keys(PROJECT_LIFECYCLE_LABEL_KEYS) as ProjectLifecycle[]).map((item) => (
                 <SelectItem key={item} value={item}>
-                  {PROJECT_LIFECYCLE_LABELS[item]}
+                  {t(PROJECT_LIFECYCLE_LABEL_KEYS[item])}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -372,16 +373,16 @@ export function ProjectList({ variant }: ProjectListProps) {
                       <td className="px-4 py-3 text-muted-foreground">{project.editor}</td>
                       <td className="px-4 py-3 text-muted-foreground">{project.author}</td>
                       <td className="px-4 py-3">
-                        <StatusBadge label={PROJECT_STAGE_LABELS[project.stage]} tone={PROJECT_STAGE_TONE[project.stage]} />
+                        <StatusBadge label={t(PROJECT_STAGE_LABEL_KEYS[project.stage])} tone={PROJECT_STAGE_TONE[project.stage]} />
                       </td>
                       <td className="px-4 py-3">
                         <StatusBadge
-                          label={PROJECT_LIFECYCLE_LABELS[project.lifecycle]}
+                          label={t(PROJECT_LIFECYCLE_LABEL_KEYS[project.lifecycle])}
                           tone={PROJECT_LIFECYCLE_TONE[project.lifecycle]}
                         />
                       </td>
                       <td className="px-4 py-3">
-                        <StatusBadge label={STAGE_PLAN_STATUS_LABELS[project.planStatus]} tone={STAGE_PLAN_TONE[project.planStatus]} />
+                        <StatusBadge label={t(STAGE_PLAN_STATUS_LABEL_KEYS[project.planStatus])} tone={STAGE_PLAN_TONE[project.planStatus]} />
                       </td>
                       <td className="px-4 py-3 text-muted-foreground">
                         {isGov ? formatDateOnly(project.finishedAt) : `${project.pendingDocs} 项`}

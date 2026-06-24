@@ -21,6 +21,6 @@ export async function POST(request: NextRequest, context: ToggleStatusRouteConte
 
     return ok(result)
   } catch (error) {
-    return fail(error)
+    return fail(error, request)
   }
 }

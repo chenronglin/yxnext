@@ -10,8 +10,9 @@ import { Button } from "@/components/ui/button"
 import { StatusBadge } from "@/components/status-badge"
 import { useRole } from "@/components/role-provider"
 import { fetchJson } from "@/lib/api"
-import { DOC_STATUS_LABELS } from "@/types/domain"
-import { RELEASE_DOC_STATUS_LABELS, RELEASE_DOC_STATUS_TONE, type ProjectDetail } from "@/types/project"
+import { DOC_STATUS_LABEL_KEYS } from "@/types/domain"
+import { RELEASE_DOC_STATUS_LABEL_KEYS, RELEASE_DOC_STATUS_TONE, type ProjectDetail } from "@/types/project"
+import { useT } from "@/hooks/use-t"
 import { Unlock, FileText, CheckCircle2, Info, Lock, ArrowRight } from "lucide-react"
 
 type ProjectDetailResponse = {
@@ -19,6 +20,7 @@ type ProjectDetailResponse = {
 }
 
 export default function QcPage({ params }: { params: Promise<{ id: string }> }) {
+  const t = useT()
   const { id } = use(params)
   const { role } = useRole()
   const [project, setProject] = useState<ProjectDetail | null>(null)
@@ -125,7 +127,7 @@ export default function QcPage({ params }: { params: Promise<{ id: string }> }) 
               <span className="text-xs text-muted-foreground">质检状态</span>
               <div className="flex items-center gap-2">
                 <StatusBadge
-                  label={RELEASE_DOC_STATUS_LABELS[project.releaseDocStatus]}
+                  label={t(RELEASE_DOC_STATUS_LABEL_KEYS[project.releaseDocStatus])}
                   tone={RELEASE_DOC_STATUS_TONE[project.releaseDocStatus]}
                 />
                 {project.releaseDocStatus === "locked" && <span className="text-sm text-muted-foreground">尚未解锁</span>}
@@ -157,7 +159,7 @@ export default function QcPage({ params }: { params: Promise<{ id: string }> }) 
                   {unapprovedChapters.map((chapter) => (
                     <li key={chapter.id} className="flex items-center gap-2 text-sm">
                       <span className="text-foreground">{chapter.title}</span>
-                      <StatusBadge label={DOC_STATUS_LABELS[chapter.status]} tone="warning" />
+                      <StatusBadge label={t(DOC_STATUS_LABEL_KEYS[chapter.status])} tone="warning" />
                     </li>
                   ))}
                 </ul>

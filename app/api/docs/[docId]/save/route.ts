@@ -23,6 +23,6 @@ export async function POST(request: NextRequest, context: SaveDocRouteContext) {
 
     return ok(result)
   } catch (error) {
-    return fail(error)
+    return fail(error, request)
   }
 }

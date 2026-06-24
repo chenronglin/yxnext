@@ -38,17 +38,18 @@ import { Textarea } from "@/components/ui/textarea"
 import { fetchJson } from "@/lib/api"
 import { formatDateOnly } from "@/lib/utils"
 import {
-  PROJECT_LIFECYCLE_LABELS,
-  PROJECT_STAGE_LABELS,
+  PROJECT_LIFECYCLE_LABEL_KEYS,
+  PROJECT_STAGE_LABEL_KEYS,
 } from "@/types/domain"
 import {
   PROJECT_LIFECYCLE_TONE,
   PROJECT_STAGE_TONE,
-  RELEASE_DOC_STATUS_LABELS,
+  RELEASE_DOC_STATUS_LABEL_KEYS,
   RELEASE_DOC_STATUS_TONE,
   type GovernanceProjectDetail,
   type ProjectPersonOption,
 } from "@/types/project"
+import { useT } from "@/hooks/use-t"
 
 type GovernanceDetailResponse = {
   project: GovernanceProjectDetail
@@ -59,6 +60,7 @@ type GovernanceDetailResponse = {
 type GovAction = "editor" | "author" | "complete" | "archive" | "cancel" | "restore" | null
 
 export default function GovernanceDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const t = useT()
   const { id } = use(params)
   const [project, setProject] = useState<GovernanceProjectDetail | null>(null)
   const [editors, setEditors] = useState<ProjectPersonOption[]>([])
@@ -269,7 +271,7 @@ export default function GovernanceDetailPage({ params }: { params: Promise<{ id:
         actions={
           project ? (
             <StatusBadge
-              label={PROJECT_LIFECYCLE_LABELS[project.lifecycle]}
+              label={t(PROJECT_LIFECYCLE_LABEL_KEYS[project.lifecycle])}
               tone={PROJECT_LIFECYCLE_TONE[project.lifecycle]}
             />
           ) : undefined
@@ -298,11 +300,11 @@ export default function GovernanceDetailPage({ params }: { params: Promise<{ id:
         <>
           <Card className="grid grid-cols-2 gap-4 p-5 sm:grid-cols-3 lg:grid-cols-6">
             <Field label="当前阶段">
-              <StatusBadge label={PROJECT_STAGE_LABELS[project.stage]} tone={PROJECT_STAGE_TONE[project.stage]} />
+              <StatusBadge label={t(PROJECT_STAGE_LABEL_KEYS[project.stage])} tone={PROJECT_STAGE_TONE[project.stage]} />
             </Field>
             <Field label="质检">
               <StatusBadge
-                label={RELEASE_DOC_STATUS_LABELS[project.releaseDocStatus]}
+                label={t(RELEASE_DOC_STATUS_LABEL_KEYS[project.releaseDocStatus])}
                 tone={RELEASE_DOC_STATUS_TONE[project.releaseDocStatus]}
               />
             </Field>

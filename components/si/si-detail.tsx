@@ -13,7 +13,8 @@ import { Card } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import { fetchJson } from "@/lib/api"
 import { formatDateOnly } from "@/lib/utils"
-import { SI_STATUS_LABELS } from "@/types/domain"
+import { SI_STATUS_LABEL_KEYS } from "@/types/domain"
+import { useT } from "@/hooks/use-t"
 import {
   PRERELEASE_STATUS_LABELS,
   PRERELEASE_STATUS_TONE,
@@ -50,6 +51,7 @@ type ConvertProjectResponse = {
 }
 
 export function SiDetail({ si }: { si: SiItem }) {
+  const t = useT()
   const router = useRouter()
   const confirm = useConfirmDialog()
   const toast = useToast()
@@ -227,8 +229,8 @@ export function SiDetail({ si }: { si: SiItem }) {
       )}
 
       <div className="flex flex-wrap items-center gap-2">
-        <StatusBadge label={SI_STATUS_LABELS[si.status]} tone={SI_STATUS_TONE[si.status]} />
-        {si.converted && <StatusBadge label="已转项目" tone="success" />}
+        <StatusBadge label={t(SI_STATUS_LABEL_KEYS[si.status])} tone={SI_STATUS_TONE[si.status]} />
+        {si.converted && <StatusBadge label={t("domain.siStatus.converted")} tone="success" />}
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">

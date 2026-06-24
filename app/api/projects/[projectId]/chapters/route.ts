@@ -27,7 +27,7 @@ export async function GET(request: NextRequest, context: ChaptersRouteContext) {
 
     return ok(result)
   } catch (error) {
-    return fail(error)
+    return fail(error, request)
   }
 }
 
@@ -40,6 +40,6 @@ export async function POST(request: NextRequest, context: ChaptersRouteContext) 
 
     return ok(result)
   } catch (error) {
-    return fail(error)
+    return fail(error, request)
   }
 }

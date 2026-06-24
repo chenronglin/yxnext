@@ -21,6 +21,6 @@ export async function POST(request: NextRequest, context: NotificationReadRouteC
 
     return ok(result)
   } catch (error) {
-    return fail(error)
+    return fail(error, request)
   }
 }

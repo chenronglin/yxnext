@@ -22,8 +22,9 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { fetchJson } from "@/lib/api"
-import { PROJECT_STAGE_LABELS } from "@/types/domain"
+import { PROJECT_STAGE_LABEL_KEYS } from "@/types/domain"
 import type { DashboardStats } from "@/types/admin"
+import { useT } from "@/hooks/use-t"
 
 type RangeKey = "7d" | "30d" | "90d" | "all"
 
@@ -39,6 +40,7 @@ const RANGE_LABELS: Record<RangeKey, string> = {
 }
 
 export function AdminDashboard() {
+  const t = useT()
   const [range, setRange] = useState<RangeKey>("30d")
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [loading, setLoading] = useState(true)
@@ -147,7 +149,7 @@ export function AdminDashboard() {
           <CardContent className="flex flex-col gap-3">
             {loading && <div className="text-sm text-muted-foreground">正在加载阶段统计...</div>}
             {!loading && <StageBars data={stageCounts.map((item) => ({
-              label: PROJECT_STAGE_LABELS[item.stage],
+              label: t(PROJECT_STAGE_LABEL_KEYS[item.stage]),
               value: item.count,
             }))} />}
           </CardContent>

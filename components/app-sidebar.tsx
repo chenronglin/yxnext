@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils"
 import { useRole } from "@/components/role-provider"
 import { useSidebar } from "@/components/sidebar-provider"
 import { NAV_BY_ROLE } from "@/config/navigation"
+import { useT } from "@/hooks/use-t"
 
 function isNavItemActive(pathname: string, href: string, allHrefs: string[]) {
   // 先判断当前菜单自身是否命中：支持精确命中和“详情页仍归属当前菜单”的子路径命中。
@@ -34,6 +35,7 @@ function isNavItemActive(pathname: string, href: string, allHrefs: string[]) {
 }
 
 export function AppSidebar() {
+  const t = useT()
   const pathname = usePathname()
   const { role } = useRole()
   const { collapsed, mobileOpen, setMobileOpen, toggle } = useSidebar()
@@ -47,12 +49,13 @@ export function AppSidebar() {
           const active = isNavItemActive(pathname, item.href, allHrefs)
           const Icon = item.icon
           const compact = mode === "desktop" && collapsed
+          const label = t(item.labelKey)
 
           return (
             <li key={item.href}>
               <Link
                 href={item.href}
-                title={compact ? item.label : undefined}
+                title={compact ? label : undefined}
                 onClick={() => mode === "mobile" && setMobileOpen(false)}
                 className={cn(
                   "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
@@ -63,7 +66,7 @@ export function AppSidebar() {
                 )}
               >
                 <Icon className="size-4 shrink-0" />
-                {!compact && <span className="truncate animate-in fade-in duration-300">{item.label}</span>}
+                {!compact && <span className="truncate animate-in fade-in duration-300">{label}</span>}
               </Link>
             </li>
           )
@@ -79,7 +82,7 @@ export function AppSidebar() {
           <button
             type="button"
             className="absolute inset-0 bg-black/30"
-            aria-label="关闭导航"
+            aria-label={t("nav.closeNavigation")}
             onClick={() => setMobileOpen(false)}
           />
           <aside className="relative flex h-full w-72 max-w-[85vw] flex-col border-r border-sidebar-border bg-sidebar shadow-xl">
@@ -88,8 +91,8 @@ export function AppSidebar() {
                 <BookOpenText className="size-5" />
               </div>
               <div className="flex flex-col leading-tight">
-                <span className="text-sm font-semibold text-sidebar-foreground">阅享</span>
-                <span className="whitespace-nowrap text-[11px] text-muted-foreground">协作管理与审稿平台</span>
+                <span className="text-sm font-semibold text-sidebar-foreground">{t("brand.name")}</span>
+                <span className="whitespace-nowrap text-[11px] text-muted-foreground">{t("brand.shortTagline")}</span>
               </div>
             </div>
             {navList("mobile")}
@@ -103,7 +106,7 @@ export function AppSidebar() {
           collapsed ? "w-[70px]" : "w-60",
         )}
       >
-      {/* Header (Logo & Title) */}
+      {/* 侧栏头部展示品牌入口，文案跟随当前语言切换。 */}
       <div
         className={cn(
           "flex h-16 items-center border-b border-sidebar-border px-5 gap-2 overflow-hidden",
@@ -115,24 +118,24 @@ export function AppSidebar() {
         </div>
         {!collapsed && (
           <div className="flex flex-col leading-tight animate-in fade-in duration-300">
-            <span className="text-sm font-semibold text-sidebar-foreground">阅享</span>
+            <span className="text-sm font-semibold text-sidebar-foreground">{t("brand.name")}</span>
             <span className="text-[11px] text-muted-foreground whitespace-nowrap">
-              协作管理与审稿平台
+              {t("brand.shortTagline")}
             </span>
           </div>
         )}
       </div>
 
-      {/* Navigation Menu */}
+      {/* 导航项只保存稳定 key，渲染时按当前语言转成展示文案。 */}
       {navList("desktop")}
 
-      {/* Collapse Toggle Button */}
+      {/* 折叠按钮只改变侧栏宽度，不改变当前路由。 */}
       <div className="mt-auto border-t border-sidebar-border p-3 flex justify-center">
         <button
           onClick={toggle}
           className="flex size-9 items-center justify-center rounded-md text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors"
-          title={collapsed ? "展开侧栏" : "收起侧栏"}
-          aria-label={collapsed ? "展开侧栏" : "收起侧栏"}
+          title={collapsed ? t("nav.expandSidebar") : t("nav.collapseSidebar")}
+          aria-label={collapsed ? t("nav.expandSidebar") : t("nav.collapseSidebar")}
         >
           {collapsed ? <ChevronRight className="size-4" /> : <ChevronLeft className="size-4" />}
         </button>

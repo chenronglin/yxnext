@@ -1540,6 +1540,8 @@ export async function toggleManagedUserStatus(actor: ApiCurrentUser, userIdValue
       data: {
         recipientUserId: userId,
         type: nextStatus === "disabled" ? "user_disabled" : "user_enabled",
+        messageKey: nextStatus === "disabled" ? "notifications.accountDisabled" : "notifications.accountEnabled",
+        messageParams: {},
         title: nextStatus === "disabled" ? "账号已被禁用" : "账号已恢复启用",
         body: nextStatus === "disabled" ? "管理员已禁用你的账号。" : "管理员已重新启用你的账号。",
         entityType: "user",
@@ -1699,6 +1701,8 @@ export async function approveApprovalRequest(actor: ApiCurrentUser, userIdValue:
       data: {
         recipientUserId: userId,
         type: "register_approved",
+        messageKey: "notifications.approvalAccepted",
+        messageParams: {},
         title: "注册申请已通过",
         body: "管理员已通过你的注册申请，你现在可以登录平台。",
         entityType: "user",
@@ -1783,6 +1787,10 @@ export async function rejectApprovalRequest(actor: ApiCurrentUser, userIdValue: 
       data: {
         recipientUserId: userId,
         type: "register_rejected",
+        messageKey: "notifications.approvalRejected",
+        messageParams: {
+          reason,
+        },
         title: "注册申请未通过",
         body: `管理员驳回了你的注册申请：${reason}`,
         entityType: "user",
@@ -1962,6 +1970,10 @@ export async function createBinding(actor: ApiCurrentUser, input: BindingInput) 
           {
             recipientUserId: editorId,
             type: "binding_created",
+            messageKey: "notifications.bindingEditor",
+            messageParams: {
+              authorName: userName(author),
+            },
             title: "新增编辑-作者绑定",
             body: `管理员为你绑定了作者 ${userName(author)}。`,
             entityType: "editor_author_binding",
@@ -1970,6 +1982,10 @@ export async function createBinding(actor: ApiCurrentUser, input: BindingInput) 
           {
             recipientUserId: authorId,
             type: "binding_created",
+            messageKey: "notifications.bindingAuthor",
+            messageParams: {
+              editorName: userName(editor),
+            },
             title: "新增编辑-作者绑定",
             body: `管理员为你绑定了编辑 ${userName(editor)}。`,
             entityType: "editor_author_binding",
@@ -2099,6 +2115,10 @@ export async function unbind(actor: ApiCurrentUser, bindingIdValue: string) {
         {
           recipientUserId: binding.editorId,
           type: "binding_removed",
+          messageKey: "notifications.unbindingEditor",
+          messageParams: {
+            authorName: userName(binding.author),
+          },
           title: "编辑-作者绑定已解绑",
           body: `管理员解除了你与作者 ${userName(binding.author)} 的绑定。`,
           entityType: "editor_author_binding",
@@ -2107,6 +2127,10 @@ export async function unbind(actor: ApiCurrentUser, bindingIdValue: string) {
         {
           recipientUserId: binding.authorId,
           type: "binding_removed",
+          messageKey: "notifications.unbindingAuthor",
+          messageParams: {
+            editorName: userName(binding.editor),
+          },
           title: "编辑-作者绑定已解绑",
           body: `管理员解除了你与编辑 ${userName(binding.editor)} 的绑定。`,
           entityType: "editor_author_binding",
@@ -2705,6 +2729,10 @@ export async function updateGovernanceProjectAssignment(
         {
           recipientUserId: nextEditorId,
           type: "project_assignment_changed",
+          messageKey: "notifications.projectAssignment",
+          messageParams: {
+            projectTitle: project.title,
+          },
           title: "项目归属已调整",
           body: `管理员将项目《${project.title}》分配给你负责。`,
           projectId,
@@ -2714,6 +2742,10 @@ export async function updateGovernanceProjectAssignment(
         {
           recipientUserId: nextAuthorId,
           type: "project_assignment_changed",
+          messageKey: "notifications.projectAssignmentMember",
+          messageParams: {
+            projectTitle: project.title,
+          },
           title: "项目归属已调整",
           body: `管理员已调整项目《${project.title}》的协作归属。`,
           projectId,

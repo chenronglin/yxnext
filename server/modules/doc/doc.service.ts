@@ -739,6 +739,11 @@ async function upsertReviewTodo(tx: TxClient, doc: WorkflowDocRecord, now: Date)
     update: {
       recipientUserId: doc.project.editorId,
       todoType: "doc_review",
+      messageKey: "todos.review",
+      messageParams: {
+        projectTitle: doc.project.title,
+        docTitle: doc.title,
+      },
       title: `Doc 待审：${doc.title}`,
       description: `作者已提交《${doc.project.title}》的 ${doc.title}，请进入审核。`,
       projectId: doc.project.projectId,
@@ -758,6 +763,11 @@ async function upsertReviewTodo(tx: TxClient, doc: WorkflowDocRecord, now: Date)
     create: {
       recipientUserId: doc.project.editorId,
       todoType: "doc_review",
+      messageKey: "todos.review",
+      messageParams: {
+        projectTitle: doc.project.title,
+        docTitle: doc.title,
+      },
       title: `Doc 待审：${doc.title}`,
       description: `作者已提交《${doc.project.title}》的 ${doc.title}，请进入审核。`,
       projectId: doc.project.projectId,
@@ -785,6 +795,11 @@ async function upsertReturnTodo(tx: TxClient, doc: WorkflowDocRecord, now: Date)
     update: {
       recipientUserId: doc.project.authorId,
       todoType: "doc_return",
+      messageKey: "todos.return",
+      messageParams: {
+        projectTitle: doc.project.title,
+        docTitle: doc.title,
+      },
       title: `Doc 待改：${doc.title}`,
       description: `编辑已退回《${doc.project.title}》的 ${doc.title}，请按意见修改后重新提交。`,
       projectId: doc.project.projectId,
@@ -804,6 +819,11 @@ async function upsertReturnTodo(tx: TxClient, doc: WorkflowDocRecord, now: Date)
     create: {
       recipientUserId: doc.project.authorId,
       todoType: "doc_return",
+      messageKey: "todos.return",
+      messageParams: {
+        projectTitle: doc.project.title,
+        docTitle: doc.title,
+      },
       title: `Doc 待改：${doc.title}`,
       description: `编辑已退回《${doc.project.title}》的 ${doc.title}，请按意见修改后重新提交。`,
       projectId: doc.project.projectId,
@@ -825,6 +845,8 @@ async function createNotification(
   input: {
     recipientUserId: bigint
     type: string
+    messageKey: string
+    messageParams: Prisma.InputJsonObject
     title: string
     body: string
     projectId: bigint
@@ -836,6 +858,8 @@ async function createNotification(
     data: {
       recipientUserId: input.recipientUserId,
       type: input.type,
+      messageKey: input.messageKey,
+      messageParams: input.messageParams,
       title: input.title,
       body: input.body,
       projectId: input.projectId,
@@ -1440,6 +1464,11 @@ export async function submitDoc(
       await createNotification(tx, {
         recipientUserId: doc.project.editorId,
         type: "doc_submitted_for_review",
+        messageKey: "notifications.docSubmit",
+        messageParams: {
+          projectTitle: doc.project.title,
+          docTitle: doc.title,
+        },
         title: "Doc 已提交待审",
         body: `作者已提交《${doc.project.title}》的 ${doc.title}，请及时审核。`,
         projectId: doc.project.projectId,
@@ -1565,6 +1594,11 @@ export async function returnDocToAuthor(
       await createNotification(tx, {
         recipientUserId: doc.project.authorId,
         type: "doc_returned",
+        messageKey: "notifications.docReturn",
+        messageParams: {
+          projectTitle: doc.project.title,
+          docTitle: doc.title,
+        },
         title: "Doc 已退回待改",
         body: `编辑已退回《${doc.project.title}》的 ${doc.title}，请根据意见修改后重新提交。`,
         projectId: doc.project.projectId,
@@ -1668,6 +1702,11 @@ export async function approveDoc(
       await createNotification(tx, {
         recipientUserId: doc.project.authorId,
         type: "doc_approved",
+        messageKey: "notifications.docApprove",
+        messageParams: {
+          projectTitle: doc.project.title,
+          docTitle: doc.title,
+        },
         title: "Doc 审核通过",
         body: `《${doc.project.title}》的 ${doc.title} 已审核通过。`,
         projectId: doc.project.projectId,

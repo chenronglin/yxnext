@@ -22,6 +22,6 @@ export async function POST(request: NextRequest, context: RollbackRouteContext) 
 
     return ok(result)
   } catch (error) {
-    return fail(error)
+    return fail(error, request)
   }
 }

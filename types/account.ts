@@ -1,3 +1,4 @@
+import type { Locale } from "@/lib/i18n/config"
 import type { Role, UserStatus } from "@/types/domain"
 
 // 个人设置页真正需要的资料只包含当前数据库已有且允许本人维护的字段，
@@ -12,6 +13,7 @@ export interface AccountProfile {
   phone: string | null
   biography: string | null
   avatarUrl: string | null
+  preferredLocale: Locale
 }
 
 // 绑定信息接口按角色返回不同摘要：作者更关心“我绑定了哪些编辑”，

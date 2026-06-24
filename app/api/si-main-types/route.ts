@@ -14,6 +14,6 @@ export async function GET(request: NextRequest) {
 
     return ok(result)
   } catch (error) {
-    return fail(error)
+    return fail(error, request)
   }
 }

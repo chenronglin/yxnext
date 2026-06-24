@@ -8,8 +8,10 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { fetchJson } from "@/lib/api"
+import { useT } from "@/hooks/use-t"
 
 export default function ForgotPasswordPage() {
+  const t = useT()
   const [email, setEmail] = useState("")
   const [error, setError] = useState("")
   const [submitted, setSubmitted] = useState(false)
@@ -20,14 +22,14 @@ export default function ForgotPasswordPage() {
     setError("")
 
     if (!email.trim()) {
-      setError("请输入您的邮箱地址")
+      setError(t("auth.forgot.emailRequired"))
       return
     }
 
-    // Basic email validation
+    // 客户端只做基础格式提示，服务端仍然负责最终校验和限流。
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
     if (!emailRegex.test(email)) {
-      setError("请输入有效的邮箱地址")
+      setError(t("auth.forgot.emailInvalid"))
       return
     }
 
@@ -44,7 +46,7 @@ export default function ForgotPasswordPage() {
       })
       setSubmitted(true)
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "提交失败，请稍后重试")
+      setError(requestError instanceof Error ? requestError.message : t("auth.forgot.failed"))
     } finally {
       setSubmitting(false)
     }
@@ -57,21 +59,21 @@ export default function ForgotPasswordPage() {
           <div className="flex size-12 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
             <CheckCircle2 className="size-6" />
           </div>
-          <CardTitle className="mt-4 text-lg">请求已提交</CardTitle>
+          <CardTitle className="mt-4 text-lg">{t("auth.forgot.submittedTitle")}</CardTitle>
           <CardDescription>
-            如邮箱对应账号存在，系统已通知管理员协助重置密码：
+            {t("auth.forgot.submittedDescription")}
             <br />
             <span className="font-medium text-foreground">{email}</span>
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4 text-center">
           <p className="text-sm text-muted-foreground leading-relaxed">
-            为了避免暴露账号是否存在，系统始终返回统一结果。管理员收到通知后会人工协助处理。
+            {t("auth.forgot.privacyDescription")}
           </p>
           <Button asChild className="mt-2 w-full">
             <Link href="/login">
               <ArrowLeft className="mr-1.5 size-4" />
-              返回登录
+              {t("auth.register.backToLogin")}
             </Link>
           </Button>
         </CardContent>
@@ -82,8 +84,8 @@ export default function ForgotPasswordPage() {
   return (
     <Card className="border-border shadow-sm">
         <CardHeader>
-          <CardTitle className="text-lg">找回密码</CardTitle>
-          <CardDescription>请输入注册邮箱，系统会通知管理员协助重置密码。</CardDescription>
+          <CardTitle className="text-lg">{t("auth.forgot.title")}</CardTitle>
+          <CardDescription>{t("auth.forgot.description")}</CardDescription>
         </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
@@ -95,7 +97,7 @@ export default function ForgotPasswordPage() {
           )}
 
           <div className="flex flex-col gap-2">
-            <Label htmlFor="email">邮箱地址</Label>
+            <Label htmlFor="email">{t("auth.forgot.email")}</Label>
             <div className="relative">
               <Mail className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
@@ -111,13 +113,13 @@ export default function ForgotPasswordPage() {
           </div>
 
           <Button type="submit" className="mt-2 w-full" disabled={submitting}>
-            {submitting ? "提交中..." : "通知管理员重置"}
+            {submitting ? t("common.submitting") : t("auth.forgot.submitAdmin")}
           </Button>
 
           <p className="text-center text-sm text-muted-foreground">
-            记起密码了？{" "}
+            {t("auth.forgot.remembered")}{" "}
             <Link href="/login" className="text-primary hover:underline">
-              返回登录
+              {t("auth.register.backToLogin")}
             </Link>
           </p>
         </form>

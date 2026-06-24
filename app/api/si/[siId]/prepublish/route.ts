@@ -30,6 +30,6 @@ export async function POST(request: NextRequest, context: PrepublishRouteContext
 
     return ok(result, { status: 201 })
   } catch (error) {
-    return fail(error)
+    return fail(error, request)
   }
 }

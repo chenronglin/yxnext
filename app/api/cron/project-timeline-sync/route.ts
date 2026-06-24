@@ -42,6 +42,6 @@ export async function POST(request: NextRequest) {
       sessions,
     })
   } catch (error) {
-    return fail(error)
+    return fail(error, request)
   }
 }

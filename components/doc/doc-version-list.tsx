@@ -10,8 +10,9 @@ import { StatusBadge } from "@/components/status-badge"
 import { fetchJson } from "@/lib/api"
 import { formatDateOnly } from "@/lib/utils"
 import type { DocRevisionListResponse } from "@/types/doc"
-import { ROLE_LABELS } from "@/types/domain"
+import { ROLE_LABEL_KEYS } from "@/types/domain"
 import { docTypeLabel } from "@/components/doc/doc-client-shared"
+import { useT } from "@/hooks/use-t"
 import { ArrowLeft, Eye, FileText } from "lucide-react"
 
 function revisionActionLabel(action: "author_submit" | "editor_return" | "editor_approve") {
@@ -27,6 +28,7 @@ function revisionActionTone(action: "author_submit" | "editor_return" | "editor_
 }
 
 export function DocVersionList({ projectId, docRef }: { projectId: string; docRef: string }) {
+  const t = useT()
   const [response, setResponse] = useState<DocRevisionListResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [message, setMessage] = useState<string | null>(null)
@@ -109,7 +111,7 @@ export function DocVersionList({ projectId, docRef }: { projectId: string; docRe
                         操作人：<span className="text-foreground">{revision.actorName}</span>
                       </span>
                       <span>
-                        角色：<span className="text-foreground">{ROLE_LABELS[revision.actorRole]}</span>
+                        角色：<span className="text-foreground">{t(ROLE_LABEL_KEYS[revision.actorRole])}</span>
                       </span>
                       {revision.baseRevisionNo !== null && (
                         <span>

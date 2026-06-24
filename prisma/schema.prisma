@@ -175,6 +175,7 @@ model User {
   phone          String?     @map("phone") @db.VarChar(32)
   biography      String?     @map("biography") @db.Text
   avatarUrl      String?     @map("avatar_url") @db.VarChar(500)
+  preferredLocale String     @default("zh-CN") @map("preferred_locale") @db.VarChar(16)
   approvedBy     BigInt?     @map("approved_by") @db.UnsignedBigInt
   approvedAt     DateTime?   @map("approved_at") @db.DateTime(3)
   rejectedReason String?     @map("rejected_reason") @db.Text
@@ -636,6 +637,8 @@ model Notification {
   notificationId  BigInt    @id @default(autoincrement()) @map("notification_id") @db.UnsignedBigInt
   recipientUserId BigInt    @map("recipient_user_id") @db.UnsignedBigInt
   type            String    @map("type") @db.VarChar(64)
+  messageKey      String?   @map("message_key") @db.VarChar(128)
+  messageParams   Json?     @map("message_params")
   title           String    @map("title") @db.VarChar(255)
   body            String?   @map("body") @db.Text
   projectId       BigInt?   @map("project_id") @db.UnsignedBigInt
@@ -665,6 +668,8 @@ model TodoItem {
   todoId          BigInt      @id @default(autoincrement()) @map("todo_id") @db.UnsignedBigInt
   recipientUserId BigInt      @map("recipient_user_id") @db.UnsignedBigInt
   todoType        String      @map("todo_type") @db.VarChar(64)
+  messageKey      String?     @map("message_key") @db.VarChar(128)
+  messageParams   Json?       @map("message_params")
   title           String      @map("title") @db.VarChar(255)
   description     String?     @map("description") @db.Text
   projectId       BigInt?     @map("project_id") @db.UnsignedBigInt

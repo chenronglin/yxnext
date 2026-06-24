@@ -24,7 +24,7 @@ export async function GET(request: NextRequest, context: SiRouteContext) {
 
     return ok(result)
   } catch (error) {
-    return fail(error)
+    return fail(error, request)
   }
 }
 
@@ -37,7 +37,7 @@ export async function PATCH(request: NextRequest, context: SiRouteContext) {
 
     return ok(result)
   } catch (error) {
-    return fail(error)
+    return fail(error, request)
   }
 }
 
@@ -49,6 +49,6 @@ export async function DELETE(request: NextRequest, context: SiRouteContext) {
 
     return ok(result)
   } catch (error) {
-    return fail(error)
+    return fail(error, request)
   }
 }

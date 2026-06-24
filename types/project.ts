@@ -6,6 +6,7 @@ import type {
   ProjectStage,
   StagePlanStatus,
 } from "@/types/domain"
+import type { I18nKey } from "@/lib/i18n/dictionary"
 
 export const PROJECT_LIFECYCLE_TONE: Record<ProjectLifecycle, BadgeTone> = {
   draft: "neutral",
@@ -42,13 +43,13 @@ export const DOC_STATUS_TONE: Record<DocStatus, BadgeTone> = {
 // 这里的状态既覆盖“未解锁/已解锁”，也覆盖 release Doc 自身的协作状态。
 export type ReleaseDocStatus = "locked" | "unlocked" | "draft" | "submitted" | "returned" | "approved"
 
-export const RELEASE_DOC_STATUS_LABELS: Record<ReleaseDocStatus, string> = {
-  locked: "未解锁",
-  unlocked: "已解锁",
-  draft: "草稿",
-  submitted: "已提交待审",
-  returned: "退回待改",
-  approved: "审核通过",
+export const RELEASE_DOC_STATUS_LABEL_KEYS: Record<ReleaseDocStatus, I18nKey> = {
+  locked: "domain.releaseDoc.locked",
+  unlocked: "domain.releaseDoc.unlocked",
+  draft: "domain.releaseDoc.draft",
+  submitted: "domain.releaseDoc.submitted",
+  returned: "domain.releaseDoc.returned",
+  approved: "domain.releaseDoc.approved",
 }
 
 export const RELEASE_DOC_STATUS_TONE: Record<ReleaseDocStatus, BadgeTone> = {
@@ -60,7 +61,7 @@ export const RELEASE_DOC_STATUS_TONE: Record<ReleaseDocStatus, BadgeTone> = {
   approved: "success",
 }
 
-// 阶段顺序直接复用数据库编码，页面中文文案由 PROJECT_STAGE_LABELS 负责映射。
+// 阶段顺序直接复用数据库编码，页面展示文案由 PROJECT_STAGE_LABEL_KEYS 负责映射。
 export const STAGE_ORDER: ProjectStage[] = ["synopsis", "outline", "chapter", "release", "completed"]
 
 export interface StagePlan {

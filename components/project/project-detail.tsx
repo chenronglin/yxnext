@@ -14,8 +14,9 @@ import { StagePlanTable } from "@/components/project/stage-plan-table"
 import { useRole } from "@/components/role-provider"
 import { fetchJson } from "@/lib/api"
 import { formatDateOnly } from "@/lib/utils"
-import { DOC_STATUS_LABELS, HOLDER_ROLE_LABELS, PROJECT_LIFECYCLE_LABELS, PROJECT_STAGE_LABELS } from "@/types/domain"
+import { DOC_STATUS_LABEL_KEYS, HOLDER_ROLE_LABEL_KEYS, PROJECT_LIFECYCLE_LABEL_KEYS, PROJECT_STAGE_LABEL_KEYS } from "@/types/domain"
 import type { BadgeTone } from "@/types/domain"
+import { useT } from "@/hooks/use-t"
 import {
   DOC_STATUS_TONE,
   PROJECT_LIFECYCLE_TONE,
@@ -33,6 +34,7 @@ type ProjectDetailResponse = {
 const CHAPTER_DIALOG_WIDTH_CLASS = "w-[50vw] max-w-[50vw] sm:max-w-[50vw]"
 
 export function ProjectDetail({ id }: { id: string }) {
+  const t = useT()
   const { role } = useRole()
   const [project, setProject] = useState<ProjectDetailView | null>(null)
   const [loading, setLoading] = useState(true)
@@ -302,10 +304,10 @@ export function ProjectDetail({ id }: { id: string }) {
         {/* 顶部只放项目摘要信息，让右侧操作卡能和这块面板保持接近的视觉高度。 */}
         <Card className="grid grid-cols-2 gap-4 p-5 sm:grid-cols-3 lg:grid-cols-5">
           <HeaderField label="生命周期">
-            <StatusBadge label={PROJECT_LIFECYCLE_LABELS[project.lifecycle]} tone={PROJECT_LIFECYCLE_TONE[project.lifecycle]} />
+            <StatusBadge label={t(PROJECT_LIFECYCLE_LABEL_KEYS[project.lifecycle])} tone={PROJECT_LIFECYCLE_TONE[project.lifecycle]} />
           </HeaderField>
           <HeaderField label="当前阶段">
-            <StatusBadge label={PROJECT_STAGE_LABELS[project.stage]} tone={PROJECT_STAGE_TONE[project.stage]} />
+            <StatusBadge label={t(PROJECT_STAGE_LABEL_KEYS[project.stage])} tone={PROJECT_STAGE_TONE[project.stage]} />
           </HeaderField>
           <HeaderField label="负责编辑">
             <span className="text-sm text-foreground">{project.editor}</span>
@@ -671,6 +673,7 @@ function ChapterEntry({
   deleting: boolean
   onDeleteChapter: (chapter: ProjectChapterLocator) => void
 }) {
+  const t = useT()
   const chapterLabel = chapter.chapterNo ? `第 ${chapter.chapterNo} 章` : `排序 ${chapter.sortOrder}`
   // “未提交”在 Doc 状态上对应草稿；退回章节已经经历过提交，不在项目详情列表里提供删除入口。
   const canDeleteChapter = canManageChapters && chapter.status === "draft"
@@ -689,10 +692,10 @@ function ChapterEntry({
         </div>
       </td>
       <td className="px-3 py-2">
-        <StatusBadge label={DOC_STATUS_LABELS[chapter.status]} tone={DOC_STATUS_TONE[chapter.status]} />
+        <StatusBadge label={t(DOC_STATUS_LABEL_KEYS[chapter.status])} tone={DOC_STATUS_TONE[chapter.status]} />
       </td>
       <td className="px-3 py-2">
-        <StatusBadge label={HOLDER_ROLE_LABELS[chapter.holderRole]} tone="neutral" />
+        <StatusBadge label={t(HOLDER_ROLE_LABEL_KEYS[chapter.holderRole])} tone="neutral" />
       </td>
       <td className="px-3 py-2">
         <div className="flex items-center gap-1">

@@ -27,6 +27,6 @@ export async function PATCH(request: NextRequest, context: ChapterOrderRouteCont
 
     return ok(result)
   } catch (error) {
-    return fail(error)
+    return fail(error, request)
   }
 }

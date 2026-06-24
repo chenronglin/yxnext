@@ -66,6 +66,7 @@ const authorActor: ApiCurrentUser = {
   name: "作者甲",
   role: "author",
   status: "active",
+  preferredLocale: "zh-CN",
   email: "author@example.com",
 }
 
@@ -76,6 +77,7 @@ const editorActor: ApiCurrentUser = {
   name: "编辑甲",
   role: "editor",
   status: "active",
+  preferredLocale: "zh-CN",
   email: "editor@example.com",
 }
 

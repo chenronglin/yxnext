@@ -32,6 +32,6 @@ export async function PATCH(request: NextRequest, context: StagePlansRouteContex
 
     return ok(result)
   } catch (error) {
-    return fail(error)
+    return fail(error, request)
   }
 }

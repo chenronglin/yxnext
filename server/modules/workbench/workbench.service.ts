@@ -6,7 +6,11 @@ import { getAdminDashboard, getAdminReport } from "@/server/modules/admin/admin.
 import { prisma } from "@/server/db/prisma"
 import { ApiError } from "@/server/shared/api-response"
 import type { ApiCurrentUser } from "@/server/shared/current-user"
+import { DOC_STATUS_LABEL_KEYS, STAGE_PLAN_STATUS_LABEL_KEYS } from "@/types/domain"
 import type { BadgeTone, DocStatus } from "@/types/domain"
+import type { Locale } from "@/lib/i18n/config"
+import { translate } from "@/lib/i18n/dictionary"
+import { getStringParam, renderSystemBody, renderSystemTitle } from "@/server/shared/system-message"
 import type {
   AuthorDashboardStats,
   AuthorReportStats,
@@ -265,7 +269,7 @@ export async function listReviewQueue(actor: ApiCurrentUser) {
   }
 }
 
-export async function listTodos(actor: ApiCurrentUser) {
+export async function listTodos(actor: ApiCurrentUser, locale: Locale) {
   // 待办页现在只展示“有持久化真相源”的任务：
   // 也就是直接来自 todo_items 的记录，不再额外拼接 SI 预发、阶段预警等临时列表项。
   const openTodos = await prisma.todoItem.findMany({
@@ -306,10 +310,10 @@ export async function listTodos(actor: ApiCurrentUser) {
       items.push({
         id: `todo:${todo.todoId.toString()}`,
         type: "review",
-        title: todo.title,
+        title: renderSystemTitle(locale, todo.messageKey, todo.messageParams, todo.title),
         relatedType: "Doc",
         relatedName: `${todo.project.title} / ${todo.doc.title}`,
-        status: "已提交待审",
+        status: translate(locale, DOC_STATUS_LABEL_KEYS.submitted),
         statusTone: "info",
         due: toIsoString(todo.dueAt) ?? "—",
         from: userName(todo.project.author),
@@ -324,10 +328,10 @@ export async function listTodos(actor: ApiCurrentUser) {
       items.push({
         id: `todo:${todo.todoId.toString()}`,
         type: "returned",
-        title: todo.title,
+        title: renderSystemTitle(locale, todo.messageKey, todo.messageParams, todo.title),
         relatedType: "Doc",
         relatedName: `${todo.project.title} / ${todo.doc.title}`,
-        status: "退回待改",
+        status: translate(locale, DOC_STATUS_LABEL_KEYS.returned),
         statusTone: "warning",
         due: toIsoString(todo.dueAt) ?? "—",
         from: userName(todo.project.editor),
@@ -342,13 +346,13 @@ export async function listTodos(actor: ApiCurrentUser) {
       items.push({
         id: `todo:${todo.todoId.toString()}`,
         type: "approval",
-        title: todo.title,
-        relatedType: "用户",
-        relatedName: todo.title.replace(/^注册申请待审批：/, ""),
-        status: "待审批",
+        title: renderSystemTitle(locale, todo.messageKey, todo.messageParams, todo.title),
+        relatedType: translate(locale, "todos.related.user"),
+        relatedName: getStringParam(todo.messageParams, "applicantName") ?? todo.title.replace(/^注册申请待审批：/, ""),
+        status: translate(locale, "domain.userStatus.pending"),
         statusTone: "warning",
         due: "—",
-        from: "系统",
+        from: translate(locale, "common.system"),
         createdAt: todo.createdAt.toISOString(),
         read: todo.isRead,
         readAt: toIsoString(todo.readAt),
@@ -360,13 +364,16 @@ export async function listTodos(actor: ApiCurrentUser) {
       items.push({
         id: `todo:${todo.todoId.toString()}`,
         type: todo.todoType === "stage_overdue" ? "overdue" : "warning",
-        title: todo.title,
-        relatedType: "项目阶段",
+        title: renderSystemTitle(locale, todo.messageKey, todo.messageParams, todo.title),
+        relatedType: translate(locale, "todos.related.projectStage"),
         relatedName: todo.project.title,
-        status: todo.todoType === "stage_overdue" ? "已逾期" : "即将到期",
+        status:
+          todo.todoType === "stage_overdue"
+            ? translate(locale, STAGE_PLAN_STATUS_LABEL_KEYS.overdue)
+            : translate(locale, STAGE_PLAN_STATUS_LABEL_KEYS.due_soon),
         statusTone: todo.todoType === "stage_overdue" ? "danger" : "warning",
         due: toIsoString(todo.dueAt) ?? "—",
-        from: "系统",
+        from: translate(locale, "common.system"),
         createdAt: todo.createdAt.toISOString(),
         read: todo.isRead,
         readAt: toIsoString(todo.readAt),
@@ -400,7 +407,7 @@ export async function markAllTodosRead(actor: ApiCurrentUser) {
   }
 }
 
-export async function listNotifications(actor: ApiCurrentUser) {
+export async function listNotifications(actor: ApiCurrentUser, locale: Locale) {
   const notifications = await prisma.notification.findMany({
     where: {
       recipientUserId: actor.userId,
@@ -418,8 +425,8 @@ export async function listNotifications(actor: ApiCurrentUser) {
       id: item.notificationId.toString(),
       rawType: item.type,
       category,
-      title: item.title,
-      detail: item.body ?? "",
+      title: renderSystemTitle(locale, item.messageKey, item.messageParams, item.title),
+      detail: renderSystemBody(locale, item.messageKey, item.messageParams, item.body ?? ""),
       time: item.createdAt.toISOString(),
       read: item.isRead,
       href: notificationHref({

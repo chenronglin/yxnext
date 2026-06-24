@@ -28,8 +28,9 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import { fetchJson } from "@/lib/api"
 import { formatDateOnly } from "@/lib/utils"
-import { ROLE_LABELS, USER_STATUS_LABELS, type Role, type UserStatus } from "@/types/domain"
+import { ROLE_LABEL_KEYS, USER_STATUS_LABEL_KEYS, type Role, type UserStatus } from "@/types/domain"
 import { ROLE_TONE, USER_STATUS_TONE, type ManagedUser } from "@/types/admin"
+import { useT } from "@/hooks/use-t"
 
 type UsersResponse = {
   users: ManagedUser[]
@@ -64,6 +65,7 @@ const EMPTY_FORM: UserFormState = {
 }
 
 export default function UsersPage() {
+  const t = useT()
   const confirm = useConfirmDialog()
   const [users, setUsers] = useState<ManagedUser[]>([])
   const [loading, setLoading] = useState(true)
@@ -298,26 +300,26 @@ export default function UsersPage() {
         <div className="flex flex-wrap gap-3">
           <Select value={role} onValueChange={(value) => setRole(value as Role | "all")}>
             <SelectTrigger className="w-32">
-              <SelectValue>{role === "all" ? "全部角色" : ROLE_LABELS[role]}</SelectValue>
+              <SelectValue>{role === "all" ? t("common.all") : t(ROLE_LABEL_KEYS[role])}</SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">全部角色</SelectItem>
-              {(Object.keys(ROLE_LABELS) as Role[]).map((item) => (
+              <SelectItem value="all">{t("common.all")}</SelectItem>
+              {(Object.keys(ROLE_LABEL_KEYS) as Role[]).map((item) => (
                 <SelectItem key={item} value={item}>
-                  {ROLE_LABELS[item]}
+                  {t(ROLE_LABEL_KEYS[item])}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
           <Select value={status} onValueChange={(value) => setStatus(value as UserStatus | "all")}>
             <SelectTrigger className="w-32">
-              <SelectValue>{status === "all" ? "全部状态" : USER_STATUS_LABELS[status]}</SelectValue>
+              <SelectValue>{status === "all" ? t("common.all") : t(USER_STATUS_LABEL_KEYS[status])}</SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">全部状态</SelectItem>
-              {(Object.keys(USER_STATUS_LABELS) as UserStatus[]).map((item) => (
+              <SelectItem value="all">{t("common.all")}</SelectItem>
+              {(Object.keys(USER_STATUS_LABEL_KEYS) as UserStatus[]).map((item) => (
                 <SelectItem key={item} value={item}>
-                  {USER_STATUS_LABELS[item]}
+                  {t(USER_STATUS_LABEL_KEYS[item])}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -361,10 +363,10 @@ export default function UsersPage() {
                     <td className="px-4 py-3 font-medium text-foreground">{user.username}</td>
                     <td className="px-4 py-3 text-muted-foreground">{user.name}</td>
                     <td className="px-4 py-3">
-                      <StatusBadge label={ROLE_LABELS[user.role]} tone={ROLE_TONE[user.role]} />
+                      <StatusBadge label={t(ROLE_LABEL_KEYS[user.role])} tone={ROLE_TONE[user.role]} />
                     </td>
                     <td className="px-4 py-3">
-                      <StatusBadge label={USER_STATUS_LABELS[user.status]} tone={USER_STATUS_TONE[user.status]} />
+                      <StatusBadge label={t(USER_STATUS_LABEL_KEYS[user.status])} tone={USER_STATUS_TONE[user.status]} />
                     </td>
                     <td className="px-4 py-3 text-muted-foreground">{user.contact}</td>
                     <td className="px-4 py-3 text-muted-foreground">{formatDateOnly(user.lastLogin)}</td>
@@ -462,9 +464,9 @@ export default function UsersPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {(Object.keys(ROLE_LABELS) as Role[]).map((item) => (
+                  {(Object.keys(ROLE_LABEL_KEYS) as Role[]).map((item) => (
                     <SelectItem key={item} value={item}>
-                      {ROLE_LABELS[item]}
+                      {t(ROLE_LABEL_KEYS[item])}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -532,8 +534,8 @@ export default function UsersPage() {
           {detailUser && (
             <dl className="grid grid-cols-3 gap-y-3 text-sm">
               <DetailRow label="姓名/笔名" value={detailUser.name} />
-              <DetailRow label="角色" value={ROLE_LABELS[detailUser.role]} />
-              <DetailRow label="状态" value={USER_STATUS_LABELS[detailUser.status]} />
+              <DetailRow label="角色" value={t(ROLE_LABEL_KEYS[detailUser.role])} />
+              <DetailRow label="状态" value={t(USER_STATUS_LABEL_KEYS[detailUser.status])} />
               <DetailRow label="邮箱" value={detailUser.email} />
               <DetailRow label="手机号" value={detailUser.phone ?? "—"} />
               <DetailRow label="联系方式" value={detailUser.contact} />

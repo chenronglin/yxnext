@@ -1261,6 +1261,10 @@ export async function prepublishStoryIdea(actor: ApiCurrentUser, siIdValue: stri
         data: authorIds.map((authorId) => ({
           recipientUserId: authorId,
           type: "si_preissued",
+          messageKey: "notifications.siPrerelease",
+          messageParams: {
+            siTitle: si.title,
+          },
           title: "收到新的 SI 预发",
           body: `编辑向你预发了《${si.title}》。`,
           siId,
@@ -1632,6 +1636,10 @@ export async function convertSiPreissueToProject(actor: ApiCurrentUser, recordId
         data: {
           recipientUserId: existing.authorId,
           type: "project_created_from_si",
+          messageKey: "notifications.siConvert",
+          messageParams: {
+            title,
+          },
           title: "SI 已确认转项目",
           body: `《${title}》已创建为项目，请进入项目开始梗概阶段。`,
           projectId: project.projectId,
@@ -2117,6 +2125,10 @@ export async function deleteStoryIdea(actor: ApiCurrentUser, siIdValue: string) 
         data: existing.preissues.map((preissue) => ({
           recipientUserId: preissue.authorId,
           type: "si_recalled",
+          messageKey: "notifications.siWithdraw",
+          messageParams: {
+            title: existing.title,
+          },
           title: "SI 预发已收回",
           body: `编辑已删除《${existing.title}》，对应预发记录已同步收回。`,
           siId,

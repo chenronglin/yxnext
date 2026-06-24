@@ -8,8 +8,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { useT } from "@/hooks/use-t"
 
 export default function LoginPage() {
+  const t = useT()
   const router = useRouter()
   const [account, setAccount] = useState("")
   const [password, setPassword] = useState("")
@@ -21,7 +23,7 @@ export default function LoginPage() {
     setError("")
 
     if (!account.trim() || !password.trim()) {
-      setError("请输入账号和密码")
+      setError(t("auth.login.required"))
       return
     }
 
@@ -50,7 +52,7 @@ export default function LoginPage() {
       if (!response.ok) {
         // 登录失败统一只展示通用错误，不再根据接口返回细节分流到账号状态页，
         // 避免前端变成账号状态枚举的放大器。
-        setError(result?.message ?? "登录失败，请检查账号和密码")
+        setError(result?.message ?? t("auth.login.failed"))
         return
       }
 
@@ -60,7 +62,7 @@ export default function LoginPage() {
       router.replace(result?.currentUser?.passwordResetRequired ? "/settings?mustChangePassword=1" : "/dashboard")
       router.refresh()
     } catch {
-      setError("网络异常，请稍后重试")
+      setError(t("common.networkError"))
     } finally {
       setSubmitting(false)
     }
@@ -69,8 +71,8 @@ export default function LoginPage() {
   return (
     <Card className="border-border shadow-sm">
       <CardHeader>
-        <CardTitle className="text-lg">登录</CardTitle>
-        <CardDescription>请输入您的账号信息进入平台</CardDescription>
+        <CardTitle className="text-lg">{t("auth.login.title")}</CardTitle>
+        <CardDescription>{t("auth.login.description")}</CardDescription>
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
@@ -82,10 +84,10 @@ export default function LoginPage() {
           )}
 
           <div className="flex flex-col gap-2">
-            <Label htmlFor="username">账号</Label>
+            <Label htmlFor="username">{t("auth.login.account")}</Label>
             <Input
               id="username"
-              placeholder="请输入登录账号"
+              placeholder={t("auth.login.accountPlaceholder")}
               value={account}
               onChange={(e) => setAccount(e.target.value)}
               autoComplete="username"
@@ -94,11 +96,11 @@ export default function LoginPage() {
           </div>
 
           <div className="flex flex-col gap-2">
-            <Label htmlFor="password">密码</Label>
+            <Label htmlFor="password">{t("auth.login.password")}</Label>
             <Input
               id="password"
               type="password"
-              placeholder="请输入密码"
+              placeholder={t("auth.login.passwordPlaceholder")}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               autoComplete="current-password"
@@ -107,17 +109,17 @@ export default function LoginPage() {
           </div>
 
           <Button type="submit" className="mt-2 w-full" disabled={submitting}>
-            {submitting ? "登录中..." : "登录"}
+            {submitting ? t("auth.login.submitting") : t("auth.login.submit")}
           </Button>
 
           {/* 底部辅助入口统一左对齐，避免忘记密码入口挤占密码输入区的视觉焦点。 */}
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-left text-sm text-muted-foreground">
             <Link href="/forgot-password" className="text-primary hover:underline">
-              忘记密码？
+              {t("auth.login.forgotPassword")}
             </Link>
-            <span>还没有账号？</span>
+            <span>{t("auth.login.noAccount")}</span>
             <Link href="/register" className="text-primary hover:underline">
-              注册申请
+              {t("auth.login.register")}
             </Link>
           </div>
         </form>

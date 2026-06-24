@@ -1,9 +1,17 @@
 import type { ReactNode } from "react"
 import { BookOpenText } from "lucide-react"
 
-export default function AuthLayout({ children }: { children: ReactNode }) {
+import { LanguageSwitcher } from "@/components/i18n/language-switcher"
+import { getServerT } from "@/lib/i18n/server"
+
+export default async function AuthLayout({ children }: { children: ReactNode }) {
+  const t = await getServerT()
+
   return (
     <div className="flex min-h-screen flex-col bg-muted">
+      <div className="flex justify-end px-4 pt-4">
+        <LanguageSwitcher />
+      </div>
       <div className="flex flex-1 items-center justify-center px-4 py-10">
         <div className="w-full max-w-md">
           <div className="mb-8 flex flex-col items-center gap-3 text-center">
@@ -11,15 +19,15 @@ export default function AuthLayout({ children }: { children: ReactNode }) {
               <BookOpenText className="size-7" />
             </div>
             <div>
-              <h1 className="text-xl font-semibold tracking-tight text-foreground">阅享</h1>
-              <p className="text-sm text-muted-foreground">小说协作管理与审稿交流平台</p>
+              <h1 className="text-xl font-semibold tracking-tight text-foreground">{t("brand.name")}</h1>
+              <p className="text-sm text-muted-foreground">{t("brand.tagline")}</p>
             </div>
           </div>
           {children}
         </div>
       </div>
       <footer className="py-6 text-center text-xs text-muted-foreground">
-        阅享 · 从选题创意到成稿交付的协作管理平台
+        {t("brand.footer")}
       </footer>
     </div>
   )

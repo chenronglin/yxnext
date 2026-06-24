@@ -6,9 +6,10 @@ import { useRouter } from "next/navigation"
 import { Bell, LogOut, Menu } from "lucide-react"
 import { useRole } from "@/components/role-provider"
 import { useSidebar } from "@/components/sidebar-provider"
-import { ROLE_LABELS } from "@/types/domain"
+import { ROLE_LABEL_KEYS } from "@/types/domain"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { fetchJson } from "@/lib/api"
+import { useT } from "@/hooks/use-t"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,6 +25,7 @@ type NotificationsBadgeResponse = {
 }
 
 export function AppTopbar() {
+  const t = useT()
   const router = useRouter()
   const { user, role } = useRole()
   const { collapsed, toggleForViewport } = useSidebar()
@@ -61,21 +63,21 @@ export function AppTopbar() {
         <button
           onClick={toggleForViewport}
           className="inline-flex size-9 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary transition-colors"
-          title={collapsed ? "展开侧栏" : "收起侧栏"}
-          aria-label={collapsed ? "展开侧栏" : "收起侧栏"}
+          title={collapsed ? t("nav.expandSidebar") : t("nav.collapseSidebar")}
+          aria-label={collapsed ? t("nav.expandSidebar") : t("nav.collapseSidebar")}
         >
           <Menu className="size-5" />
         </button>
       </div>
 
       <span className="hidden rounded-md border border-border px-2.5 py-1.5 text-xs text-muted-foreground sm:inline-flex">
-        {ROLE_LABELS[role]}
+        {t(ROLE_LABEL_KEYS[role])}
       </span>
 
       <Link
         href="/notifications"
         className="relative inline-flex size-9 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary"
-        aria-label="通知"
+        aria-label={t("nav.notificationAria")}
       >
         <Bell className="size-5" />
         {unreadCount > 0 && <span className="absolute right-2 top-2 size-2 rounded-full bg-destructive" />}
@@ -90,7 +92,7 @@ export function AppTopbar() {
           </Avatar>
           <div className="hidden flex-col items-start leading-tight sm:flex">
             <span className="text-sm font-medium text-foreground">{user.name}</span>
-            <span className="text-[11px] text-muted-foreground">{ROLE_LABELS[user.role]}</span>
+            <span className="text-[11px] text-muted-foreground">{t(ROLE_LABEL_KEYS[user.role])}</span>
           </div>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-44">
@@ -99,12 +101,12 @@ export function AppTopbar() {
           </DropdownMenuGroup>
           <DropdownMenuSeparator />
           <DropdownMenuItem asChild>
-            <Link href="/settings">个人设置</Link>
+            <Link href="/settings">{t("nav.settings")}</Link>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem variant="destructive" onClick={() => void handleLogout()}>
             <LogOut className="mr-2 size-4" />
-            {loggingOut ? "正在退出" : "退出登录"}
+            {loggingOut ? t("nav.loggingOut") : t("nav.logout")}
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

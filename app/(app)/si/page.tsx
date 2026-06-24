@@ -20,8 +20,9 @@ import {
 import { useConfirmDialog, useToast } from "@/components/ui/app-feedback"
 import { fetchJson } from "@/lib/api"
 import { formatDateOnly } from "@/lib/utils"
-import { SI_STATUS_LABELS, type SiStatus } from "@/types/domain"
+import { SI_STATUS_LABEL_KEYS, type SiStatus } from "@/types/domain"
 import { DEFAULT_MAIN_TYPES, SI_STATUS_TONE, type SiItem } from "@/types/si"
+import { useT } from "@/hooks/use-t"
 import { Archive, ChevronLeft, ChevronRight, Eye, History, Lock, Pencil, Plus, Search, Send, Trash2 } from "lucide-react"
 
 type SiListResponse = {
@@ -75,6 +76,7 @@ function buildQuery(filters: SiFilterState) {
 }
 
 export default function SiLibraryPage() {
+  const t = useT()
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -246,13 +248,13 @@ export default function SiLibraryPage() {
         <div className="flex flex-wrap gap-3">
           <Select value={filters.status} onValueChange={(value) => updateFilters({ status: value as SiStatus | "all" })}>
             <SelectTrigger className="w-36">
-              <SelectValue>{filters.status === "all" ? "全部状态" : SI_STATUS_LABELS[filters.status]}</SelectValue>
+              <SelectValue>{filters.status === "all" ? t("common.all") : t(SI_STATUS_LABEL_KEYS[filters.status])}</SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">全部状态</SelectItem>
-              {(Object.keys(SI_STATUS_LABELS) as SiStatus[]).map((item) => (
+              <SelectItem value="all">{t("common.all")}</SelectItem>
+              {(Object.keys(SI_STATUS_LABEL_KEYS) as SiStatus[]).map((item) => (
                 <SelectItem key={item} value={item}>
-                  {SI_STATUS_LABELS[item]}
+                  {t(SI_STATUS_LABEL_KEYS[item])}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -311,8 +313,8 @@ export default function SiLibraryPage() {
                     >
                       {item.title}
                     </Link>
-                    <StatusBadge label={SI_STATUS_LABELS[item.status]} tone={SI_STATUS_TONE[item.status]} />
-                    {item.converted && <StatusBadge label="已转项目" tone="success" />}
+                    <StatusBadge label={t(SI_STATUS_LABEL_KEYS[item.status])} tone={SI_STATUS_TONE[item.status]} />
+                    {item.converted && <StatusBadge label={t("domain.siStatus.converted")} tone="success" />}
                   </div>
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
                     <span>主类型：{item.mainType}</span>

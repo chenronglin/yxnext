@@ -28,6 +28,6 @@ export async function GET(request: NextRequest, context: DownloadFinalRouteConte
       },
     })
   } catch (error) {
-    return fail(error)
+    return fail(error, request)
   }
 }

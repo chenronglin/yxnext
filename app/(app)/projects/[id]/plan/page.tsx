@@ -10,14 +10,16 @@ import { StagePlanTable } from "@/components/project/stage-plan-table"
 import { StageProgress } from "@/components/project/stage-progress"
 import { useRole } from "@/components/role-provider"
 import { fetchJson } from "@/lib/api"
-import { PROJECT_STAGE_LABELS } from "@/types/domain"
+import { PROJECT_STAGE_LABEL_KEYS } from "@/types/domain"
 import type { ProjectDetail } from "@/types/project"
+import { useT } from "@/hooks/use-t"
 
 type ProjectDetailResponse = {
   project: ProjectDetail
 }
 
 export default function StagePlanPage({ params }: { params: Promise<{ id: string }> }) {
+  const t = useT()
   const { id } = use(params)
   const { role } = useRole()
   const [project, setProject] = useState<ProjectDetail | null>(null)
@@ -79,16 +81,16 @@ export default function StagePlanPage({ params }: { params: Promise<{ id: string
             <h2 className="mb-3 text-sm font-semibold text-foreground">阶段说明</h2>
             <ul className="flex flex-col gap-2 text-sm text-muted-foreground">
               <li className="flex gap-2">
-                <span className="font-medium text-foreground">{PROJECT_STAGE_LABELS.synopsis}：</span>确认转项目后开始
+                <span className="font-medium text-foreground">{t(PROJECT_STAGE_LABEL_KEYS.synopsis)}：</span>确认转项目后开始
               </li>
               <li className="flex gap-2">
-                <span className="font-medium text-foreground">{PROJECT_STAGE_LABELS.outline}：</span>梗概通过后开始
+                <span className="font-medium text-foreground">{t(PROJECT_STAGE_LABEL_KEYS.outline)}：</span>梗概通过后开始
               </li>
               <li className="flex gap-2">
-                <span className="font-medium text-foreground">{PROJECT_STAGE_LABELS.chapter}：</span>细纲通过后开始
+                <span className="font-medium text-foreground">{t(PROJECT_STAGE_LABEL_KEYS.chapter)}：</span>细纲通过后开始
               </li>
               <li className="flex gap-2">
-                <span className="font-medium text-foreground">{PROJECT_STAGE_LABELS.release}：</span>手动解锁后开始
+                <span className="font-medium text-foreground">{t(PROJECT_STAGE_LABEL_KEYS.release)}：</span>手动解锁后开始
               </li>
             </ul>
             {role !== "admin" && (

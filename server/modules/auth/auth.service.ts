@@ -63,6 +63,7 @@ export async function loginWithPassword(input: LoginInput): Promise<LoginResult>
       displayName: true,
       phone: true,
       avatarUrl: true,
+      preferredLocale: true,
     },
   })
 
@@ -149,6 +150,10 @@ async function createRegisterApprovalNotifications(
     data: admins.map((admin) => ({
       recipientUserId: admin.userId,
       type: "register_pending_approval",
+      messageKey: "notifications.registerApproval",
+      messageParams: {
+        applicantName: input.applicantName,
+      },
       title: "新的注册申请待审批",
       body: `用户「${input.applicantName}」提交了注册申请，请及时审批。`,
       entityType: "user",
@@ -160,6 +165,10 @@ async function createRegisterApprovalNotifications(
     data: admins.map((admin) => ({
       recipientUserId: admin.userId,
       todoType: "register_approval",
+      messageKey: "todos.registerApproval",
+      messageParams: {
+        applicantName: input.applicantName,
+      },
       title: `注册申请待审批：${input.applicantName}`,
       description: `用户「${input.applicantName}」提交了注册申请，请前往作者审批页处理。`,
       entityType: "user",
@@ -200,6 +209,10 @@ async function createForgotPasswordNotifications(
     data: admins.map((admin) => ({
       recipientUserId: admin.userId,
       type: "forgot_password_requested",
+      messageKey: "notifications.forgotPassword",
+      messageParams: {
+        applicantName: input.applicantName,
+      },
       title: "收到忘记密码申请",
       body: `${input.applicantName}用户忘记密码，请帮忙重置`,
       entityType: "user",
