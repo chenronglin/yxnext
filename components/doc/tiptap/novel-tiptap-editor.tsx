@@ -314,12 +314,14 @@ export function NovelTiptapEditor({
   onReady,
 }: NovelTiptapEditorProps) {
   const extensions = useMemo(() => createNovelEditorExtensions({ trackChanges, createdBy }), [createdBy, trackChanges])
+  const initialValue = useRef(value)
   const lastExternalValue = useRef(stringifyContent(value))
+  const localEchoSignatures = useRef<string[]>([])
   const editor = useEditor({
     immediatelyRender: false,
     editable,
     extensions,
-    content: value,
+    content: initialValue.current,
     editorProps: {
       attributes: {
         class: "novel-prosemirror focus:outline-none",
@@ -327,6 +329,19 @@ export function NovelTiptapEditor({
     },
     onUpdate({ editor: currentEditor }) {
       const json = currentEditor.getJSON() as NovelDocJson
+      const signature = stringifyContent(json)
+
+      // React 父组件会把本次 onUpdate 的 JSON 重新作为 value 传回来；这些“本地回声”
+      // 不是外部换稿，不能再触发整篇 setContent，否则会打断 ProseMirror 正在维护的选区。
+      // 这里保留最近一小段签名，是为了覆盖中文输入法 composition finalize 与 React effect
+      // 交错执行时出现的旧回声：即使旧 value 晚于新事务到达，也只确认它，不回写正文。
+      if (!localEchoSignatures.current.includes(signature)) {
+        localEchoSignatures.current.push(signature)
+      }
+
+      if (localEchoSignatures.current.length > 24) {
+        localEchoSignatures.current = localEchoSignatures.current.slice(-24)
+      }
 
       onChange(json, deriveNovelDocProjection(json))
     },
@@ -349,11 +364,23 @@ export function NovelTiptapEditor({
 
     const next = stringifyContent(value)
 
+    const localEchoIndex = localEchoSignatures.current.indexOf(next)
+
+    if (localEchoIndex >= 0) {
+      // 这是当前编辑器自己刚发给父组件的内容快照。即使 editor 此刻已经进入后续事务，
+      // 也不能用这个可能稍旧的 value 覆盖整篇文档；只把它标记为已见过即可。
+      localEchoSignatures.current.splice(localEchoIndex, 1)
+      lastExternalValue.current = next
+      return
+    }
+
     if (next === lastExternalValue.current || next === stringifyContent(editor.getJSON() as NovelDocJson)) {
       lastExternalValue.current = next
       return
     }
 
+    // 只有真正来自外部的数据变化才整篇替换，例如首次加载后的服务端刷新、流程动作后换稿、
+    // 或只读历史版本切换。普通输入路径已经在上面的本地回声分支被拦住。
     lastExternalValue.current = next
     editor.commands.setContent(value, { emitUpdate: false })
   }, [editor, value])
