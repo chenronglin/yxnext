@@ -4,6 +4,7 @@ import { useEffect, useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { Bell, LogOut, Menu } from "lucide-react"
+import { LanguageSwitcher } from "@/components/i18n/language-switcher"
 import { useRole } from "@/components/role-provider"
 import { useSidebar } from "@/components/sidebar-provider"
 import { ROLE_LABEL_KEYS } from "@/types/domain"
@@ -27,7 +28,7 @@ type NotificationsBadgeResponse = {
 export function AppTopbar() {
   const t = useT()
   const router = useRouter()
-  const { user, role } = useRole()
+  const { user } = useRole()
   const { collapsed, toggleForViewport } = useSidebar()
   const [loggingOut, setLoggingOut] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
@@ -70,9 +71,8 @@ export function AppTopbar() {
         </button>
       </div>
 
-      <span className="hidden rounded-md border border-border px-2.5 py-1.5 text-xs text-muted-foreground sm:inline-flex">
-        {t(ROLE_LABEL_KEYS[role])}
-      </span>
+      {/* 顶栏右侧不再重复展示角色徽标，改为放置语言切换器，方便用户随时切换中英文界面。 */}
+      <LanguageSwitcher compact />
 
       <Link
         href="/notifications"

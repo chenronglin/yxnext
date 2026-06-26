@@ -21,11 +21,11 @@ export const SI_STATUS_TONE: Record<SiStatus, BadgeTone> = {
 
 export type PrereleaseStatus = "active" | "withdrawn" | "converted"
 
-// 预发记录在前端使用 active/withdrawn/converted 口径，服务层负责和数据库状态互转。
-export const PRERELEASE_STATUS_LABELS: Record<PrereleaseStatus, string> = {
-  active: "预发中",
-  withdrawn: "已收回",
-  converted: "已转项目",
+// 预发状态只暴露稳定的字典 key；页面根据当前 locale 翻译展示，避免英文界面继续渲染中文状态。
+export const PRERELEASE_STATUS_LABEL_KEYS: Record<PrereleaseStatus, string> = {
+  active: "domain.prereleaseStatus.active",
+  withdrawn: "domain.prereleaseStatus.withdrawn",
+  converted: "domain.prereleaseStatus.converted",
 }
 
 export const PRERELEASE_STATUS_TONE: Record<PrereleaseStatus, BadgeTone> = {

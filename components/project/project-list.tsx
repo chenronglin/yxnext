@@ -171,7 +171,7 @@ export function ProjectList({ variant }: ProjectListProps) {
         setPagination((current) => ({ ...current, total: 0, totalPages: 1 }))
         setMessage({
           type: "error",
-          text: error instanceof Error ? error.message : "项目列表读取失败",
+          text: error instanceof Error ? error.message : t("projects.loadFailed"),
         })
       } finally {
         if (!cancelled) setLoading(false)
@@ -182,7 +182,7 @@ export function ProjectList({ variant }: ProjectListProps) {
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [filters, variant])
+  }, [filters, t, variant])
 
   const editorList = useMemo(
     () => (editors.length > 0 ? editors : derivePersonOptions(items, "editor")),
@@ -221,7 +221,7 @@ export function ProjectList({ variant }: ProjectListProps) {
           <Input
             value={filters.keyword}
             onChange={(event) => updateFilters({ keyword: event.target.value })}
-            placeholder="搜索项目标题、来源 SI"
+            placeholder={t("projects.searchPlaceholder")}
             className="pl-9"
           />
         </div>
@@ -263,11 +263,11 @@ export function ProjectList({ variant }: ProjectListProps) {
             <Select value={filters.editor} onValueChange={(value) => updateFilters({ editor: value })}>
               <SelectTrigger className="w-32">
                 <SelectValue>
-                  {filters.editor === "all" ? "全部编辑" : editorList.find((item) => item.id === filters.editor)?.name}
+                  {filters.editor === "all" ? t("projects.allEditors") : editorList.find((item) => item.id === filters.editor)?.name}
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">全部编辑</SelectItem>
+                <SelectItem value="all">{t("projects.allEditors")}</SelectItem>
                 {editorList.map((item) => (
                   <SelectItem key={item.id} value={item.id}>
                     {item.name}
@@ -281,11 +281,11 @@ export function ProjectList({ variant }: ProjectListProps) {
             <Select value={filters.author} onValueChange={(value) => updateFilters({ author: value })}>
               <SelectTrigger className="w-32">
                 <SelectValue>
-                  {filters.author === "all" ? "全部作者" : authorList.find((item) => item.id === filters.author)?.name}
+                  {filters.author === "all" ? t("projects.allAuthors") : authorList.find((item) => item.id === filters.author)?.name}
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">全部作者</SelectItem>
+                <SelectItem value="all">{t("projects.allAuthors")}</SelectItem>
                 {authorList.map((item) => (
                   <SelectItem key={item.id} value={item.id}>
                     {item.name}
@@ -297,12 +297,18 @@ export function ProjectList({ variant }: ProjectListProps) {
 
           <Select value={filters.overdue} onValueChange={(value) => updateFilters({ overdue: value as "all" | "yes" | "no" })}>
             <SelectTrigger className="w-32">
-              <SelectValue>{filters.overdue === "all" ? "是否逾期" : filters.overdue === "yes" ? "已逾期" : "未逾期"}</SelectValue>
+              <SelectValue>
+                {filters.overdue === "all"
+                  ? t("projects.overdue.placeholder")
+                  : filters.overdue === "yes"
+                    ? t("projects.overdue.yes")
+                    : t("projects.overdue.no")}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">是否逾期</SelectItem>
-              <SelectItem value="yes">已逾期</SelectItem>
-              <SelectItem value="no">未逾期</SelectItem>
+              <SelectItem value="all">{t("projects.overdue.placeholder")}</SelectItem>
+              <SelectItem value="yes">{t("projects.overdue.yes")}</SelectItem>
+              <SelectItem value="no">{t("projects.overdue.no")}</SelectItem>
             </SelectContent>
           </Select>
 
@@ -311,12 +317,12 @@ export function ProjectList({ variant }: ProjectListProps) {
             onValueChange={(value) => updateFilters({ pageSize: positiveInteger(value, 20) })}
           >
             <SelectTrigger className="w-28">
-              <SelectValue>{filters.pageSize} 条/页</SelectValue>
+              <SelectValue>{t("common.itemsPerPage", { count: filters.pageSize })}</SelectValue>
             </SelectTrigger>
             <SelectContent>
               {[20, 50, 100].map((size) => (
                 <SelectItem key={size} value={String(size)}>
-                  {size} 条/页
+                  {t("common.itemsPerPage", { count: size })}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -329,23 +335,23 @@ export function ProjectList({ variant }: ProjectListProps) {
           <table className="w-full min-w-[960px] text-sm">
             <thead>
               <tr className="border-b border-border bg-muted/40 text-left text-xs text-muted-foreground">
-                <th className="px-4 py-3 font-medium">项目标题</th>
-                <th className="px-4 py-3 font-medium">来源 SI</th>
-                <th className="px-4 py-3 font-medium">负责编辑</th>
-                <th className="px-4 py-3 font-medium">负责作者</th>
-                <th className="px-4 py-3 font-medium">当前阶段</th>
-                <th className="px-4 py-3 font-medium">生命周期</th>
-                <th className="px-4 py-3 font-medium">计划状态</th>
-                <th className="px-4 py-3 font-medium">{isGov ? "完成时间" : "待处理"}</th>
-                <th className="px-4 py-3 font-medium">最近更新</th>
-                <th className="px-4 py-3 text-right font-medium">操作</th>
+                <th className="px-4 py-3 font-medium">{t("projects.column.title")}</th>
+                <th className="px-4 py-3 font-medium">{t("projects.column.sourceSi")}</th>
+                <th className="px-4 py-3 font-medium">{t("projects.column.editor")}</th>
+                <th className="px-4 py-3 font-medium">{t("projects.column.author")}</th>
+                <th className="px-4 py-3 font-medium">{t("projects.column.stage")}</th>
+                <th className="px-4 py-3 font-medium">{t("projects.column.lifecycle")}</th>
+                <th className="px-4 py-3 font-medium">{t("projects.column.planStatus")}</th>
+                <th className="px-4 py-3 font-medium">{isGov ? t("projects.column.finishedAt") : t("projects.column.pending")}</th>
+                <th className="px-4 py-3 font-medium">{t("projects.column.updatedAt")}</th>
+                <th className="px-4 py-3 text-right font-medium">{t("projects.column.actions")}</th>
               </tr>
             </thead>
             <tbody>
               {loading && (
                 <tr>
                   <td colSpan={10} className="px-4 py-10 text-center text-muted-foreground">
-                    正在加载项目...
+                    {t("projects.loading")}
                   </td>
                 </tr>
               )}
@@ -353,7 +359,7 @@ export function ProjectList({ variant }: ProjectListProps) {
               {!loading && items.length === 0 && (
                 <tr>
                   <td colSpan={10} className="px-4 py-10 text-center text-muted-foreground">
-                    暂无符合条件的项目
+                    {t("projects.empty")}
                   </td>
                 </tr>
               )}
@@ -385,7 +391,7 @@ export function ProjectList({ variant }: ProjectListProps) {
                         <StatusBadge label={t(STAGE_PLAN_STATUS_LABEL_KEYS[project.planStatus])} tone={STAGE_PLAN_TONE[project.planStatus]} />
                       </td>
                       <td className="px-4 py-3 text-muted-foreground">
-                        {isGov ? formatDateOnly(project.finishedAt) : `${project.pendingDocs} 项`}
+                        {isGov ? formatDateOnly(project.finishedAt) : t("projects.pendingCount", { count: project.pendingDocs })}
                       </td>
                       <td className="px-4 py-3 text-muted-foreground">{formatDateOnly(project.updatedAt)}</td>
                       <td className="px-4 py-3">
@@ -393,7 +399,7 @@ export function ProjectList({ variant }: ProjectListProps) {
                           <Link
                             href={detailHref}
                             className="inline-flex h-8 items-center rounded-md px-2 text-muted-foreground hover:bg-muted hover:text-foreground"
-                            title="查看详情"
+                            title={t("common.viewDetails")}
                           >
                             <Eye className="size-3.5" />
                           </Link>
@@ -401,7 +407,7 @@ export function ProjectList({ variant }: ProjectListProps) {
                             <Link
                               href={detailHref}
                               className="inline-flex h-8 items-center rounded-md px-2 text-muted-foreground hover:bg-muted hover:text-foreground"
-                              title="治理设置"
+                              title={t("common.governanceSettings")}
                             >
                               <Settings2 className="size-3.5" />
                             </Link>
@@ -410,7 +416,7 @@ export function ProjectList({ variant }: ProjectListProps) {
                             <a
                               href={`/api/projects/${project.id}/export?scope=project&format=docx`}
                               className="inline-flex h-8 items-center rounded-md px-2 text-muted-foreground hover:bg-muted hover:text-foreground"
-                              title="导出终稿"
+                              title={t("common.exportFinal")}
                             >
                               <Download className="size-3.5" />
                             </a>
@@ -425,7 +431,11 @@ export function ProjectList({ variant }: ProjectListProps) {
         </div>
         <div className="flex flex-col gap-3 border-t border-border px-4 py-3 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
           <span>
-            共 {pagination.total} 个项目，第 {pagination.page} / {pagination.totalPages} 页
+            {t("projects.paginationSummary", {
+              page: pagination.page,
+              total: pagination.total,
+              totalPages: pagination.totalPages,
+            })}
           </span>
           <div className="flex items-center gap-2">
             <Button
@@ -436,7 +446,7 @@ export function ProjectList({ variant }: ProjectListProps) {
               onClick={() => updateFilters({ page: Math.max(1, pagination.page - 1) }, false)}
             >
               <ChevronLeft className="mr-1 size-3.5" />
-              上一页
+              {t("common.previousPage")}
             </Button>
             <Button
               variant="outline"
@@ -445,7 +455,7 @@ export function ProjectList({ variant }: ProjectListProps) {
               disabled={loading || pagination.page >= pagination.totalPages}
               onClick={() => updateFilters({ page: Math.min(pagination.totalPages, pagination.page + 1) }, false)}
             >
-              下一页
+              {t("common.nextPage")}
               <ChevronRight className="ml-1 size-3.5" />
             </Button>
           </div>

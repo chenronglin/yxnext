@@ -34,8 +34,9 @@ import {
 } from "@/components/ui/table"
 import { fetchJson } from "@/lib/api"
 import { formatDateOnly } from "@/lib/utils"
+import { useT } from "@/hooks/use-t"
 import {
-  PRERELEASE_STATUS_LABELS,
+  PRERELEASE_STATUS_LABEL_KEYS,
   PRERELEASE_STATUS_TONE,
   type BoundAuthor,
   type PrereleaseRecord,
@@ -98,6 +99,7 @@ function buildQuery(filters: PreissueFilterState) {
 }
 
 export default function PrereleaseRecordsPage() {
+  const t = useT()
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -285,13 +287,15 @@ export default function PrereleaseRecordsPage() {
           </Select>
           <Select value={filters.status} onValueChange={(value) => updateFilters({ status: value as PrereleaseStatus | "all" })}>
             <SelectTrigger className="w-36">
-              <SelectValue>{filters.status === "all" ? "全部状态" : PRERELEASE_STATUS_LABELS[filters.status]}</SelectValue>
+              <SelectValue>
+                {filters.status === "all" ? "全部状态" : t(PRERELEASE_STATUS_LABEL_KEYS[filters.status])}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">全部状态</SelectItem>
-              {(Object.keys(PRERELEASE_STATUS_LABELS) as PrereleaseStatus[]).map((item) => (
+              {(Object.keys(PRERELEASE_STATUS_LABEL_KEYS) as PrereleaseStatus[]).map((item) => (
                 <SelectItem key={item} value={item}>
-                  {PRERELEASE_STATUS_LABELS[item]}
+                  {t(PRERELEASE_STATUS_LABEL_KEYS[item])}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -353,7 +357,7 @@ export default function PrereleaseRecordsPage() {
                     </TableCell>
                     <TableCell>
                       <StatusBadge
-                        label={PRERELEASE_STATUS_LABELS[record.status]}
+                        label={t(PRERELEASE_STATUS_LABEL_KEYS[record.status])}
                         tone={PRERELEASE_STATUS_TONE[record.status]}
                       />
                     </TableCell>

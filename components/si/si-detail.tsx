@@ -16,7 +16,7 @@ import { formatDateOnly } from "@/lib/utils"
 import { SI_STATUS_LABEL_KEYS } from "@/types/domain"
 import { useT } from "@/hooks/use-t"
 import {
-  PRERELEASE_STATUS_LABELS,
+  PRERELEASE_STATUS_LABEL_KEYS,
   PRERELEASE_STATUS_TONE,
   SI_STATUS_TONE,
   type PrereleaseRecord,
@@ -268,7 +268,7 @@ export function SiDetail({ si }: { si: SiItem }) {
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-sm font-medium text-foreground">{record.authorName}</span>
                       <StatusBadge
-                        label={PRERELEASE_STATUS_LABELS[record.status]}
+                        label={t(PRERELEASE_STATUS_LABEL_KEYS[record.status])}
                         tone={PRERELEASE_STATUS_TONE[record.status]}
                       />
                       {record.projectName && (

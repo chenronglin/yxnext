@@ -17,7 +17,8 @@ import {
 } from "@/components/ui/select"
 import { fetchJson } from "@/lib/api"
 import { formatDateOnly } from "@/lib/utils"
-import { PRERELEASE_STATUS_LABELS, PRERELEASE_STATUS_TONE, type PrereleaseRecord } from "@/types/si"
+import { PRERELEASE_STATUS_LABEL_KEYS, PRERELEASE_STATUS_TONE, type PrereleaseRecord } from "@/types/si"
+import { useT } from "@/hooks/use-t"
 import { ExternalLink, Eye, Search } from "lucide-react"
 
 type AuthorStatus = "active" | "converted"
@@ -27,6 +28,7 @@ type PreissueListResponse = {
 }
 
 export default function MySiPage() {
+  const t = useT()
   const [records, setRecords] = useState<PrereleaseRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [keyword, setKeyword] = useState("")
@@ -42,12 +44,12 @@ export default function MySiPage() {
         setRecords(response.records)
       })
       .catch((error) => {
-        setErrorMessage(error instanceof Error ? error.message : "我的 SI 读取失败")
+        setErrorMessage(error instanceof Error ? error.message : t("mySi.loadFailed"))
       })
       .finally(() => {
         setLoading(false)
       })
-  }, [])
+  }, [t])
 
   const filtered = useMemo(() => {
     return records.filter((record) => {
@@ -60,9 +62,10 @@ export default function MySiPage() {
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        breadcrumb={["我的 SI"]}
-        title="我的 SI"
-        description="查看编辑预发给你的选题，了解选题内容与转项目状态"
+        breadcrumb={[t("mySi.title")]}
+        breadcrumbAriaLabel={t("common.breadcrumbs")}
+        title={t("mySi.title")}
+        description={t("mySi.description")}
       />
 
       {errorMessage && (
@@ -77,29 +80,31 @@ export default function MySiPage() {
           <Input
             value={keyword}
             onChange={(event) => setKeyword(event.target.value)}
-            placeholder="搜索 SI 标题、Trope"
+            placeholder={t("mySi.searchPlaceholder")}
             className="pl-9"
           />
         </div>
         <Select value={status} onValueChange={(value) => setStatus(value as AuthorStatus | "all")}>
           <SelectTrigger className="w-40">
-            <SelectValue>{status === "all" ? "全部状态" : PRERELEASE_STATUS_LABELS[status]}</SelectValue>
+            <SelectValue>
+              {status === "all" ? t("mySi.allStatuses") : t(PRERELEASE_STATUS_LABEL_KEYS[status])}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">全部状态</SelectItem>
-            <SelectItem value="active">{PRERELEASE_STATUS_LABELS.active}</SelectItem>
-            <SelectItem value="converted">{PRERELEASE_STATUS_LABELS.converted}</SelectItem>
+            <SelectItem value="all">{t("mySi.allStatuses")}</SelectItem>
+            <SelectItem value="active">{t(PRERELEASE_STATUS_LABEL_KEYS.active)}</SelectItem>
+            <SelectItem value="converted">{t(PRERELEASE_STATUS_LABEL_KEYS.converted)}</SelectItem>
           </SelectContent>
         </Select>
       </Card>
 
       <div className="grid gap-4 md:grid-cols-2">
         {loading && (
-          <Card className="p-10 text-center text-sm text-muted-foreground md:col-span-2">正在加载我的 SI...</Card>
+          <Card className="p-10 text-center text-sm text-muted-foreground md:col-span-2">{t("mySi.loading")}</Card>
         )}
         {!loading && filtered.length === 0 && (
           <Card className="p-10 text-center text-sm text-muted-foreground md:col-span-2">
-            暂无预发给你的 SI
+            {t("mySi.empty")}
           </Card>
         )}
         {!loading &&
@@ -113,7 +118,7 @@ export default function MySiPage() {
                   {record.title}
                 </Link>
                 <StatusBadge
-                  label={PRERELEASE_STATUS_LABELS[record.status]}
+                  label={t(PRERELEASE_STATUS_LABEL_KEYS[record.status])}
                   tone={PRERELEASE_STATUS_TONE[record.status]}
                 />
               </div>
@@ -124,23 +129,23 @@ export default function MySiPage() {
               </div>
 
               <div className="space-y-1.5 text-xs text-muted-foreground">
-                <p>预发编辑：{record.editorName}</p>
-                <p className="line-clamp-2">预发说明：{record.note || "—"}</p>
-                <p>预发时间：{formatDateOnly(record.prereleasedAt)}</p>
+                <p>{t("mySi.editorLabel")}：{record.editorName}</p>
+                <p className="line-clamp-2">{t("mySi.noteLabel")}：{record.note || t("common.none")}</p>
+                <p>{t("mySi.prereleasedAtLabel")}：{formatDateOnly(record.prereleasedAt)}</p>
               </div>
 
               <div className="mt-auto flex items-center gap-2">
                 <Button asChild size="sm" variant="outline" className="bg-transparent">
                   <Link href={`/my-si/${record.recordId}`}>
                     <Eye className="mr-1 size-3.5" />
-                    查看
+                    {t("common.view")}
                   </Link>
                 </Button>
                 {record.status === "converted" && record.projectId && (
                   <Button asChild size="sm">
                     <Link href={`/projects/${record.projectId}`}>
                       <ExternalLink className="mr-1 size-3.5" />
-                      进入项目
+                      {t("mySi.enterProject")}
                     </Link>
                   </Button>
                 )}
@@ -150,7 +155,7 @@ export default function MySiPage() {
       </div>
 
       <p className="text-xs text-muted-foreground">
-        提示：预发中的 SI 仅供查看，作者不能编辑、收回或删除，也不能决定是否转项目；已被编辑收回的记录不会显示。
+        {t("mySi.tip")}
       </p>
     </div>
   )
