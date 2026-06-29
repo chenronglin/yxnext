@@ -279,7 +279,7 @@ model StoryIdea {
   siId             BigInt                 @id @default(autoincrement()) @map("si_id") @db.UnsignedBigInt
   title            String                 @map("title") @db.VarChar(255)
   mainTypeId       BigInt?                @map("main_type_id") @db.UnsignedBigInt
-  trope            String?                @map("trope") @db.VarChar(255)
+  trope            String?                @map("trope") @db.Text
   fitAuthorNote    String?                @map("fit_author_note") @db.Text
   remarks          String?                @map("remarks") @db.Text
   freshTwist       String?                @map("fresh_twist") @db.Text
@@ -307,7 +307,7 @@ model StoryIdea {
   @@map("story_ideas")
   @@index([creatorEditorId, status], map: "idx_story_ideas_editor_status")
   @@index([mainTypeId], map: "idx_story_ideas_type")
-  @@index([trope], map: "idx_story_ideas_trope")
+  @@index([trope(length: 191)], map: "idx_story_ideas_trope")
 }
 
 model StoryIdeaVersion {
