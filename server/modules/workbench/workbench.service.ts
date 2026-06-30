@@ -194,6 +194,93 @@ function notificationHref(input: {
   return "/dashboard"
 }
 
+function renderTodoDetail(
+  locale: Locale,
+  todo: Pick<Prisma.TodoItemGetPayload<object>, "messageKey" | "messageParams" | "description">,
+  noteOptions?: {
+    paramKey: string
+    fallbackNote?: string | null
+    withNoteKey: string
+  },
+) {
+  const params = noteOptions
+    ? withFallbackTextParam(todo.messageParams, noteOptions.paramKey, noteOptions.fallbackNote)
+    : todo.messageParams
+  const messageKey =
+    noteOptions && getStringParam(params, noteOptions.paramKey)
+      ? noteOptions.withNoteKey
+      : todo.messageKey
+
+  // 待办详情优先使用结构化 i18n body；旧数据没有 body 模板时回退到数据库 description。
+  // 这样新旧交接待办都能展示提交说明/退回原因，历史待办也不会因为缺少新参数而渲染出模板 key。
+  return renderSystemBody(locale, messageKey, params, todo.description ?? "")
+}
+
+function withFallbackTextParam(params: unknown, paramKey: string, fallbackValue?: string | null) {
+  const fallbackText = fallbackValue?.trim()
+
+  if (!fallbackText || getStringParam(params, paramKey)) {
+    return params
+  }
+
+  // 早期已生成的交接待办/通知没有把说明写入 messageParams，但业务主表已经保存了真实说明；
+  // 这里只在缺少对应参数时补值，不覆盖新记录携带的结构化值。
+  if (params && typeof params === "object" && !Array.isArray(params)) {
+    return {
+      ...params,
+      [paramKey]: fallbackText,
+    }
+  }
+
+  return {
+    [paramKey]: fallbackText,
+  }
+}
+
+function notificationRenderContext(item: {
+  messageKey: string | null
+  messageParams: unknown
+  doc?: { lastHandoffNote: string | null } | null
+  preissue?: { preissueNote: string | null } | null
+}, category: NotificationCategory) {
+  if (category === "doc_submit") {
+    const params = withFallbackTextParam(item.messageParams, "submitNote", item.doc?.lastHandoffNote)
+    return {
+      messageKey: getStringParam(params, "submitNote") ? "notifications.docSubmitWithNote" : item.messageKey,
+      messageParams: params,
+    }
+  }
+
+  if (category === "doc_return") {
+    const params = withFallbackTextParam(item.messageParams, "returnNote", item.doc?.lastHandoffNote)
+    return {
+      messageKey: getStringParam(params, "returnNote") ? "notifications.docReturnWithNote" : item.messageKey,
+      messageParams: params,
+    }
+  }
+
+  if (category === "doc_approve") {
+    const params = withFallbackTextParam(item.messageParams, "approveNote", item.doc?.lastHandoffNote)
+    return {
+      messageKey: getStringParam(params, "approveNote") ? "notifications.docApproveWithNote" : item.messageKey,
+      messageParams: params,
+    }
+  }
+
+  if (category === "si_prerelease") {
+    const params = withFallbackTextParam(item.messageParams, "preissueNote", item.preissue?.preissueNote)
+    return {
+      messageKey: getStringParam(params, "preissueNote") ? "notifications.siPrereleaseWithNote" : item.messageKey,
+      messageParams: params,
+    }
+  }
+
+  return {
+    messageKey: item.messageKey,
+    messageParams: item.messageParams,
+  }
+}
+
 export async function listReviewQueue(actor: ApiCurrentUser) {
   if (actor.role !== "admin" && actor.role !== "editor") {
     throw new ApiError({
@@ -295,6 +382,7 @@ export async function listTodos(actor: ApiCurrentUser, locale: Locale) {
           docId: true,
           docType: true,
           title: true,
+          lastHandoffNote: true,
         },
       },
     },
@@ -311,6 +399,11 @@ export async function listTodos(actor: ApiCurrentUser, locale: Locale) {
         id: `todo:${todo.todoId.toString()}`,
         type: "review",
         title: renderSystemTitle(locale, todo.messageKey, todo.messageParams, todo.title),
+        detail: renderTodoDetail(locale, todo, {
+          paramKey: "submitNote",
+          fallbackNote: todo.doc.lastHandoffNote,
+          withNoteKey: "todos.reviewWithNote",
+        }),
         relatedType: "Doc",
         relatedName: `${todo.project.title} / ${todo.doc.title}`,
         status: translate(locale, DOC_STATUS_LABEL_KEYS.submitted),
@@ -329,6 +422,11 @@ export async function listTodos(actor: ApiCurrentUser, locale: Locale) {
         id: `todo:${todo.todoId.toString()}`,
         type: "returned",
         title: renderSystemTitle(locale, todo.messageKey, todo.messageParams, todo.title),
+        detail: renderTodoDetail(locale, todo, {
+          paramKey: "returnNote",
+          fallbackNote: todo.doc.lastHandoffNote,
+          withNoteKey: "todos.returnWithNote",
+        }),
         relatedType: "Doc",
         relatedName: `${todo.project.title} / ${todo.doc.title}`,
         status: translate(locale, DOC_STATUS_LABEL_KEYS.returned),
@@ -347,6 +445,7 @@ export async function listTodos(actor: ApiCurrentUser, locale: Locale) {
         id: `todo:${todo.todoId.toString()}`,
         type: "approval",
         title: renderSystemTitle(locale, todo.messageKey, todo.messageParams, todo.title),
+        detail: renderTodoDetail(locale, todo),
         relatedType: translate(locale, "todos.related.user"),
         relatedName: getStringParam(todo.messageParams, "applicantName") ?? todo.title.replace(/^注册申请待审批：/, ""),
         status: translate(locale, "domain.userStatus.pending"),
@@ -365,6 +464,7 @@ export async function listTodos(actor: ApiCurrentUser, locale: Locale) {
         id: `todo:${todo.todoId.toString()}`,
         type: todo.todoType === "stage_overdue" ? "overdue" : "warning",
         title: renderSystemTitle(locale, todo.messageKey, todo.messageParams, todo.title),
+        detail: renderTodoDetail(locale, todo),
         relatedType: translate(locale, "todos.related.projectStage"),
         relatedName: todo.project.title,
         status:
@@ -412,6 +512,18 @@ export async function listNotifications(actor: ApiCurrentUser, locale: Locale) {
     where: {
       recipientUserId: actor.userId,
     },
+    include: {
+      doc: {
+        select: {
+          lastHandoffNote: true,
+        },
+      },
+      preissue: {
+        select: {
+          preissueNote: true,
+        },
+      },
+    },
     orderBy: {
       createdAt: "desc",
     },
@@ -420,13 +532,14 @@ export async function listNotifications(actor: ApiCurrentUser, locale: Locale) {
 
   const items: NotificationItemView[] = notifications.map((item) => {
     const category = notificationCategory(item.type)
+    const rendered = notificationRenderContext(item, category)
 
     return {
       id: item.notificationId.toString(),
       rawType: item.type,
       category,
-      title: renderSystemTitle(locale, item.messageKey, item.messageParams, item.title),
-      detail: renderSystemBody(locale, item.messageKey, item.messageParams, item.body ?? ""),
+      title: renderSystemTitle(locale, rendered.messageKey, rendered.messageParams, item.title),
+      detail: renderSystemBody(locale, rendered.messageKey, rendered.messageParams, item.body ?? ""),
       time: item.createdAt.toISOString(),
       read: item.isRead,
       href: notificationHref({

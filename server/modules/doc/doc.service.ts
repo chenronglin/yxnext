@@ -728,9 +728,24 @@ async function closeAllDocTodos(tx: TxClient, docId: bigint, now: Date) {
   })
 }
 
-async function upsertReviewTodo(tx: TxClient, doc: WorkflowDocRecord, now: Date) {
+async function upsertReviewTodo(tx: TxClient, doc: WorkflowDocRecord, now: Date, submitNote: string | null) {
   const openDedupeKey = makeReviewTodoKey(doc.docId)
   const stagePlan = assertDocStagePlanExists(doc)
+  const messageKey = submitNote ? "todos.reviewWithNote" : "todos.review"
+  const messageParams: Prisma.InputJsonObject = submitNote
+    ? {
+        projectTitle: doc.project.title,
+        docTitle: doc.title,
+        // 作者提交说明要进入待审待办，否则编辑从待办入口看不到作者交接信息。
+        submitNote,
+      }
+    : {
+        projectTitle: doc.project.title,
+        docTitle: doc.title,
+      }
+  const description = submitNote
+    ? `作者已提交《${doc.project.title}》的 ${doc.title}，请进入审核。提交说明：${submitNote}`
+    : `作者已提交《${doc.project.title}》的 ${doc.title}，请进入审核。`
 
   await tx.todoItem.upsert({
     where: {
@@ -739,13 +754,10 @@ async function upsertReviewTodo(tx: TxClient, doc: WorkflowDocRecord, now: Date)
     update: {
       recipientUserId: doc.project.editorId,
       todoType: "doc_review",
-      messageKey: "todos.review",
-      messageParams: {
-        projectTitle: doc.project.title,
-        docTitle: doc.title,
-      },
+      messageKey,
+      messageParams,
       title: `Doc 待审：${doc.title}`,
-      description: `作者已提交《${doc.project.title}》的 ${doc.title}，请进入审核。`,
+      description,
       projectId: doc.project.projectId,
       docId: doc.docId,
       entityType: "doc",
@@ -763,13 +775,10 @@ async function upsertReviewTodo(tx: TxClient, doc: WorkflowDocRecord, now: Date)
     create: {
       recipientUserId: doc.project.editorId,
       todoType: "doc_review",
-      messageKey: "todos.review",
-      messageParams: {
-        projectTitle: doc.project.title,
-        docTitle: doc.title,
-      },
+      messageKey,
+      messageParams,
       title: `Doc 待审：${doc.title}`,
-      description: `作者已提交《${doc.project.title}》的 ${doc.title}，请进入审核。`,
+      description,
       projectId: doc.project.projectId,
       docId: doc.docId,
       entityType: "doc",
@@ -784,9 +793,13 @@ async function upsertReviewTodo(tx: TxClient, doc: WorkflowDocRecord, now: Date)
   })
 }
 
-async function upsertReturnTodo(tx: TxClient, doc: WorkflowDocRecord, now: Date) {
+async function upsertReturnTodo(tx: TxClient, doc: WorkflowDocRecord, now: Date, returnNote: string) {
   const openDedupeKey = makeReturnTodoKey(doc.docId)
   const stagePlan = assertDocStagePlanExists(doc)
+  const messageKey = "todos.returnWithNote"
+  // 退回原因不只写入 Revision，还要进入待办详情；作者通常先看待办列表，
+  // 如果这里仍然只保存泛化描述，就会出现“编辑填写了备注但作者入口看不到”的问题。
+  const description = `编辑已退回《${doc.project.title}》的 ${doc.title}，请按意见修改后重新提交。退回原因：${returnNote}`
 
   await tx.todoItem.upsert({
     where: {
@@ -795,13 +808,15 @@ async function upsertReturnTodo(tx: TxClient, doc: WorkflowDocRecord, now: Date)
     update: {
       recipientUserId: doc.project.authorId,
       todoType: "doc_return",
-      messageKey: "todos.return",
+      messageKey,
       messageParams: {
         projectTitle: doc.project.title,
         docTitle: doc.title,
+        // 将退回原因放进结构化参数，保证中文、英文界面都能通过同一模板渲染真实备注。
+        returnNote,
       },
       title: `Doc 待改：${doc.title}`,
-      description: `编辑已退回《${doc.project.title}》的 ${doc.title}，请按意见修改后重新提交。`,
+      description,
       projectId: doc.project.projectId,
       docId: doc.docId,
       entityType: "doc",
@@ -819,13 +834,15 @@ async function upsertReturnTodo(tx: TxClient, doc: WorkflowDocRecord, now: Date)
     create: {
       recipientUserId: doc.project.authorId,
       todoType: "doc_return",
-      messageKey: "todos.return",
+      messageKey,
       messageParams: {
         projectTitle: doc.project.title,
         docTitle: doc.title,
+        // 新建待办与更新待办使用相同参数，避免重复退回时旧备注残留在作者端。
+        returnNote,
       },
       title: `Doc 待改：${doc.title}`,
-      description: `编辑已退回《${doc.project.title}》的 ${doc.title}，请按意见修改后重新提交。`,
+      description,
       projectId: doc.project.projectId,
       docId: doc.docId,
       entityType: "doc",
@@ -1459,18 +1476,29 @@ export async function submitDoc(
       })
 
       await closeTodoByOpenKey(tx, makeReturnTodoKey(doc.docId), now)
-      await upsertReviewTodo(tx, doc, now)
+      await upsertReviewTodo(tx, doc, now, submitNote)
 
+      const submitMessageKey = submitNote ? "notifications.docSubmitWithNote" : "notifications.docSubmit"
+      const submitMessageParams: Prisma.InputJsonObject = submitNote
+        ? {
+            projectTitle: doc.project.title,
+            docTitle: doc.title,
+            // 作者提交说明进入通知参数，保证编辑在通知中心也能看到交接重点。
+            submitNote,
+          }
+        : {
+            projectTitle: doc.project.title,
+            docTitle: doc.title,
+          }
       await createNotification(tx, {
         recipientUserId: doc.project.editorId,
         type: "doc_submitted_for_review",
-        messageKey: "notifications.docSubmit",
-        messageParams: {
-          projectTitle: doc.project.title,
-          docTitle: doc.title,
-        },
+        messageKey: submitMessageKey,
+        messageParams: submitMessageParams,
         title: "Doc 已提交待审",
-        body: `作者已提交《${doc.project.title}》的 ${doc.title}，请及时审核。`,
+        body: submitNote
+          ? `作者已提交《${doc.project.title}》的 ${doc.title}，请及时审核。提交说明：${submitNote}`
+          : `作者已提交《${doc.project.title}》的 ${doc.title}，请及时审核。`,
         projectId: doc.project.projectId,
         docId: doc.docId,
         entityId: doc.docId,
@@ -1589,18 +1617,20 @@ export async function returnDocToAuthor(
       })
 
       await closeTodoByOpenKey(tx, makeReviewTodoKey(doc.docId), now)
-      await upsertReturnTodo(tx, doc, now)
+      await upsertReturnTodo(tx, doc, now, returnNote)
 
       await createNotification(tx, {
         recipientUserId: doc.project.authorId,
         type: "doc_returned",
-        messageKey: "notifications.docReturn",
+        messageKey: "notifications.docReturnWithNote",
         messageParams: {
           projectTitle: doc.project.title,
           docTitle: doc.title,
+          // 通知中心同样走结构化模板；这里带上 returnNote 后作者无需进入历史版本也能看到原因。
+          returnNote,
         },
         title: "Doc 已退回待改",
-        body: `编辑已退回《${doc.project.title}》的 ${doc.title}，请根据意见修改后重新提交。`,
+        body: `编辑已退回《${doc.project.title}》的 ${doc.title}，请根据意见修改后重新提交。退回原因：${returnNote}`,
         projectId: doc.project.projectId,
         docId: doc.docId,
         entityId: doc.docId,
@@ -1702,13 +1732,22 @@ export async function approveDoc(
       await createNotification(tx, {
         recipientUserId: doc.project.authorId,
         type: "doc_approved",
-        messageKey: "notifications.docApprove",
-        messageParams: {
-          projectTitle: doc.project.title,
-          docTitle: doc.title,
-        },
+        messageKey: approveNote ? "notifications.docApproveWithNote" : "notifications.docApprove",
+        messageParams: approveNote
+          ? {
+              projectTitle: doc.project.title,
+              docTitle: doc.title,
+              // 审核通过说明同样是交接信息，不能只停留在 Revision 里。
+              approveNote,
+            }
+          : {
+              projectTitle: doc.project.title,
+              docTitle: doc.title,
+            },
         title: "Doc 审核通过",
-        body: `《${doc.project.title}》的 ${doc.title} 已审核通过。`,
+        body: approveNote
+          ? `《${doc.project.title}》的 ${doc.title} 已审核通过。审核说明：${approveNote}`
+          : `《${doc.project.title}》的 ${doc.title} 已审核通过。`,
         projectId: doc.project.projectId,
         docId: doc.docId,
         entityId: doc.docId,

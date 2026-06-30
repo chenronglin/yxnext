@@ -27,6 +27,8 @@ export interface TodoItemView {
   id: string
   type: TodoType
   title: string
+  // 待办详情用于承载退回原因、审批说明等动作上下文，避免作者只看到一条泛化标题。
+  detail: string
   relatedType: string
   relatedName: string
   status: string

@@ -642,8 +642,36 @@ describe("submitDoc", () => {
     })
 
     expect(mockTx.docRevision.create).toHaveBeenCalled()
-    expect(mockTx.todoItem.upsert).toHaveBeenCalled()
-    expect(mockTx.notification.create).toHaveBeenCalled()
+    // 作者提交说明必须进入编辑的待审待办，避免编辑从待办入口看不到交接说明。
+    expect(mockTx.todoItem.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: expect.objectContaining({
+          messageKey: "todos.reviewWithNote",
+          messageParams: expect.objectContaining({
+            submitNote: "请老师复审",
+          }),
+          description: expect.stringContaining("提交说明：请老师复审"),
+        }),
+        create: expect.objectContaining({
+          messageKey: "todos.reviewWithNote",
+          messageParams: expect.objectContaining({
+            submitNote: "请老师复审",
+          }),
+          description: expect.stringContaining("提交说明：请老师复审"),
+        }),
+      }),
+    )
+    expect(mockTx.notification.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          messageKey: "notifications.docSubmitWithNote",
+          messageParams: expect.objectContaining({
+            submitNote: "请老师复审",
+          }),
+          body: expect.stringContaining("提交说明：请老师复审"),
+        }),
+      }),
+    )
     const source = expectDraftSource(result.source)
 
     expect(result.doc.status).toBe("submitted")
@@ -773,7 +801,34 @@ describe("returnDocToAuthor", () => {
     const source = expectDraftSource(result.source)
 
     expect(mockTx.todoItem.updateMany).toHaveBeenCalled()
-    expect(mockTx.todoItem.upsert).toHaveBeenCalled()
+    // 退回备注必须同时写入待办和通知，否则作者在待办/通知入口只能看到泛化文案。
+    expect(mockTx.todoItem.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: expect.objectContaining({
+          messageParams: expect.objectContaining({
+            returnNote: "请按建议重写",
+          }),
+          description: expect.stringContaining("退回原因：请按建议重写"),
+        }),
+        create: expect.objectContaining({
+          messageParams: expect.objectContaining({
+            returnNote: "请按建议重写",
+          }),
+          description: expect.stringContaining("退回原因：请按建议重写"),
+        }),
+      }),
+    )
+    // 通知中心使用 messageParams 渲染多语言正文，这里验证 returnNote 没有只停留在审计日志里。
+    expect(mockTx.notification.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          messageParams: expect.objectContaining({
+            returnNote: "请按建议重写",
+          }),
+          body: expect.stringContaining("退回原因：请按建议重写"),
+        }),
+      }),
+    )
     expect(result.doc.status).toBe("returned")
     expect(source.ownerRole).toBe("author")
   })
@@ -855,6 +910,18 @@ describe("approveDoc", () => {
       expect.objectContaining({
         data: expect.objectContaining({
           currentStage: "outline",
+        }),
+      }),
+    )
+    // 审核通过说明不能只留在 Revision，作者从通知中心也要能直接看到。
+    expect(mockTx.notification.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          messageKey: "notifications.docApproveWithNote",
+          messageParams: expect.objectContaining({
+            approveNote: "通过",
+          }),
+          body: expect.stringContaining("审核说明：通过"),
         }),
       }),
     )

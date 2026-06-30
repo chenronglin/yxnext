@@ -1,7 +1,15 @@
 import type { ReactNode } from "react"
+import Link from "next/link"
+
+type BreadcrumbItem =
+  | string
+  | {
+      label: string
+      href?: string
+    }
 
 interface PageHeaderProps {
-  breadcrumb?: string[]
+  breadcrumb?: BreadcrumbItem[]
   breadcrumbAriaLabel?: string
   title?: string
   description?: string
@@ -22,12 +30,23 @@ export function PageHeader({
     <div className={`flex flex-col gap-3 ${showBorder ? "border-b border-border pb-5" : ""}`}>
       {breadcrumb && breadcrumb.length > 0 && (
         <nav className="flex items-center gap-1.5 text-xs text-muted-foreground" aria-label={breadcrumbAriaLabel}>
-          {breadcrumb.map((crumb, i) => (
-            <span key={i} className="flex items-center gap-1.5">
-              {i > 0 && <span className="text-border">/</span>}
-              <span className={i === breadcrumb.length - 1 ? "text-foreground" : ""}>{crumb}</span>
-            </span>
-          ))}
+          {breadcrumb.map((crumb, i) => {
+            const item = typeof crumb === "string" ? { label: crumb } : crumb
+            const isLast = i === breadcrumb.length - 1
+
+            return (
+              <span key={`${i}-${item.label}`} className="flex items-center gap-1.5">
+                {i > 0 && <span className="text-border">/</span>}
+                {item.href && !isLast ? (
+                  <Link className="rounded-sm underline-offset-4 hover:text-foreground hover:underline" href={item.href}>
+                    {item.label}
+                  </Link>
+                ) : (
+                  <span className={isLast ? "text-foreground" : ""}>{item.label}</span>
+                )}
+              </span>
+            )
+          })}
         </nav>
       )}
       {(title || description || actions) && (

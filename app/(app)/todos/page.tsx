@@ -199,6 +199,8 @@ export default function TodosPage() {
                   <span>{t("todos.created")}: {formatDateOnly(item.createdAt)}</span>
                   <span>{t("todos.readAt")}: {item.readAt ? formatDateOnly(item.readAt) : t("common.unread")}</span>
                 </div>
+                {/* detail 承载提交说明、退回原因等动作上下文；为空时不占位，避免普通待办出现多余空行。 */}
+                {item.detail && <p className="max-w-3xl text-sm leading-6 text-muted-foreground">{item.detail}</p>}
               </div>
               <Button asChild size="sm" variant="outline" className="shrink-0 bg-transparent">
                 <Link href={item.href}>

@@ -4,11 +4,17 @@ const { mockPrisma, mockTx } = vi.hoisted(() => {
   const tx = {
     siPreissue: {
       findUnique: vi.fn(),
+      findMany: vi.fn(),
+      create: vi.fn(),
       update: vi.fn(),
       updateMany: vi.fn(),
     },
+    user: {
+      findMany: vi.fn(),
+    },
     editorAuthorBinding: {
       findFirst: vi.fn(),
+      findMany: vi.fn(),
     },
     project: {
       findFirst: vi.fn(),
@@ -28,10 +34,12 @@ const { mockPrisma, mockTx } = vi.hoisted(() => {
       create: vi.fn(),
     },
     storyIdea: {
+      findUnique: vi.fn(),
       update: vi.fn(),
     },
     notification: {
       create: vi.fn(),
+      createMany: vi.fn(),
     },
     operationLog: {
       create: vi.fn(),
@@ -56,7 +64,7 @@ vi.mock("@/server/db/prisma", () => ({
   prisma: mockPrisma,
 }))
 
-import { convertSiPreissueToProject, listSiPreissues } from "@/server/modules/si/si.service"
+import { convertSiPreissueToProject, listSiPreissues, prepublishStoryIdea } from "@/server/modules/si/si.service"
 import type { ApiCurrentUser } from "@/server/shared/current-user"
 
 const authorActor: ApiCurrentUser = {
@@ -112,6 +120,95 @@ describe("si.service", () => {
             not: "recalled",
           },
         }),
+      }),
+    )
+  })
+
+  it("SI 预发通知保留预发说明和预发记录 ID", async () => {
+    const preissuedAt = new Date("2026-06-16T08:00:00.000Z")
+    const storyIdea = {
+      siId: 20n,
+      title: "测试选题",
+      mainTypeId: null,
+      trope: null,
+      fitAuthorNote: null,
+      remarks: null,
+      freshTwist: "新鲜点",
+      coreSynopsis: "核心梗概",
+      creatorEditorId: editorActor.userId,
+      status: "draft",
+      currentVersionNo: 1,
+      latestVersionId: 30n,
+      mainType: null,
+      fitAuthors: [],
+    }
+    const preissueRecord = {
+      preissueId: 10n,
+      siId: 20n,
+      siVersionId: 30n,
+      editorId: editorActor.userId,
+      authorId: authorActor.userId,
+      preissueNote: "适合都市悬疑作者试写",
+      siSnapshotJson: {
+        title: "测试选题",
+        freshTwist: "新鲜点",
+        coreSynopsis: "核心梗概",
+      },
+      status: "preissued",
+      projectId: null,
+      preissuedAt,
+      recalledAt: null,
+      convertedAt: null,
+      storyIdea: {
+        ...storyIdea,
+        mainType: null,
+      },
+      editor: {
+        userId: editorActor.userId,
+        username: editorActor.username,
+        displayName: editorActor.name,
+      },
+      author: {
+        userId: authorActor.userId,
+        username: authorActor.username,
+        displayName: authorActor.name,
+      },
+      project: null,
+    }
+
+    vi.mocked(mockTx.storyIdea.findUnique).mockResolvedValue(storyIdea)
+    vi.mocked(mockTx.user.findMany).mockResolvedValue([{ userId: authorActor.userId }])
+    vi.mocked(mockTx.editorAuthorBinding.findMany).mockResolvedValue([{ authorId: authorActor.userId }])
+    vi.mocked(mockTx.siPreissue.findMany).mockResolvedValue([])
+    vi.mocked(mockTx.siPreissue.create).mockResolvedValue(preissueRecord)
+    vi.mocked(mockTx.storyIdea.update).mockResolvedValue({})
+    vi.mocked(mockTx.notification.createMany).mockResolvedValue({ count: 1 })
+    vi.mocked(mockTx.operationLog.create).mockResolvedValue({})
+
+    const result = await prepublishStoryIdea(editorActor, "20", {
+      authorIds: [authorActor.id],
+      note: "适合都市悬疑作者试写",
+    })
+
+    expect(mockTx.notification.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          recipientUserId: authorActor.userId,
+          type: "si_preissued",
+          messageKey: "notifications.siPrereleaseWithNote",
+          messageParams: expect.objectContaining({
+            siTitle: "测试选题",
+            preissueNote: "适合都市悬疑作者试写",
+          }),
+          preissueId: 10n,
+          entityId: 10n,
+        }),
+      ],
+    })
+    expect(result.records[0]).toEqual(
+      expect.objectContaining({
+        id: "10",
+        note: "适合都市悬疑作者试写",
       }),
     )
   })

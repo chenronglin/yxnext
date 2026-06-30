@@ -2,6 +2,7 @@
 
 import type { Editor } from "@tiptap/core"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useDebouncedCallback } from "use-debounce"
 
@@ -35,6 +36,8 @@ type DraftPayload = {
   contentJson: NovelDocJson
 }
 
+type WorkflowDialogAction = "submit" | "return" | "approve"
+
 function contentSignature(value: NovelDocJson) {
   // 自动保存用字符串签名判断“保存的是不是当前最新稿”，避免旧请求回包覆盖新编辑状态。
   return JSON.stringify(value)
@@ -55,6 +58,7 @@ function currentUserToNovelActor(user: ReturnType<typeof useRole>["user"]): Nove
 }
 
 export function DocEditor({ projectId, docRef }: { projectId: string; docRef: string }) {
+  const router = useRouter()
   const { user } = useRole()
   const createdBy = useMemo(() => currentUserToNovelActor(user), [user])
   const [view, setView] = useState<DocCurrentView | null>(null)
@@ -63,7 +67,7 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
   const [loading, setLoading] = useState(true)
   const [saveState, setSaveState] = useState<SaveState>("idle")
   const [workflowAction, setWorkflowAction] = useState<null | "submit" | "return" | "approve">(null)
-  const [workflowDialogAction, setWorkflowDialogAction] = useState<null | "submit" | "return">(null)
+  const [workflowDialogAction, setWorkflowDialogAction] = useState<WorkflowDialogAction | null>(null)
   const [workflowNote, setWorkflowNote] = useState("")
   const [editingPaused, setEditingPaused] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
@@ -88,6 +92,7 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
   }, [view])
 
   const basePath = `/projects/${projectId}/docs/${docRef}`
+  const projectDetailHref = `/projects/${projectId}`
   const canEdit = Boolean(view?.permissions.canEditContent && content && !editingPaused)
   const canUseWorkflow = Boolean(content && view?.source.kind === "draft" && !editingPaused)
   const trackChanges = Boolean(canEdit && view?.source.kind === "draft" && view.source.ownerRole === "editor")
@@ -306,8 +311,8 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
     return runLatestSave()
   }
 
-  function openWorkflowDialog(action: "submit" | "return") {
-    // 提交/退回说明不再常驻在页面右栏，避免正文编辑时被流程表单干扰。
+  function openWorkflowDialog(action: WorkflowDialogAction) {
+    // 提交、退回和审核通过说明不再常驻在页面右栏，避免正文编辑时被流程表单干扰。
     // 用户真正触发流程动作后才打开弹窗收集说明，和当前工作流语义保持一致。
     setWorkflowNote("")
     setWorkflowDialogAction(action)
@@ -363,6 +368,14 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
         body: JSON.stringify(body),
       })
 
+      if (action === "return" || action === "approve") {
+        // 编辑完成审稿动作后回到项目详情，方便继续查看项目整体进度与其它 Doc 状态。
+        setWorkflowDialogAction(null)
+        setWorkflowNote("")
+        router.push(projectDetailHref)
+        return
+      }
+
       applyLoadedView(
         response,
         action === "submit" ? "稿件已提交审核" : action === "return" ? "稿件已退回作者" : "稿件已审核通过",
@@ -390,7 +403,11 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
         <>
           <div className="shrink-0">
             <PageHeader
-              breadcrumb={[view.project.title, docTypeLabel(view.doc.docType), "当前稿件"]}
+              breadcrumb={[
+                { label: view.project.title, href: projectDetailHref },
+                { label: docTypeLabel(view.doc.docType), href: projectDetailHref },
+                "当前稿件",
+              ]}
               title={view.doc.title}
               description={trackChanges ? "当前由编辑持有，正文输入会自动写入修订标记。" : undefined}
               actions={
@@ -428,10 +445,10 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
                     <Button
                       className="bg-emerald-600 text-white hover:bg-emerald-700"
                       disabled={workflowAction !== null || !canUseWorkflow}
-                      onClick={() => void handleWorkflow("approve")}
+                      onClick={() => openWorkflowDialog("approve")}
                     >
                       <CheckCircle2 className="mr-1.5 size-4" />
-                      {workflowAction === "approve" ? "通过中..." : "审核通过"}
+                      {workflowAction === "approve" ? "通过中..." : "审稿通过"}
                     </Button>
                   )}
                 </div>
@@ -532,7 +549,7 @@ function WorkflowNoteDialog({
   onOpenChange,
   onConfirm,
 }: {
-  action: "submit" | "return" | null
+  action: WorkflowDialogAction | null
   note: string
   busy: boolean
   onNoteChange: (value: string) => void
@@ -540,15 +557,23 @@ function WorkflowNoteDialog({
   onConfirm: () => void
 }) {
   const isReturn = action === "return"
+  const isApprove = action === "approve"
+  const title = isReturn ? "退回作者" : isApprove ? "审稿通过" : "提交审核"
+  const description = isReturn
+    ? "请填写退回原因，作者会在流程记录中看到这段内容。"
+    : isApprove
+      ? "可填写本次审稿备注，作者会在通知与流程记录中看到这段内容。"
+      : "可补充本次提交说明，便于编辑快速了解修改重点。"
+  const placeholder = isReturn ? "请输入退回原因，必填" : isApprove ? "请输入审稿备注，可选" : "请输入提交说明，可选"
+  const busyText = isReturn ? "退回中..." : isApprove ? "通过中..." : "提交中..."
+  const confirmText = isReturn ? "退回作者" : isApprove ? "审稿通过" : "确认提交"
 
   return (
     <Dialog open={Boolean(action)} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>{isReturn ? "退回作者" : "提交审核"}</DialogTitle>
-          <DialogDescription>
-            {isReturn ? "请填写退回原因，作者会在流程记录中看到这段内容。" : "可补充本次提交说明，便于编辑快速了解修改重点。"}
-          </DialogDescription>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
 
         <Textarea
@@ -556,7 +581,7 @@ function WorkflowNoteDialog({
           value={note}
           onChange={(event) => onNoteChange(event.target.value)}
           disabled={busy}
-          placeholder={isReturn ? "请输入退回原因，必填" : "请输入提交说明，可选"}
+          placeholder={placeholder}
         />
 
         <DialogFooter>
@@ -564,7 +589,7 @@ function WorkflowNoteDialog({
             取消
           </Button>
           <Button type="button" disabled={busy || (isReturn && !note.trim())} onClick={onConfirm}>
-            {busy ? (isReturn ? "退回中..." : "提交中...") : isReturn ? "确认退回" : "确认提交"}
+            {busy ? busyText : confirmText}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -1149,6 +1149,7 @@ export async function prepublishStoryIdea(actor: ApiCurrentUser, siIdValue: stri
 
   const siId = parseBigIntId(siIdValue, "SI ID")
   const authorIds = uniqueBigIntIds(input.authorIds, "作者 ID")
+  const preissueNote = trimToNull(input.note ?? null)
 
   if (authorIds.length === 0) {
     throw new ApiError({
@@ -1233,7 +1234,7 @@ export async function prepublishStoryIdea(actor: ApiCurrentUser, siIdValue: stri
             siVersionId: si.latestVersionId,
             editorId: actor.userId,
             authorId,
-            preissueNote: trimToNull(input.note ?? null),
+            preissueNote,
             siSnapshotJson: snapshot,
             status: "preissued",
             // 预发唯一约束需要在“有效记录”写入唯一键；
@@ -1261,13 +1262,21 @@ export async function prepublishStoryIdea(actor: ApiCurrentUser, siIdValue: stri
         data: authorIds.map((authorId) => ({
           recipientUserId: authorId,
           type: "si_preissued",
-          messageKey: "notifications.siPrerelease",
-          messageParams: {
-            siTitle: si.title,
-          },
+          messageKey: preissueNote ? "notifications.siPrereleaseWithNote" : "notifications.siPrerelease",
+          messageParams: preissueNote
+            ? {
+                siTitle: si.title,
+                // 预发说明是编辑给作者的上下文，通知中心也需要能直接展示。
+                preissueNote,
+              }
+            : {
+                siTitle: si.title,
+              },
           title: "收到新的 SI 预发",
-          body: `编辑向你预发了《${si.title}》。`,
+          body: preissueNote ? `编辑向你预发了《${si.title}》。预发说明：${preissueNote}` : `编辑向你预发了《${si.title}》。`,
           siId,
+          // 作者通知跳转依赖 preissue_id；只写 entityId 会导致通知中心无法直达作者侧预发详情页。
+          preissueId: created.find((item) => item.authorId === authorId)?.preissueId,
           entityType: "si_preissue",
           entityId: created.find((item) => item.authorId === authorId)?.preissueId,
         })),
