@@ -51,6 +51,7 @@ export const enUSMessages = {
   "nav.bindings": "Editor-Author Bindings",
   "nav.params": "Parameters",
   "nav.audit": "Audit Logs",
+  "nav.ops": "Operations",
   "nav.reports": "Reports",
   "nav.notifications": "Notifications",
   "nav.ai": "AI Assistant",

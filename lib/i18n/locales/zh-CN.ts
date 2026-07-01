@@ -49,6 +49,7 @@ export const zhCNMessages = {
   "nav.bindings": "编辑-作者绑定",
   "nav.params": "参数管理",
   "nav.audit": "审计日志",
+  "nav.ops": "运维管理",
   "nav.reports": "统计报表",
   "nav.notifications": "通知中心",
   "nav.ai": "AI 助手",

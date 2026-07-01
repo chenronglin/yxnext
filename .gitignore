@@ -21,3 +21,7 @@ next-env.d.ts
 tsconfig.tsbuildinfo
 app.log
 app.pid
+
+# Runtime operation artifacts
+# 运维后台生成的备份文件只应保留在服务器本地或专用备份介质，不进入版本库。
+backups/

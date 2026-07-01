@@ -16,6 +16,7 @@ import {
   Send,
   BookMarked,
   ScrollText,
+  Wrench,
   type LucideIcon,
 } from "lucide-react"
 
@@ -34,6 +35,7 @@ const adminNav: NavItem[] = [
   { labelKey: "nav.bindings", href: "/admin/bindings", icon: Link2 },
   { labelKey: "nav.params", href: "/admin/params", icon: Settings2 },
   { labelKey: "nav.audit", href: "/admin/audit", icon: ScrollText },
+  { labelKey: "nav.ops", href: "/admin/ops", icon: Wrench },
   { labelKey: "nav.reports", href: "/reports", icon: BarChart3 },
   { labelKey: "nav.notifications", href: "/notifications", icon: Bell },
   { labelKey: "nav.ai", href: "/ai", icon: Bot },

@@ -12,7 +12,7 @@ function isSessionId(value: string | undefined | null): value is string {
 function isSecureSessionCookieEnabled() {
   const configuredValue = process.env.SESSION_COOKIE_SECURE?.trim().toLowerCase()
 
-  // middleware 负责滑动续期 cookie，必须和登录接口使用同一套 Secure 规则；
+  // Proxy 负责滑动续期 cookie，必须和登录接口使用同一套 Secure 规则；
   // HTTP 裸端口部署时显式设为 false，HTTPS 生产部署则默认保持 Secure。
   if (configuredValue === "false" || configuredValue === "0" || configuredValue === "no" || configuredValue === "off") {
     return false
@@ -71,13 +71,48 @@ function isSameOriginMutation(request: NextRequest) {
 }
 
 function applySecurityHeaders(response: NextResponse) {
+  const scriptSource =
+    process.env.NODE_ENV === "development"
+      ? "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://va.vercel-scripts.com"
+      : "script-src 'self' 'unsafe-inline' https://va.vercel-scripts.com"
+  const connectSource =
+    process.env.NODE_ENV === "development"
+      ? "connect-src 'self' ws: wss: https://vitals.vercel-insights.com"
+      : "connect-src 'self' https://vitals.vercel-insights.com"
+
   response.headers.set("X-Content-Type-Options", "nosniff")
+  response.headers.set("X-DNS-Prefetch-Control", "off")
   response.headers.set("X-Frame-Options", "DENY")
   response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin")
   response.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+  response.headers.set("Cross-Origin-Opener-Policy", "same-origin")
+  response.headers.set(
+    "Content-Security-Policy",
+    [
+      "default-src 'self'",
+      // Next.js 页面和当前富文本编辑器仍需要内联样式；这里先做不破坏业务的 CSP 收口，
+      // 后续如要完全移除 unsafe-inline，应改成 nonce 方案并逐页验证。
+      scriptSource,
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob:",
+      "font-src 'self' data:",
+      connectSource,
+      "object-src 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+      "frame-ancestors 'none'",
+    ].join("; "),
+  )
 }
 
-export function middleware(request: NextRequest) {
+function shouldApplyHsts(request: NextRequest) {
+  const forwardedProto = firstHeaderValue(request.headers.get("x-forwarded-proto"))
+
+  // HSTS 只在浏览器真实通过 HTTPS 访问时下发，避免本地 HTTP 或裸 IP 调试被浏览器强制升级锁死。
+  return forwardedProto === "https" || request.nextUrl.protocol === "https:"
+}
+
+export function proxy(request: NextRequest) {
   if (!isSameOriginMutation(request)) {
     return NextResponse.json(
       {
@@ -99,6 +134,10 @@ export function middleware(request: NextRequest) {
   })
 
   applySecurityHeaders(response)
+
+  if (shouldApplyHsts(request)) {
+    response.headers.set("Strict-Transport-Security", "max-age=15552000; includeSubDomains")
+  }
 
   const sessionId = request.cookies.get(SESSION_COOKIE_NAME)?.value
 
