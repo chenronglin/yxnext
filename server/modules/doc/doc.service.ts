@@ -54,6 +54,10 @@ type ApproveDocInput = {
   approveNote?: string | null
 }
 
+type CancelApprovalInput = {
+  cancelNote: string
+}
+
 type OperationLogInput = {
   actor: ApiCurrentUser
   action: string
@@ -399,6 +403,34 @@ function assertReviewableState(doc: WorkflowDocRecord) {
   return activeDraft
 }
 
+function assertCancelableApprovalState(doc: WorkflowDocRecord) {
+  if (doc.status !== "approved" || doc.holderRole !== "none") {
+    throw new ApiError({
+      status: 409,
+      code: "DOC_NOT_APPROVED",
+      message: "当前 Doc 不处于已定稿状态",
+    })
+  }
+
+  if (!doc.finalRevision || !doc.finalRevisionId) {
+    throw new ApiError({
+      status: 409,
+      code: "DOC_FINAL_REVISION_MISSING",
+      message: "当前 Doc 缺少最终版本，无法取消定稿",
+    })
+  }
+
+  if (doc.activeDraft && doc.activeDraft.status === "active") {
+    throw new ApiError({
+      status: 409,
+      code: "DOC_CANCEL_APPROVAL_STATE_INVALID",
+      message: "当前 Doc 已存在活跃草稿，无法取消定稿",
+    })
+  }
+
+  return doc.finalRevision
+}
+
 function assertSaveGate(doc: WorkflowDocRecord) {
   // 全文质检未解锁前完全禁止保存；其它阶段即使 gate 仍是 locked，也允许作者先写草稿。
   if (doc.stageCode === "release" && doc.project.releaseStatus === "locked") {
@@ -553,6 +585,14 @@ function toPermissions(actor: ApiCurrentUser, doc: WorkflowDocRecord): DocPermis
     activeDraft.ownerRole === "editor" &&
     activeDraft.ownerUserId === doc.project.editorId &&
     (actor.role === "admin" || (actor.role === "editor" && actor.userId === doc.project.editorId))
+  const reviewerCanCancelApproval = actor.role === "admin" || (actor.role === "editor" && actor.userId === doc.project.editorId)
+  const cancelableApproval =
+    doc.status === "approved" &&
+    doc.holderRole === "none" &&
+    !!doc.finalRevisionId &&
+    !!doc.finalRevision &&
+    !activeDraft &&
+    reviewerCanCancelApproval
   const releaseUnlocked = !(doc.stageCode === "release" && doc.project.releaseStatus === "locked")
   const stagePlan = findStagePlan(doc)
   const canSubmitStage =
@@ -573,6 +613,7 @@ function toPermissions(actor: ApiCurrentUser, doc: WorkflowDocRecord): DocPermis
       canSubmitStage,
     canReturn: projectWritable && reviewable,
     canApprove: projectWritable && reviewable,
+    canCancelApproval: projectWritable && cancelableApproval,
     canReadHistory: true,
   }
 }
@@ -842,6 +883,65 @@ async function upsertReturnTodo(tx: TxClient, doc: WorkflowDocRecord, now: Date,
         returnNote,
       },
       title: `Doc 待改：${doc.title}`,
+      description,
+      projectId: doc.project.projectId,
+      docId: doc.docId,
+      entityType: "doc",
+      entityId: doc.docId,
+      status: "open",
+      isRead: false,
+      readAt: null,
+      dueAt: stagePlan.dueAt,
+      dedupeKey: openDedupeKey,
+      openDedupeKey,
+    },
+  })
+}
+
+async function upsertCancelApprovalTodo(tx: TxClient, doc: WorkflowDocRecord, now: Date, cancelNote: string) {
+  const openDedupeKey = makeReturnTodoKey(doc.docId)
+  const stagePlan = assertDocStagePlanExists(doc)
+  const messageKey = "todos.cancelApprovalWithNote"
+  // 取消定稿后的下一步与普通退回一致，都是作者修改后再提交；
+  // 但待办文案必须明确“取消定稿”，避免作者误以为这是常规审稿退回。
+  const description = `编辑已取消《${doc.project.title}》的 ${doc.title} 定稿，请按意见修改后重新提交。取消原因：${cancelNote}`
+  const messageParams: Prisma.InputJsonObject = {
+    projectTitle: doc.project.title,
+    docTitle: doc.title,
+    cancelNote,
+  }
+
+  await tx.todoItem.upsert({
+    where: {
+      openDedupeKey,
+    },
+    update: {
+      recipientUserId: doc.project.authorId,
+      todoType: "doc_return",
+      messageKey,
+      messageParams,
+      title: `Doc 取消定稿：${doc.title}`,
+      description,
+      projectId: doc.project.projectId,
+      docId: doc.docId,
+      entityType: "doc",
+      entityId: doc.docId,
+      status: "open",
+      isRead: false,
+      readAt: null,
+      dueAt: stagePlan.dueAt,
+      completedAt: null,
+      cancelledAt: null,
+      dedupeKey: openDedupeKey,
+      openDedupeKey,
+      updatedAt: now,
+    },
+    create: {
+      recipientUserId: doc.project.authorId,
+      todoType: "doc_return",
+      messageKey,
+      messageParams,
+      title: `Doc 取消定稿：${doc.title}`,
       description,
       projectId: doc.project.projectId,
       docId: doc.docId,
@@ -1792,6 +1892,132 @@ export async function approveDoc(
           code: "DOC_SINGLE_STAGE_CONFLICT",
           message: "阶段单据已在其他操作中创建，请刷新后重试",
         },
+        {
+          constraintIncludes: ["active_doc_key"],
+          code: "DOC_ACTIVE_DRAFT_CONFLICT",
+          message: "当前 Doc 的活动草稿已在其他操作中切换，请刷新后重试",
+        },
+      ]) ?? error
+    )
+  }
+
+  return getCurrentDocView(actor, docIdValue)
+}
+
+export async function cancelDocApproval(
+  actor: ApiCurrentUser,
+  docIdValue: string,
+  input: CancelApprovalInput,
+): Promise<DocCurrentView> {
+  const docId = parseBigIntId(docIdValue, "Doc ID")
+  const cancelNote = trimToNull(input.cancelNote)
+  const now = new Date()
+
+  if (!cancelNote) {
+    throw new ApiError({
+      status: 400,
+      code: "DOC_CANCEL_APPROVAL_NOTE_REQUIRED",
+      message: "取消定稿说明不能为空",
+    })
+  }
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      const doc = await findVisibleDocOrThrow(tx, actor, docId)
+      assertProjectWritable(doc)
+      assertReviewer(actor, doc)
+      const finalRevision = assertCancelableApprovalState(doc)
+
+      const nextDraft = await createActiveDraft(tx, {
+        docId: doc.docId,
+        ownerRole: "author",
+        ownerUserId: doc.project.authorId,
+        baseRevisionId: finalRevision.revisionId,
+        contentSchemaVersion: finalRevision.contentSchemaVersion,
+        contentJson: asInputJson(finalRevision.contentJson),
+        wordCount: finalRevision.wordCount,
+        plainText: finalRevision.plainText,
+        cleanText: finalRevision.cleanText,
+        exportText: finalRevision.exportText,
+        summary: finalRevision.summary,
+        commentCount: finalRevision.commentCount,
+        suggestionCount: finalRevision.suggestionCount,
+        revisionMarkCount: finalRevision.revisionMarkCount,
+      })
+
+      await tx.doc.update({
+        where: {
+          docId: doc.docId,
+        },
+        data: {
+          status: "rejected",
+          holderRole: "author",
+          activeDraftId: nextDraft.draftId,
+          finalRevisionId: null,
+          currentWordCount: finalRevision.wordCount,
+          currentPlainText: finalRevision.plainText,
+          currentCleanText: finalRevision.cleanText,
+          summary: finalRevision.summary,
+          // 数据库动作枚举没有单独的“取消定稿”，这里复用退回动作保持状态流兼容；
+          // 真实动作名称写入 operation_logs.action，通知和待办也会显示“取消定稿”。
+          lastAction: "editor_reject",
+          lastActorId: actor.userId,
+          lastActionAt: now,
+          lastHandoffNote: cancelNote,
+          reviewedAt: now,
+          approvedAt: null,
+        },
+      })
+
+      await closeAllDocTodos(tx, doc.docId, now)
+      await upsertCancelApprovalTodo(tx, doc, now, cancelNote)
+
+      await createNotification(tx, {
+        recipientUserId: doc.project.authorId,
+        type: "doc_approval_cancelled",
+        messageKey: "notifications.docCancelApprovalWithNote",
+        messageParams: {
+          projectTitle: doc.project.title,
+          docTitle: doc.title,
+          cancelNote,
+        },
+        title: "Doc 已取消定稿",
+        body: `编辑已取消《${doc.project.title}》的 ${doc.title} 定稿，请按意见修改后重新提交。取消原因：${cancelNote}`,
+        projectId: doc.project.projectId,
+        docId: doc.docId,
+        entityId: doc.docId,
+      })
+
+      await writeOperationLog(tx, {
+        actor,
+        action: "doc.cancel_approval",
+        entityType: "doc",
+        entityId: doc.docId,
+        projectId: doc.project.projectId,
+        docId: doc.docId,
+        beforeJson: {
+          status: doc.status,
+          holderRole: doc.holderRole,
+          activeDraftId: doc.activeDraftId?.toString() ?? null,
+          latestRevisionId: doc.latestRevisionId?.toString() ?? null,
+          finalRevisionId: doc.finalRevisionId?.toString() ?? null,
+        },
+        afterJson: {
+          status: "rejected",
+          holderRole: "author",
+          activeDraftId: nextDraft.draftId.toString(),
+          latestRevisionId: doc.latestRevisionId?.toString() ?? null,
+          finalRevisionId: null,
+        },
+        metadataJson: {
+          cancelNote,
+          restoredFromRevisionId: finalRevision.revisionId.toString(),
+        },
+      })
+    })
+  } catch (error) {
+    throw (
+      translateUniqueConstraintError(error, [
         {
           constraintIncludes: ["active_doc_key"],
           code: "DOC_ACTIVE_DRAFT_CONFLICT",

@@ -58,7 +58,7 @@ vi.mock("@/server/db/prisma", () => ({
 
 import type { ApiCurrentUser } from "@/server/shared/current-user"
 import type { DocCurrentSource } from "@/types/doc"
-import { getCurrentDocView, saveDocDraft, submitDoc, returnDocToAuthor, approveDoc } from "@/server/modules/doc/doc.service"
+import { getCurrentDocView, saveDocDraft, submitDoc, returnDocToAuthor, approveDoc, cancelDocApproval } from "@/server/modules/doc/doc.service"
 import { createNovelDocV1, createNovelParagraph, type NovelDocJson } from "@/lib/novel-doc"
 
 const FIXED_TIME = new Date("2026-06-09T10:00:00.000Z")
@@ -1043,5 +1043,196 @@ describe("approveDoc", () => {
     expect(mockTx.project.update).not.toHaveBeenCalled()
     expect(result.project.currentStage).toBe("chapter")
     expect(result.project.releaseStatus).toBe("locked")
+  })
+})
+
+describe("cancelDocApproval", () => {
+  it("编辑取消定稿后只恢复稿件为作者待改，不回退项目阶段", async () => {
+    const finalRevision = makeRevision({
+      revisionId: 905n,
+      revisionNo: 6,
+      contentJson: makeNovelContent([
+        createNovelParagraph({
+          text: "已经定稿的正文",
+        }),
+      ]),
+      wordCount: 1800,
+      plainText: "已经定稿的正文",
+      cleanText: "已经定稿的正文",
+      exportText: "已经定稿的正文",
+      summary: "定稿摘要",
+      action: "editor_approve",
+      actorRole: "editor",
+      actorUserId: editorActor.userId,
+      actor: makeUser(editorActor.userId, editorActor.username, editorActor.name),
+    })
+    const beforeDoc = makeDocRecord({
+      stageCode: "chapter",
+      docType: "chapter",
+      title: "第一章",
+      status: "approved",
+      holderRole: "none",
+      activeDraftId: null,
+      activeDraft: null,
+      latestRevisionId: 905n,
+      finalRevisionId: 905n,
+      latestRevision: finalRevision,
+      finalRevision,
+      project: {
+        ...makeDocRecord().project,
+        currentStage: "release",
+        releaseStatus: "unlocked",
+        stagePlans: [
+          makeStagePlan("synopsis", { gateStatus: "completed", timelineStatus: "completed" }),
+          makeStagePlan("outline", { gateStatus: "completed", timelineStatus: "completed" }),
+          makeStagePlan("chapter", { gateStatus: "completed", timelineStatus: "completed" }),
+          makeStagePlan("release"),
+        ],
+      },
+    })
+    const restoredDraft = makeDraft({
+      draftId: 779n,
+      ownerRole: "author",
+      ownerUserId: authorActor.userId,
+      baseRevisionId: 905n,
+      contentJson: finalRevision.contentJson,
+      wordCount: finalRevision.wordCount,
+      plainText: finalRevision.plainText,
+      cleanText: finalRevision.cleanText,
+      exportText: finalRevision.exportText,
+      summary: finalRevision.summary,
+    })
+    const afterDoc = makeDocRecord({
+      stageCode: "chapter",
+      docType: "chapter",
+      title: "第一章",
+      status: "rejected",
+      holderRole: "author",
+      activeDraftId: 779n,
+      activeDraft: restoredDraft,
+      latestRevisionId: 905n,
+      finalRevisionId: null,
+      latestRevision: finalRevision,
+      finalRevision: null,
+      lastAction: "editor_reject",
+      lastActorId: editorActor.userId,
+      lastActor: makeUser(editorActor.userId, editorActor.username, editorActor.name),
+      lastHandoffNote: "结尾还需要补一场冲突",
+      reviewedAt: FIXED_TIME,
+      approvedAt: null,
+      project: beforeDoc.project,
+    })
+
+    mockTx.doc.findFirst.mockResolvedValueOnce(beforeDoc)
+    mockTx.docCurrentDraft.create.mockResolvedValueOnce(restoredDraft)
+    mockPrisma.doc.findFirst.mockResolvedValueOnce(afterDoc)
+
+    const result = await cancelDocApproval(editorActor, "1", {
+      cancelNote: "结尾还需要补一场冲突",
+    })
+
+    expect(mockTx.docCurrentDraft.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          ownerRole: "author",
+          ownerUserId: authorActor.userId,
+          baseRevisionId: finalRevision.revisionId,
+          contentJson: finalRevision.contentJson,
+        }),
+      }),
+    )
+    expect(mockTx.doc.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { docId: beforeDoc.docId },
+        data: expect.objectContaining({
+          status: "rejected",
+          holderRole: "author",
+          activeDraftId: restoredDraft.draftId,
+          finalRevisionId: null,
+          approvedAt: null,
+        }),
+      }),
+    )
+    expect(mockTx.project.update).not.toHaveBeenCalled()
+    expect(mockTx.projectStagePlan.update).not.toHaveBeenCalled()
+    expect(mockTx.todoItem.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: expect.objectContaining({
+          todoType: "doc_return",
+          messageKey: "todos.cancelApprovalWithNote",
+          messageParams: expect.objectContaining({
+            cancelNote: "结尾还需要补一场冲突",
+          }),
+        }),
+        create: expect.objectContaining({
+          todoType: "doc_return",
+          messageKey: "todos.cancelApprovalWithNote",
+          messageParams: expect.objectContaining({
+            cancelNote: "结尾还需要补一场冲突",
+          }),
+        }),
+      }),
+    )
+    expect(mockTx.notification.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          type: "doc_approval_cancelled",
+          messageKey: "notifications.docCancelApprovalWithNote",
+          messageParams: expect.objectContaining({
+            cancelNote: "结尾还需要补一场冲突",
+          }),
+        }),
+      }),
+    )
+    expect(mockTx.operationLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: "doc.cancel_approval",
+        }),
+      }),
+    )
+
+    const source = expectDraftSource(result.source)
+
+    expect(result.doc.status).toBe("returned")
+    expect(result.doc.finalRevisionId).toBeNull()
+    expect(source.ownerRole).toBe("author")
+    expect(source.baseRevisionId).toBe("905")
+    expect(result.project.currentStage).toBe("release")
+    expect(result.project.releaseStatus).toBe("unlocked")
+  })
+
+  it("取消定稿说明为空时直接报错", async () => {
+    await expect(
+      cancelDocApproval(editorActor, "1", {
+        cancelNote: "   ",
+      }),
+    ).rejects.toMatchObject({
+      code: "DOC_CANCEL_APPROVAL_NOTE_REQUIRED",
+      status: 400,
+    })
+
+    expect(mockTx.doc.findFirst).not.toHaveBeenCalled()
+  })
+
+  it("未定稿 Doc 不能取消定稿", async () => {
+    mockTx.doc.findFirst.mockResolvedValueOnce(
+      makeDocRecord({
+        status: "draft",
+        holderRole: "author",
+        activeDraft: makeDraft({ ownerRole: "author", ownerUserId: authorActor.userId }),
+      }),
+    )
+
+    await expect(
+      cancelDocApproval(editorActor, "1", {
+        cancelNote: "需要重新修改",
+      }),
+    ).rejects.toMatchObject({
+      code: "DOC_NOT_APPROVED",
+      status: 409,
+    })
+
+    expect(mockTx.docCurrentDraft.create).not.toHaveBeenCalled()
   })
 })

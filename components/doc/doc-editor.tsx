@@ -24,7 +24,7 @@ import {
   type NovelDocProjection,
 } from "@/lib/novel-doc"
 import type { DocCurrentView } from "@/types/doc"
-import { BookOpen, CheckCircle2, History, Info, PanelRightOpen, RotateCcw, Send } from "lucide-react"
+import { BookOpen, CheckCircle2, History, Info, PanelRightOpen, RotateCcw, Send, Undo2 } from "lucide-react"
 import { docTypeLabel, snapshotText } from "@/components/doc/doc-client-shared"
 
 type Message = {
@@ -36,7 +36,7 @@ type DraftPayload = {
   contentJson: NovelDocJson
 }
 
-type WorkflowDialogAction = "submit" | "return" | "approve"
+type WorkflowDialogAction = "submit" | "return" | "approve" | "cancelApproval"
 
 function contentSignature(value: NovelDocJson) {
   // 自动保存用字符串签名判断“保存的是不是当前最新稿”，避免旧请求回包覆盖新编辑状态。
@@ -66,7 +66,7 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
   const [editor, setEditor] = useState<Editor | null>(null)
   const [loading, setLoading] = useState(true)
   const [saveState, setSaveState] = useState<SaveState>("idle")
-  const [workflowAction, setWorkflowAction] = useState<null | "submit" | "return" | "approve">(null)
+  const [workflowAction, setWorkflowAction] = useState<WorkflowDialogAction | null>(null)
   const [workflowDialogAction, setWorkflowDialogAction] = useState<WorkflowDialogAction | null>(null)
   const [workflowNote, setWorkflowNote] = useState("")
   const [editingPaused, setEditingPaused] = useState(false)
@@ -95,6 +95,9 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
   const projectDetailHref = `/projects/${projectId}`
   const canEdit = Boolean(view?.permissions.canEditContent && content && !editingPaused)
   const canUseWorkflow = Boolean(content && view?.source.kind === "draft" && !editingPaused)
+  const canUseCancelApproval = Boolean(
+    view?.permissions.canCancelApproval && view.source.kind === "final_revision" && !editingPaused,
+  )
   const trackChanges = Boolean(canEdit && view?.source.kind === "draft" && view.source.ownerRole === "editor")
   const unsupportedLegacyDoc = Boolean(view && !content)
 
@@ -312,24 +315,33 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
   }
 
   function openWorkflowDialog(action: WorkflowDialogAction) {
-    // 提交、退回和审核通过说明不再常驻在页面右栏，避免正文编辑时被流程表单干扰。
+    // 流程说明不再常驻在页面右栏，避免正文编辑或最终版查看时被表单干扰。
     // 用户真正触发流程动作后才打开弹窗收集说明，和当前工作流语义保持一致。
     setWorkflowNote("")
     setWorkflowDialogAction(action)
     setMessage(null)
   }
 
-  async function handleWorkflow(action: "submit" | "return" | "approve", note = "") {
+  async function handleWorkflow(action: WorkflowDialogAction, note = "") {
     const currentView = viewRef.current
 
-    if (!currentView || currentView.source.kind !== "draft" || !canUseWorkflow) {
+    if (!currentView) {
       return
     }
 
+    const isCancelApproval = action === "cancelApproval"
     const normalizedNote = note.trim()
 
-    if (action === "return" && !normalizedNote) {
-      setMessage({ type: "error", text: "退回说明不能为空" })
+    if (isCancelApproval) {
+      if (currentView.source.kind !== "final_revision" || !currentView.permissions.canCancelApproval) {
+        return
+      }
+    } else if (currentView.source.kind !== "draft" || !canUseWorkflow) {
+      return
+    }
+
+    if ((action === "return" || isCancelApproval) && !normalizedNote) {
+      setMessage({ type: "error", text: isCancelApproval ? "取消定稿说明不能为空" : "退回说明不能为空" })
       return
     }
 
@@ -337,13 +349,13 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
     setMessage(null)
 
     try {
-      const flushed = await flushAutoSave()
+      const flushed = isCancelApproval ? true : await flushAutoSave()
 
       if (!flushed) {
         return
       }
 
-      const endpoint = action === "submit" ? "submit" : action === "return" ? "return" : "approve"
+      const endpoint = action === "submit" ? "submit" : action === "return" ? "return" : action === "approve" ? "approve" : "cancel-approval"
       const body =
         action === "submit"
           ? {
@@ -355,10 +367,14 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
                 lockVersion: lockVersionRef.current,
                 returnNote: normalizedNote,
               }
-            : {
-                lockVersion: lockVersionRef.current,
-                approveNote: normalizedNote || null,
-              }
+            : action === "approve"
+              ? {
+                  lockVersion: lockVersionRef.current,
+                  approveNote: normalizedNote || null,
+                }
+              : {
+                  cancelNote: normalizedNote,
+                }
 
       const response = await fetchJson<DocCurrentView>(`/api/docs/${docRef}/${endpoint}`, {
         method: "POST",
@@ -368,8 +384,8 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
         body: JSON.stringify(body),
       })
 
-      if (action === "return" || action === "approve") {
-        // 编辑完成审稿动作后回到项目详情，方便继续查看项目整体进度与其它 Doc 状态。
+      if (action === "return" || action === "approve" || action === "cancelApproval") {
+        // 编辑完成审稿动作或取消定稿后回到项目详情，方便继续查看其它 Doc 状态。
         setWorkflowDialogAction(null)
         setWorkflowNote("")
         router.push(projectDetailHref)
@@ -449,6 +465,17 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
                     >
                       <CheckCircle2 className="mr-1.5 size-4" />
                       {workflowAction === "approve" ? "通过中..." : "审稿通过"}
+                    </Button>
+                  )}
+                  {view.permissions.canCancelApproval && (
+                    <Button
+                      variant="outline"
+                      className="border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 hover:text-amber-900"
+                      disabled={workflowAction !== null || !canUseCancelApproval}
+                      onClick={() => openWorkflowDialog("cancelApproval")}
+                    >
+                      <Undo2 className="mr-1.5 size-4" />
+                      {workflowAction === "cancelApproval" ? "取消中..." : "取消定稿"}
                     </Button>
                   )}
                 </div>
@@ -558,15 +585,24 @@ function WorkflowNoteDialog({
 }) {
   const isReturn = action === "return"
   const isApprove = action === "approve"
-  const title = isReturn ? "退回作者" : isApprove ? "审稿通过" : "提交审核"
+  const isCancelApproval = action === "cancelApproval"
+  const title = isReturn ? "退回作者" : isApprove ? "审稿通过" : isCancelApproval ? "取消定稿" : "提交审核"
   const description = isReturn
     ? "请填写退回原因，作者会在流程记录中看到这段内容。"
     : isApprove
       ? "可填写本次审稿备注，作者会在通知与流程记录中看到这段内容。"
-      : "可补充本次提交说明，便于编辑快速了解修改重点。"
-  const placeholder = isReturn ? "请输入退回原因，必填" : isApprove ? "请输入审稿备注，可选" : "请输入提交说明，可选"
-  const busyText = isReturn ? "退回中..." : isApprove ? "通过中..." : "提交中..."
-  const confirmText = isReturn ? "退回作者" : isApprove ? "审稿通过" : "确认提交"
+      : isCancelApproval
+        ? "请填写取消定稿原因，作者会在待办、通知与流程记录中看到这段内容。"
+        : "可补充本次提交说明，便于编辑快速了解修改重点。"
+  const placeholder = isReturn
+    ? "请输入退回原因，必填"
+    : isApprove
+      ? "请输入审稿备注，可选"
+      : isCancelApproval
+        ? "请输入取消定稿原因，必填"
+        : "请输入提交说明，可选"
+  const busyText = isReturn ? "退回中..." : isApprove ? "通过中..." : isCancelApproval ? "取消中..." : "提交中..."
+  const confirmText = isReturn ? "退回作者" : isApprove ? "审稿通过" : isCancelApproval ? "取消定稿" : "确认提交"
 
   return (
     <Dialog open={Boolean(action)} onOpenChange={onOpenChange}>
@@ -588,7 +624,7 @@ function WorkflowNoteDialog({
           <Button type="button" variant="outline" className="bg-transparent" disabled={busy} onClick={() => onOpenChange(false)}>
             取消
           </Button>
-          <Button type="button" disabled={busy || (isReturn && !note.trim())} onClick={onConfirm}>
+          <Button type="button" disabled={busy || ((isReturn || isCancelApproval) && !note.trim())} onClick={onConfirm}>
             {busy ? busyText : confirmText}
           </Button>
         </DialogFooter>

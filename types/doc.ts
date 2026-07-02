@@ -79,6 +79,8 @@ export interface DocPermissions {
   canSubmit: boolean
   canReturn: boolean
   canApprove: boolean
+  // 已定稿稿件允许编辑或管理员取消定稿，并重新生成作者可修改的活跃草稿。
+  canCancelApproval: boolean
   canReadHistory: boolean
 }
 

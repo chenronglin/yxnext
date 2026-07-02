@@ -40,7 +40,13 @@ export const docApproveSchema = z.object({
   approveNote: z.string().optional().nullable(),
 })
 
+// 取消定稿会把已定稿稿件重新交回作者，因此需要说明原因，方便作者按明确意见修改。
+export const docCancelApprovalSchema = z.object({
+  cancelNote: z.string(),
+})
+
 export type DocSaveSchemaInput = z.infer<typeof docSaveSchema>
 export type DocSubmitSchemaInput = z.infer<typeof docSubmitSchema>
 export type DocReturnSchemaInput = z.infer<typeof docReturnSchema>
 export type DocApproveSchemaInput = z.infer<typeof docApproveSchema>
+export type DocCancelApprovalSchemaInput = z.infer<typeof docCancelApprovalSchema>

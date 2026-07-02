@@ -109,6 +109,7 @@ function notificationCategory(rawType: string): NotificationCategory {
   if (rawType === "project_created_from_si") return "si_convert"
   if (rawType === "doc_submitted_for_review") return "doc_submit"
   if (rawType === "doc_approved") return "doc_approve"
+  if (rawType === "doc_approval_cancelled") return "doc_return"
   if (rawType === "doc_returned") return "doc_return"
   if (rawType === "register_pending_approval") return "approval_request"
   if (rawType === "forgot_password_requested") return "forgot_password_request"
