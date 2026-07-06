@@ -1,4 +1,3 @@
-import { Analytics } from '@vercel/analytics/next'
 import type { Metadata } from 'next'
 
 import { I18nProvider } from '@/components/i18n-provider'
@@ -48,7 +47,6 @@ export default async function RootLayout({
         <I18nProvider locale={locale} messages={messages}>
           <AppFeedbackProvider>{children}</AppFeedbackProvider>
         </I18nProvider>
-        {process.env.NODE_ENV === 'production' && <Analytics />}
       </body>
     </html>
   )

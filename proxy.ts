@@ -73,12 +73,12 @@ function isSameOriginMutation(request: NextRequest) {
 function applySecurityHeaders(response: NextResponse) {
   const scriptSource =
     process.env.NODE_ENV === "development"
-      ? "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://va.vercel-scripts.com"
-      : "script-src 'self' 'unsafe-inline' https://va.vercel-scripts.com"
+      ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
+      : "script-src 'self' 'unsafe-inline'"
   const connectSource =
     process.env.NODE_ENV === "development"
-      ? "connect-src 'self' ws: wss: https://vitals.vercel-insights.com"
-      : "connect-src 'self' https://vitals.vercel-insights.com"
+      ? "connect-src 'self' ws: wss:"
+      : "connect-src 'self'"
 
   response.headers.set("X-Content-Type-Options", "nosniff")
   response.headers.set("X-DNS-Prefetch-Control", "off")
