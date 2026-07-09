@@ -56,6 +56,8 @@ type TextRange = {
 type CompositionBase = TextRange & {
   slice: Slice
   existingInsertedAttrs: RevisionAttributes | null
+  // 记录 compositionstart 时的文档尺寸，compositionend 延迟补标时用它反推本次 IME 插入长度。
+  docContentSize: number
 }
 
 type RevisionTrackingOptions = {
@@ -103,6 +105,16 @@ declare module "@tiptap/core" {
 const revisionTrackingKey = new PluginKey<RevisionPluginState>("novel-revision-tracking")
 
 const discussionHighlightKey = new PluginKey<{ activeId: string | null }>("novel-discussion-highlight")
+
+type RevisionCompositionRuntime = {
+  isComposing: () => boolean
+  hasPendingFinalize: () => boolean
+  flushPendingFinalize: (view: EditorView) => boolean
+}
+
+// composition 状态属于浏览器输入会话，不应写入 ProseMirror 文档或 JSON；
+// 用 WeakMap 按 EditorView 暂存运行时句柄，方便 React 受控 value 回写前判断是否需要让 pending 补标先落地。
+const revisionCompositionRuntimeByView = new WeakMap<EditorView, RevisionCompositionRuntime>()
 
 function fallbackActor(): NovelCreatedBy {
   // 这个兜底只用于极端情况下防止 JSON 结构缺字段；正常路径会由 RoleProvider 注入当前用户快照。
@@ -648,25 +660,64 @@ function captureRange(view: EditorView): TextRange {
   return rangeFromSelection(view.state, view.state.selection)
 }
 
+function insertedRangeFromCompositionBase(state: EditorState, base: CompositionBase) {
+  const replacedSize = Math.max(0, base.to - base.from)
+  const insertedSize = state.doc.content.size - base.docContentSize + replacedSize
+
+  // compositionend 后可能先发生点击、侧栏定位等选区事务；这些事务不会改变文档大小。
+  // 因此这里用“当前文档大小 - composition 开始时文档大小 + 被替换区间大小”
+  // 反推 IME 本次真正插入了多少内容，而不是读取已经可能变化的 state.selection。
+  return normalizeRange(state, base.from, base.from + Math.max(0, insertedSize))
+}
+
+function selectionStillAtCompositionEnd(state: EditorState, insertedRange: TextRange) {
+  return state.selection.empty && state.selection.from === insertedRange.to
+}
+
+function preserveOrSetCompositionSelection(
+  state: EditorState,
+  tr: Transaction,
+  insertedRange: TextRange,
+  cursorPos: number,
+) {
+  if (selectionStillAtCompositionEnd(state, insertedRange)) {
+    tr.setSelection(TextSelection.create(tr.doc, cursorPos))
+    return
+  }
+
+  const mappedFrom = tr.mapping.map(state.selection.from, 1)
+  const mappedTo = tr.mapping.map(state.selection.to, 1)
+
+  try {
+    // 如果用户在异步补标执行前已经点击到其它段落，补标事务必须尊重用户的新选区；
+    // 否则就会表现为“打字后光标莫名跳回刚才输入的位置”。
+    tr.setSelection(TextSelection.create(tr.doc, mappedFrom, mappedTo))
+  } catch {
+    const safeCursor = Math.max(0, Math.min(cursorPos, tr.doc.content.size))
+
+    tr.setSelection(TextSelection.create(tr.doc, safeCursor))
+  }
+}
+
 export function finalizeComposition(view: EditorView, base: CompositionBase, options: RevisionTrackingOptions) {
   const { state } = view
-  const insertedRange = normalizeRange(state, base.from, state.selection.from)
+  const insertedRange = insertedRangeFromCompositionBase(state, base)
 
   if (!options.enabled || insertedRange.from === insertedRange.to) {
-    return
+    return false
   }
 
   if (base.existingInsertedAttrs) {
     const insertedMark = createRevisionMark(state, base.existingInsertedAttrs)
 
     if (!insertedMark) {
-      return
+      return false
     }
 
     const tr = state.tr.addMark(insertedRange.from, insertedRange.to, insertedMark)
     const cursorPos = insertedRange.to
 
-    tr.setSelection(TextSelection.create(tr.doc, cursorPos))
+    preserveOrSetCompositionSelection(state, tr, insertedRange, cursorPos)
     tr.setMeta(revisionTrackingKey, {
       id: base.existingInsertedAttrs.id,
       groupId: base.existingInsertedAttrs.groupId,
@@ -676,8 +727,8 @@ export function finalizeComposition(view: EditorView, base: CompositionBase, opt
       to: cursorPos,
       composition: true,
     } satisfies RevisionPluginMeta)
-    view.dispatch(tr.scrollIntoView())
-    return
+    view.dispatch(tr)
+    return true
   }
 
   const isReplacement = base.from !== base.to
@@ -686,7 +737,7 @@ export function finalizeComposition(view: EditorView, base: CompositionBase, opt
   const insertedMark = createRevisionMark(state, insertedAttrs)
 
   if (!insertedMark) {
-    return
+    return false
   }
 
   const tr = state.tr.addMark(insertedRange.from, insertedRange.to, insertedMark)
@@ -697,7 +748,7 @@ export function finalizeComposition(view: EditorView, base: CompositionBase, opt
     const originalMark = createRevisionMark(state, makeOriginalRevisionAttrs(insertedAttrs))
 
     if (!originalMark) {
-      return
+      return false
     }
 
     const originalFrom = insertedRange.to
@@ -709,7 +760,7 @@ export function finalizeComposition(view: EditorView, base: CompositionBase, opt
 
   const cursorPos = insertedRange.to
 
-  tr.setSelection(TextSelection.create(tr.doc, cursorPos))
+  preserveOrSetCompositionSelection(state, tr, insertedRange, cursorPos)
   tr.setMeta(revisionTrackingKey, {
     id: insertedAttrs.id,
     groupId: insertedAttrs.groupId,
@@ -719,7 +770,8 @@ export function finalizeComposition(view: EditorView, base: CompositionBase, opt
     to: cursorPos,
     composition: true,
   } satisfies RevisionPluginMeta)
-  view.dispatch(tr.scrollIntoView())
+  view.dispatch(tr)
+  return true
 }
 
 // 输入法（composition）状态机：每个编辑器实例独享一份闭包状态。
@@ -731,8 +783,8 @@ export function createRevisionCompositionController(getOptions: () => RevisionTr
   let compositionTimer: ReturnType<typeof setTimeout> | null = null
 
   function flushPendingComposition(view: EditorView) {
-    if (!compositionTimer) {
-      return
+    if (!compositionTimer || !compositionBase) {
+      return false
     }
 
     // IME 连打时，上一段 compositionend 排进 setTimeout 的 finalize 可能还没执行。
@@ -742,17 +794,27 @@ export function createRevisionCompositionController(getOptions: () => RevisionTr
     clearTimeout(compositionTimer)
     compositionTimer = null
 
-    if (compositionBase) {
-      finalizeComposition(view, compositionBase, getOptions())
-      compositionBase = null
-    }
+    const finalized = finalizeComposition(view, compositionBase, getOptions())
+
+    compositionBase = null
+    return finalized
+  }
+
+  const runtime: RevisionCompositionRuntime = {
+    // handleTextInput/handlePaste 用它判断是否处在输入法会话中（此时不能再走直接插入路径）。
+    isComposing() {
+      return isComposing
+    },
+    hasPendingFinalize() {
+      return Boolean(compositionTimer && compositionBase)
+    },
+    flushPendingFinalize(view: EditorView) {
+      return flushPendingComposition(view)
+    },
   }
 
   return {
-    // handleTextInput/handlePaste 用它判断是否处在输入法会话中（此时不能再走直接插入路径）。
-    isActive() {
-      return isComposing
-    },
+    ...runtime,
     handleCompositionStart(view: EditorView) {
       const options = getOptions()
 
@@ -768,6 +830,7 @@ export function createRevisionCompositionController(getOptions: () => RevisionTr
       compositionBase = {
         ...range,
         slice: view.state.doc.slice(range.from, range.to),
+        docContentSize: view.state.doc.content.size,
         // compositionend 发生时文档已被浏览器改写，必须在开始时记录是否处在已有 inserted 修订内。
         existingInsertedAttrs: findInsertedRevisionCoveringRange(view.state, range),
       }
@@ -786,8 +849,8 @@ export function createRevisionCompositionController(getOptions: () => RevisionTr
 
       // 仍用 setTimeout(0) 等浏览器把 composition 的最终文本同步进 ProseMirror，再据此计算插入范围。
       // 与旧逻辑的区别在于：若下一段输入在它执行前到来，会由 flushPendingComposition 先行补打，而不是被丢弃。
+      isComposing = false
       compositionTimer = setTimeout(() => {
-        isComposing = false
         compositionTimer = null
         finalizeComposition(view, base, options)
 
@@ -798,7 +861,38 @@ export function createRevisionCompositionController(getOptions: () => RevisionTr
 
       return false
     },
+    destroy() {
+      if (compositionTimer) {
+        clearTimeout(compositionTimer)
+      }
+
+      isComposing = false
+      compositionBase = null
+      compositionTimer = null
+    },
   }
+}
+
+export function isRevisionCompositionBusy(editor: Editor | null) {
+  if (!editor || editor.isDestroyed) {
+    return false
+  }
+
+  const runtime = revisionCompositionRuntimeByView.get(editor.view)
+
+  // view.composing 是 ProseMirror 对浏览器原生 IME 会话的判断；
+  // runtime.hasPendingFinalize 则覆盖 compositionend 已发生、但延迟补标事务尚未落地的短暂窗口。
+  return Boolean(editor.view.composing || runtime?.isComposing() || runtime?.hasPendingFinalize())
+}
+
+export function flushPendingRevisionComposition(editor: Editor | null) {
+  if (!editor || editor.isDestroyed || editor.view.composing) {
+    return false
+  }
+
+  const runtime = revisionCompositionRuntimeByView.get(editor.view)
+
+  return runtime?.flushPendingFinalize(editor.view) ?? false
 }
 
 export const NovelDocument = Document.extend({
@@ -1045,6 +1139,16 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
     return [
       new Plugin<RevisionPluginState>({
         key: revisionTrackingKey,
+        view(view) {
+          revisionCompositionRuntimeByView.set(view, composition)
+
+          return {
+            destroy() {
+              composition.destroy()
+              revisionCompositionRuntimeByView.delete(view)
+            },
+          }
+        },
         state: {
           init: () => ({ lastId: null, lastGroupId: null, lastKind: null, lastPos: null }),
           apply(transaction, value, _oldState, newState) {
@@ -1072,9 +1176,13 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
         },
         props: {
           handleTextInput: (view, from, to, text) => {
-            if (composition.isActive() || view.composing) {
+            if (composition.isComposing() || view.composing) {
               return false
             }
+
+            // 直接输入可能紧跟在中文输入法 compositionend 后面到来；
+            // 先补完上一段 IME 文本的修订标记，再按新的输入事件继续处理。
+            composition.flushPendingFinalize(view)
 
             if (!this.options.enabled) {
               return applyPlainTextWithoutRevision(view, text, normalizeRange(view.state, from, to))
@@ -1083,9 +1191,12 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
             return applyInsertedText(view, text, normalizeRange(view.state, from, to), this.options)
           },
           handlePaste: (view, event) => {
-            if (composition.isActive() || view.composing) {
+            if (composition.isComposing() || view.composing) {
               return false
             }
+
+            // 粘贴也可能发生在 IME 补标计时器之前；这里先收口上一段输入，避免粘贴内容和上一段无标记文本混在一起。
+            composition.flushPendingFinalize(view)
 
             const text = plainTextFromClipboard(event)
 
@@ -1104,6 +1215,14 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
               return false
             }
 
+            if (composition.isComposing() || view.composing) {
+              return false
+            }
+
+            // 删除键是最容易命中 IME 补标窗口期的操作：用户刚打错一个字马上退格时，
+            // 必须先把这个字标成 inserted，后续删除才会走“删除新增文本”而不是“标删原文”。
+            composition.flushPendingFinalize(view)
+
             const { state } = view
             const range = rangeFromSelection(state, state.selection)
             const targetRange =
@@ -1113,7 +1232,7 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
                   ? normalizeRange(state, state.selection.from - 1, state.selection.from)
               : forwardDeleteRangeSkippingDeletedText(state, state.selection.from)
 
-            if (rangeContainsCommentMark(state, targetRange)) {
+            if (range.from !== range.to && rangeContainsCommentMark(state, targetRange)) {
               // 批注锚点如果随正文删除，会让右侧讨论栏失去定位；这里先要求用户确认，避免误删批注语义。
               const confirmed = window.confirm("选中内容包含批注标记，删除会一并移除批注定位。确认继续吗？")
 
@@ -1128,6 +1247,15 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
           handleDOMEvents: {
             compositionstart: (view) => composition.handleCompositionStart(view),
             compositionend: (view) => composition.handleCompositionEnd(view),
+            mousedown: (view) => {
+              // 鼠标点击会先改变 DOM 选区，再触发 ProseMirror 选区事务；
+              // 在点击前补完 pending composition，可以避免异步补标把范围算到用户刚点击的其它段落。
+              if (!composition.isComposing() && !view.composing) {
+                composition.flushPendingFinalize(view)
+              }
+
+              return false
+            },
           },
         },
       }),

@@ -6,7 +6,14 @@ import type { Editor } from "@tiptap/core"
 import { Bold, ChevronDown, Eraser, Heading1, Heading2, Heading3, Italic, MessageSquarePlus, Palette, Pilcrow, Quote, Save, Strikethrough, Trash2, UnderlineIcon } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
 
-import { addCommentToRange, createNovelEditorExtensions, insertEditSuggestionAfterSelection, isRevisionTrackingEnabled } from "@/components/doc/tiptap/extensions"
+import {
+  addCommentToRange,
+  createNovelEditorExtensions,
+  flushPendingRevisionComposition,
+  insertEditSuggestionAfterSelection,
+  isRevisionCompositionBusy,
+  isRevisionTrackingEnabled,
+} from "@/components/doc/tiptap/extensions"
 import { Button } from "@/components/ui/button"
 import {
   deriveNovelDocProjection,
@@ -371,6 +378,22 @@ export function NovelTiptapEditor({
       // 也不能用这个可能稍旧的 value 覆盖整篇文档；只把它标记为已见过即可。
       localEchoSignatures.current.splice(localEchoIndex, 1)
       lastExternalValue.current = next
+      return
+    }
+
+    if (isRevisionCompositionBusy(editor)) {
+      // 中文输入法输入期间，ProseMirror 文档会先出现一份“尚未补 revision mark”的临时内容；
+      // 此时如果 React 受控 value 把旧快照整篇 setContent 回来，就会打断 compositionend 的补标流程。
+      // 能安全 flush 的 pending finalize 先落地；仍处于浏览器原生 composing 时则直接跳过本轮外部回写，
+      // 等 compositionend 触发 onUpdate 后再由新的 value 同步。
+      flushPendingRevisionComposition(editor)
+
+      const currentAfterFlush = stringifyContent(editor.getJSON() as NovelDocJson)
+
+      if (next === currentAfterFlush) {
+        lastExternalValue.current = next
+      }
+
       return
     }
 

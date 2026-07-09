@@ -3,7 +3,7 @@ import { Editor } from "@tiptap/core"
 import { TextSelection } from "@tiptap/pm/state"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { RevisionMark, createRevisionCompositionController } from "@/components/doc/tiptap/extensions"
+import { RevisionMark, createRevisionCompositionController, markDeletedRange } from "@/components/doc/tiptap/extensions"
 import type { NovelCreatedBy } from "@/lib/novel-doc"
 
 const CREATED_BY: NovelCreatedBy = { userId: "e1", role: "editor", nameSnapshot: "编辑甲" }
@@ -66,6 +66,11 @@ const originalText = (editor: Editor) =>
     .join("")
 
 const revisionIdCount = (editor: Editor) => new Set(segments(editor).filter((s) => s.id).map((s) => s.id)).size
+const deletedText = (editor: Editor) =>
+  segments(editor)
+    .filter((s) => s.role === "deleted")
+    .map((s) => s.text)
+    .join("")
 
 describe("修订 composition（中文输入法）路径", () => {
   it("场景E：用输入法替换原文，标记新文为 inserted、原文为 original", () => {
@@ -164,6 +169,60 @@ describe("修订 composition（中文输入法）路径", () => {
     expect(originalText(editor)).toBe("原文")
     expect(revisionIdCount(editor)).toBe(1)
     expect(segments(editor).some((s) => s.text === "补充" && s.role === null)).toBe(false)
+    vi.useRealTimers()
+    editor.destroy()
+  })
+
+  it("场景I：IME 提交后立刻退格，先补 inserted 再删除，不产生 deleted 修订", () => {
+    const editor = makeEditor("原文")
+    vi.useFakeTimers()
+    const controller = createRevisionCompositionController(() => OPTIONS)
+
+    setSelection(editor, 1, 3)
+    controller.handleCompositionStart(editor.view)
+    browserInsert(editor, 1, 3, "错")
+    controller.handleCompositionEnd(editor.view)
+
+    // 真实用户会在 compositionend 的 setTimeout(0) 补标前马上按 Backspace；
+    // 删除键处理必须先 flush pending composition，否则“错”会被误判为原文并留下红色删除修订。
+    controller.flushPendingFinalize(editor.view)
+    markDeletedRange(editor.state, { from: 1, to: 2 }, OPTIONS, (tr) => editor.view.dispatch(tr))
+
+    expect(insertedText(editor)).toBe("")
+    expect(originalText(editor)).toBe("原文")
+    expect(deletedText(editor)).toBe("")
+    vi.runOnlyPendingTimers()
+    vi.useRealTimers()
+    editor.destroy()
+  })
+
+  it("场景J：pending finalize 前选区移动，不会把其它段落误标为 inserted", () => {
+    const editor = new Editor({
+      extensions: [StarterKit, RevisionMark.configure({ enabled: true, createdBy: CREATED_BY })],
+      content: {
+        type: "doc",
+        content: [
+          { type: "paragraph", content: [{ type: "text", text: "原文" }] },
+          { type: "paragraph", content: [{ type: "text", text: "第二段" }] },
+        ],
+      },
+    })
+    vi.useFakeTimers()
+    const controller = createRevisionCompositionController(() => OPTIONS)
+
+    setSelection(editor, 1, 3)
+    controller.handleCompositionStart(editor.view)
+    browserInsert(editor, 1, 3, "新")
+    controller.handleCompositionEnd(editor.view)
+
+    // 模拟用户在异步补标执行前点击到第二段；补标范围必须仍只覆盖“新”，不能读取新的 selection。
+    setSelection(editor, 5)
+    vi.runOnlyPendingTimers()
+
+    expect(insertedText(editor)).toBe("新")
+    expect(originalText(editor)).toBe("原文")
+    expect(segments(editor).find((segment) => segment.text.includes("第二段"))?.role).toBeNull()
+    expect(editor.state.selection.from).toBeGreaterThan(2)
     vi.useRealTimers()
     editor.destroy()
   })
