@@ -8,6 +8,7 @@ import {
   findInsertedRevisionAtPosition,
   findInsertedRevisionCoveringRange,
   findMergeableInsertedRevision,
+  getRevisionDeleteTargetRange,
   makeOriginalRevisionAttrs,
   resolveInsertedRevision,
   markDeletedRange,
@@ -426,6 +427,70 @@ describe("markDeletedRange", () => {
       kind: "insert",
       role: "inserted",
     })
+  })
+
+  it("Backspace 按完整字素删除 ZWJ emoji，不拆分 UTF-16 代理对", () => {
+    const emoji = "👩‍💻"
+    const doc = schema.nodes.doc.create(null, [schema.nodes.paragraph.create(null, [schema.text(`A${emoji}B`)])])
+    const state = makeState(doc)
+    const cursorAfterEmoji = 1 + "A".length + emoji.length
+    const range = getRevisionDeleteTargetRange(state, cursorAfterEmoji, "backward")
+    const result = dispatchDeletedRange(state, range)
+
+    expect(range).toEqual({ from: 2, to: 2 + emoji.length })
+    expect(result.doc?.textContent).toBe(`A${emoji}B`)
+    expect(collectRevisionText(result.doc!)).toContainEqual(expect.objectContaining({
+      text: emoji,
+      role: "deleted",
+    }))
+  })
+
+  it("Delete 按完整组合字素处理带音标字符", () => {
+    const combined = "e\u0301"
+    const doc = schema.nodes.doc.create(null, [schema.nodes.paragraph.create(null, [schema.text(`${combined}后`)])])
+    const state = makeState(doc)
+    const range = getRevisionDeleteTargetRange(state, 1, "forward")
+    const result = dispatchDeletedRange(state, range)
+
+    expect(range).toEqual({ from: 1, to: 1 + combined.length })
+    expect(collectRevisionText(result.doc!)).toContainEqual(expect.objectContaining({
+      text: combined,
+      role: "deleted",
+    }))
+  })
+
+  it("再次删除 already-deleted/original 展示文字时消费事件但保留原 revision 身份", () => {
+    const deletedAttrs = {
+      id: "revision_deleted_existing",
+      groupId: "revision_group_existing",
+      kind: "delete",
+      role: "deleted",
+      createdBy: CREATED_BY,
+      createdAt: "2026-06-10T10:00:00.000Z",
+    }
+    const originalAttrs = {
+      id: "revision_replace_existing",
+      groupId: "revision_group_replace",
+      kind: "replace",
+      role: "original",
+      createdBy: CREATED_BY,
+      createdAt: "2026-06-10T10:00:00.000Z",
+    }
+    const doc = schema.nodes.doc.create(null, [
+      schema.nodes.paragraph.create(null, [
+        schema.text("删", [makeRevisionMark(deletedAttrs)]),
+        schema.text("原", [makeRevisionMark(originalAttrs)]),
+      ]),
+    ])
+    const state = makeState(doc)
+    const result = dispatchDeletedRange(state, { from: 1, to: 3 })
+
+    expect(result.applied).toBe(true)
+    expect(result.tr).toBeUndefined()
+    expect(collectRevisionText(state.doc)).toEqual([
+      expect.objectContaining({ text: "删", id: "revision_deleted_existing", role: "deleted" }),
+      expect.objectContaining({ text: "原", id: "revision_replace_existing", role: "original" }),
+    ])
   })
 
   it("deleting a mixed range containing both original and inserted text deletes inserted directly and marks original as deleted", () => {

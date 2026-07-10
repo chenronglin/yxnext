@@ -21,7 +21,6 @@ import {
   stampNovelDocUpdatedAt,
   type NovelCreatedBy,
   type NovelDocJson,
-  type NovelDocProjection,
 } from "@/lib/novel-doc"
 import type { DocCurrentView } from "@/types/doc"
 import { BookOpen, CheckCircle2, History, Info, PanelRightOpen, RotateCcw, Send, Undo2 } from "lucide-react"
@@ -284,12 +283,14 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
     }
   }, [])
 
-  function handleEditorChange(json: NovelDocJson, _nextProjection: NovelDocProjection) {
+  function handleEditorChange(json: NovelDocJson) {
     if (!viewRef.current?.permissions.canSave || pausedByConflictRef.current) {
       return
     }
 
-    setContent(json)
+    // 编辑会话内由 Tiptap/ProseMirror 独占正文状态；这里不再把每个 transaction 的 JSON
+    // 逐字镜像回 React content。否则父组件重渲染后，子组件很容易把旧 value 误判为外部换稿，
+    // 进而用整篇 setContent 覆盖当前 selection。自动保存始终读取 latestPayloadRef，因此无需丢失任何修改。
     latestPayloadRef.current = {
       contentJson: json,
     }

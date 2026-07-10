@@ -35,15 +35,54 @@ describe("Novel Editor Tiptap JSON v1", () => {
     expect(isNovelDocV1({ type: "doc", content: [] })).toBe(false)
   })
 
-  it("为缺少 id 的段落和标题补齐 block id", () => {
+  it("为缺少、空白或类型错误的段落和标题 id 补齐 block id", () => {
     const doc = makeDoc([
       { type: "heading", attrs: { level: 1 }, content: [{ type: "text", text: "标题" }] },
-      { type: "paragraph", content: [{ type: "text", text: "正文" }] },
+      { type: "paragraph", attrs: { id: "" }, content: [{ type: "text", text: "正文一" }] },
+      { type: "paragraph", attrs: { id: "   " }, content: [{ type: "text", text: "正文二" }] },
+      { type: "heading", attrs: { id: 42, level: 2 }, content: [{ type: "text", text: "小标题" }] },
     ])
     const fixed = ensureNovelBlockIds(doc)
+    const fixedIds = fixed.content.map((block) => String(block.attrs?.id))
 
-    expect(String(fixed.content[0].attrs?.id)).toMatch(/^block_h_/)
-    expect(String(fixed.content[1].attrs?.id)).toMatch(/^block_p_/)
+    expect(fixedIds[0]).toMatch(/^block_h_/)
+    expect(fixedIds[1]).toMatch(/^block_p_/)
+    expect(fixedIds[2]).toMatch(/^block_p_/)
+    expect(fixedIds[3]).toMatch(/^block_h_/)
+    expect(new Set(fixedIds).size).toBe(fixedIds.length)
+  })
+
+  it("修复重复 block id，并保持所有已唯一的合法 id 不变", () => {
+    const doc = makeDoc([
+      { type: "paragraph", attrs: { id: "block_p_unique" }, content: [{ type: "text", text: "唯一段落" }] },
+      { type: "heading", attrs: { id: "block_shared", level: 1 }, content: [{ type: "text", text: "首次出现" }] },
+      { type: "paragraph", attrs: { id: "block_shared" }, content: [{ type: "text", text: "重复段落" }] },
+      { type: "heading", attrs: { id: "custom-heading-id", level: 2 }, content: [{ type: "text", text: "唯一标题" }] },
+      {
+        type: "editSuggestion",
+        attrs: { id: "block_shared", anchorBlockId: "block_p_unique", body: "其它业务节点不参与正文 id 去重" },
+      },
+    ])
+    const fixed = ensureNovelBlockIds(doc)
+    const textBlockIds = fixed.content
+      .filter((block) => block.type === "paragraph" || block.type === "heading")
+      .map((block) => String(block.attrs?.id))
+
+    // 唯一合法 id 与重复 id 的第一次出现者都必须保持原值，避免破坏既有锚点引用。
+    expect(fixed.content[0].attrs?.id).toBe("block_p_unique")
+    expect(fixed.content[1].attrs?.id).toBe("block_shared")
+    expect(fixed.content[3].attrs?.id).toBe("custom-heading-id")
+
+    // 后续重复项按自身块类型生成新 id，并且规范化后的正文 id 全局唯一。
+    expect(String(fixed.content[2].attrs?.id)).toMatch(/^block_p_/)
+    expect(fixed.content[2].attrs?.id).not.toBe("block_shared")
+    expect(new Set(textBlockIds).size).toBe(textBlockIds.length)
+
+    // 编辑建议使用独立业务 id 命名空间，不能因正文 block id 去重而被改写。
+    expect(fixed.content[4].attrs?.id).toBe("block_shared")
+
+    // 首次规范化已经得到合法且唯一的正文 id；再次规范化必须完全幂等，不能反复生成新锚点。
+    expect(ensureNovelBlockIds(fixed)).toEqual(fixed)
   })
 
   it("按清稿规则计算正文、字数和批注修订计数", () => {

@@ -9,11 +9,11 @@ import Highlight from "@tiptap/extension-highlight"
 import Paragraph from "@tiptap/extension-paragraph"
 import Placeholder from "@tiptap/extension-placeholder"
 import { TextStyle } from "@tiptap/extension-text-style"
-import Underline from "@tiptap/extension-underline"
 import StarterKit from "@tiptap/starter-kit"
 import { Fragment, Slice, type Mark as ProseMirrorMark, type Node as ProseMirrorNode } from "@tiptap/pm/model"
-import { Plugin, PluginKey, TextSelection } from "@tiptap/pm/state"
+import { Plugin, PluginKey, Selection as ProseMirrorSelection, TextSelection } from "@tiptap/pm/state"
 import type { EditorState, Selection, Transaction } from "@tiptap/pm/state"
+import { dropPoint, Mapping } from "@tiptap/pm/transform"
 import { Decoration, DecorationSet, type EditorView } from "@tiptap/pm/view"
 import { NodeViewWrapper, ReactNodeViewRenderer } from "@tiptap/react"
 import type { ReactNodeViewProps } from "@tiptap/react"
@@ -32,11 +32,14 @@ import {
 import { cn } from "@/lib/utils"
 
 type RevisionPluginState = {
-  lastId: string | null
-  lastGroupId: string | null
-  lastKind: NovelRevisionKind | null
-  lastPos: number | null
+  // 连续删除只允许复用上一笔“由本插件明确生成”的删除修订。
+  // 保存完整 attrs 可以保证连续删除沿用同一 createdAt/createdBy，避免同一 revision id 出现多份审计快照。
+  lastDeleteAttrs: RevisionAttributes | null
+  continuationBoundary: number | null
+  deleteDirection: RevisionDeleteDirection | null
 }
+
+type RevisionDeleteDirection = "backward" | "forward"
 
 type RevisionPluginMeta = {
   id: string
@@ -46,6 +49,13 @@ type RevisionPluginMeta = {
   from: number
   to: number
   composition?: boolean
+  // 删除方向和连续边界只服务于下一次 Backspace/Delete 的合并判断；其它事务必须清空它们。
+  deleteDirection?: RevisionDeleteDirection
+  continuationBoundary?: number
+  revisionAttrs?: RevisionAttributes
+  // composition 修改的对象如果本来就是 inserted，最终可能无需再产生文档 step；
+  // 此标记让 React 适配层仍能发布最终稳定快照，而不是把最后一次有效编辑吞掉。
+  forcePublish?: boolean
 }
 
 type TextRange = {
@@ -53,11 +63,18 @@ type TextRange = {
   to: number
 }
 
-type CompositionBase = TextRange & {
-  slice: Slice
+type CompositionBase = {
+  // compositionstart 时的选区仅作为会话锚点；真实替换范围以后续 transaction StepMap 为准。
+  selection: TextRange
+  doc: ProseMirrorNode
   existingInsertedAttrs: RevisionAttributes | null
-  // 记录 compositionstart 时的文档尺寸，compositionend 延迟补标时用它反推本次 IME 插入长度。
-  docContentSize: number
+  // mapping 始终表示“会话开始文档 → 当前文档”，用于把后续输入、点击和光标位置安全映射到最新 state。
+  mapping: Mapping
+  // originalRange 使用会话开始文档坐标；insertedRange 使用当前文档坐标。
+  // 两者都由原生 composition transaction 的 StepMap 聚合，不再通过全文长度猜测。
+  originalRange: TextRange | null
+  insertedRange: TextRange | null
+  compositionId: number | string | null
 }
 
 type RevisionTrackingOptions = {
@@ -109,7 +126,14 @@ const discussionHighlightKey = new PluginKey<{ activeId: string | null }>("novel
 type RevisionCompositionRuntime = {
   isComposing: () => boolean
   hasPendingFinalize: () => boolean
-  flushPendingFinalize: (view: EditorView) => boolean
+  // 除了 Mapping，还要返回“候选文本末尾”在 flush 前的坐标。
+  // finalize 会恰好在该点后恢复 original，紧接着的输入必须粘在恢复内容之前，不能使用默认 assoc=1 越过去。
+  flushPendingFinalize: (view: EditorView) => CompositionFinalizeResult | null
+}
+
+type CompositionFinalizeResult = {
+  mapping: Mapping
+  stickyBoundary: number | null
 }
 
 // composition 状态属于浏览器输入会话，不应写入 ProseMirror 文档或 JSON；
@@ -155,23 +179,53 @@ function rangeContainsText(state: EditorState, range: TextRange) {
   return hasText
 }
 
-function rangeContainsCommentMark(state: EditorState, range: TextRange) {
-  let hasComment = false
+function rangePhysicallyRemovesComment(state: EditorState, range: TextRange) {
+  let removesComment = false
 
   state.doc.nodesBetween(range.from, range.to, (node) => {
     if (!node.isText) {
       return true
     }
 
-    hasComment = node.marks.some((mark) => mark.type.name === "comment")
-    return !hasComment
+    // 修订删除只会物理移除 inserted；普通底稿仅增加 deleted mark，已有批注锚点仍然存在。
+    // 因此确认框必须同时满足“带批注”和“属于 inserted”，避免对不会丢批注的普通删改给出错误警告。
+    removesComment =
+      node.marks.some((mark) => mark.type.name === "comment") &&
+      node.marks.some(isInsertedRevisionMark)
+    return !removesComment
   })
 
-  return hasComment
+  return removesComment
+}
+
+type RevisionTextSegmentKind = "plain" | "inserted" | "deleted" | "original"
+
+type RevisionTextSegment = {
+  from: number
+  to: number
+  kind: RevisionTextSegmentKind
+}
+
+function revisionTextSegmentKind(node: ProseMirrorNode): RevisionTextSegmentKind {
+  const revision = node.marks.find(isRevisionMark)
+
+  if (!revision) {
+    return "plain"
+  }
+
+  if (revision.attrs.role === "inserted" && (revision.attrs.kind === "insert" || revision.attrs.kind === "replace")) {
+    return "inserted"
+  }
+
+  if (revision.attrs.role === "original") {
+    return "original"
+  }
+
+  return "deleted"
 }
 
 function collectRevisionTextSegments(state: EditorState, range: TextRange) {
-  const segments: { from: number; to: number; isInserted: boolean }[] = []
+  const segments: RevisionTextSegment[] = []
 
   state.doc.nodesBetween(range.from, range.to, (node, pos) => {
     if (!node.isText) {
@@ -185,7 +239,7 @@ function collectRevisionTextSegments(state: EditorState, range: TextRange) {
       segments.push({
         from: start,
         to: end,
-        isInserted: node.marks.some(isInsertedRevisionMark),
+        kind: revisionTextSegmentKind(node),
       })
     }
 
@@ -195,9 +249,34 @@ function collectRevisionTextSegments(state: EditorState, range: TextRange) {
   return segments
 }
 
-function filterInsertedTextNode(node: ProseMirrorNode): ProseMirrorNode | null {
+type RestoredCompositionSlice = {
+  slice: Slice
+  // 只有没有 revision mark 的真实底稿文字才会被本次 composition 转换成 original/deleted；
+  // 该标记用于区分“替换底稿”和“只改写历史修订展示层”。
+  hasPlainText: boolean
+}
+
+function restoreCompositionNode(
+  node: ProseMirrorNode,
+  plainTextMark: ProseMirrorMark | null,
+  result: { hasPlainText: boolean },
+): ProseMirrorNode | null {
   if (node.isText) {
-    return node.marks.some(isInsertedRevisionMark) ? null : node
+    if (node.marks.some(isInsertedRevisionMark)) {
+      // inserted 从未属于底稿；被输入法替换后应物理消失，不能作为 original/deleted 恢复。
+      return null
+    }
+
+    if (node.marks.some(isRevisionMark)) {
+      // 已有 deleted/original 属于历史审计层。恢复时必须原样保留其 id/kind/role，
+      // 不能再对整段 addMark，否则同类型 revision mark 会被当前替换修订覆盖。
+      return node
+    }
+
+    result.hasPlainText = true
+
+    // 普通正文才获得本次 replace/original 或 delete/deleted 身份；批注、加粗、颜色等普通 marks 继续保留。
+    return plainTextMark ? node.mark(plainTextMark.addToSet(node.marks)) : node
   }
 
   if (node.isLeaf) {
@@ -206,7 +285,7 @@ function filterInsertedTextNode(node: ProseMirrorNode): ProseMirrorNode | null {
 
   const children: ProseMirrorNode[] = []
   node.content.forEach((child) => {
-    const next = filterInsertedTextNode(child)
+    const next = restoreCompositionNode(child, plainTextMark, result)
 
     if (next) {
       children.push(next)
@@ -222,18 +301,44 @@ function filterInsertedTextNode(node: ProseMirrorNode): ProseMirrorNode | null {
   return node.copy(Fragment.fromArray(children))
 }
 
-function stripInsertedTextFromSlice(slice: Slice) {
+function prepareRestoredCompositionSlice(
+  slice: Slice,
+  plainTextMark: ProseMirrorMark | null,
+): RestoredCompositionSlice {
   const children: ProseMirrorNode[] = []
+  const result = { hasPlainText: false }
 
   slice.content.forEach((node) => {
-    const next = filterInsertedTextNode(node)
+    const next = restoreCompositionNode(node, plainTextMark, result)
 
     if (next) {
       children.push(next)
     }
   })
 
-  return new Slice(Fragment.fromArray(children), slice.openStart, slice.openEnd)
+  const content = Fragment.fromArray(children)
+
+  if (content.size === 0) {
+    // 跨段选区若全部由 inserted 组成，过滤后会得到空 Fragment。此时沿用原来的 openStart/openEnd
+    // 会形成 size 为负数的非法 Slice，并让 Transaction.replace 在 ProseMirror 内部直接崩溃。
+    return {
+      slice: Slice.empty,
+      hasPlainText: result.hasPlainText,
+    }
+  }
+
+  const maximallyOpen = Slice.maxOpen(content)
+
+  return {
+    // 过滤可能移除最外层首/尾块，因此开放深度也要收缩到新 Fragment 真正支持的最大值。
+    // 保留不超过原 Slice 的开放语义，既支持跨段恢复，又不会制造悬空 open depth。
+    slice: new Slice(
+      content,
+      Math.min(slice.openStart, maximallyOpen.openStart),
+      Math.min(slice.openEnd, maximallyOpen.openEnd),
+    ),
+    hasPlainText: result.hasPlainText,
+  }
 }
 
 function getTypingMarks(state: EditorState) {
@@ -255,14 +360,67 @@ function isDeletedRevisionMark(mark: ProseMirrorMark): mark is ProseMirrorMark &
   return isRevisionMark(mark) && mark.attrs.role === "deleted" && mark.attrs.kind === "delete"
 }
 
-function forwardDeleteRangeSkippingDeletedText(state: EditorState, pos: number) {
+function isHistoricalRevisionMark(mark: ProseMirrorMark) {
+  return isDeletedRevisionMark(mark) || (isRevisionMark(mark) && mark.attrs.role === "original")
+}
+
+// Intl.Segmenter 按用户可见字素切分文本，能把 emoji、ZWJ 序列、变体选择符和组合音标视为一个删除单位。
+// 极端旧浏览器没有 Segmenter 时再退回 Array.from 的 Unicode code point 切分，至少不会拆坏代理对。
+const graphemeSegmenter = typeof Intl.Segmenter === "function" ? new Intl.Segmenter("zh-CN", { granularity: "grapheme" }) : null
+
+function firstGraphemeLength(text: string) {
+  if (!text) {
+    return 0
+  }
+
+  if (graphemeSegmenter) {
+    const first = graphemeSegmenter.segment(text)[Symbol.iterator]().next().value
+
+    return first?.segment.length ?? 0
+  }
+
+  return Array.from(text)[0]?.length ?? 0
+}
+
+function lastGraphemeLength(text: string) {
+  if (!text) {
+    return 0
+  }
+
+  if (graphemeSegmenter) {
+    let length = 0
+
+    for (const segment of graphemeSegmenter.segment(text)) {
+      length = segment.segment.length
+    }
+
+    return length
+  }
+
+  return Array.from(text).at(-1)?.length ?? 0
+}
+
+function backwardGraphemeRange(state: EditorState, pos: number) {
+  const to = clampPosition(state, pos)
+  const nodeBefore = state.doc.resolve(to).nodeBefore
+
+  if (!nodeBefore?.isText || !nodeBefore.text) {
+    // 位于段落边界时不伪造字符区间，让 ProseMirror 的结构化 Backspace 命令继续处理合并行为。
+    return normalizeRange(state, to, to)
+  }
+
+  return normalizeRange(state, to - lastGraphemeLength(nodeBefore.text), to)
+}
+
+function forwardGraphemeRange(state: EditorState, pos: number) {
   let from = clampPosition(state, pos)
 
   while (from < state.doc.content.size) {
     const nodeAfter = state.doc.resolve(from).nodeAfter
 
-    // Delete 连按时应越过已经标删的文字；否则光标一直卡在同一个 deleted 字符前。
-    if (nodeAfter?.isText && nodeAfter.marks.some(isDeletedRevisionMark)) {
+    // 已删除文字和替换前原文都属于历史展示层，不能再次覆盖其 revision 身份。
+    // Delete 连按时越过整段历史文字，再从下一段可编辑正文中取一个完整字素。
+    if (nodeAfter?.isText && nodeAfter.marks.some(isHistoricalRevisionMark)) {
       from += nodeAfter.nodeSize
       continue
     }
@@ -270,7 +428,40 @@ function forwardDeleteRangeSkippingDeletedText(state: EditorState, pos: number) 
     break
   }
 
-  return normalizeRange(state, from, from + 1)
+  const nodeAfter = state.doc.resolve(from).nodeAfter
+
+  if (!nodeAfter?.isText || !nodeAfter.text) {
+    return normalizeRange(state, from, from)
+  }
+
+  return normalizeRange(state, from, from + firstGraphemeLength(nodeAfter.text))
+}
+
+function backwardGraphemeRangeSkippingHistoricalText(state: EditorState, pos: number) {
+  let to = clampPosition(state, pos)
+
+  while (to > 0) {
+    const nodeBefore = state.doc.resolve(to).nodeBefore
+
+    if (nodeBefore?.isText && nodeBefore.marks.some(isHistoricalRevisionMark)) {
+      to -= nodeBefore.nodeSize
+      continue
+    }
+
+    break
+  }
+
+  return backwardGraphemeRange(state, to)
+}
+
+export function getRevisionDeleteTargetRange(
+  state: EditorState,
+  pos: number,
+  direction: RevisionDeleteDirection,
+) {
+  return direction === "forward"
+    ? forwardGraphemeRange(state, pos)
+    : backwardGraphemeRangeSkippingHistoricalText(state, pos)
 }
 
 function hasSameInsertedRevisionIdentity(left: RevisionAttributes, right: RevisionAttributes) {
@@ -299,16 +490,25 @@ export function findInsertedRevisionAtPosition(state: EditorState, pos: number) 
   return before ?? after
 }
 
-export function findInsertedRevisionCoveringRange(state: EditorState, range: TextRange) {
+function findInsertedRevisionCoveringRangeInDoc(doc: ProseMirrorNode, range: TextRange) {
   if (range.from === range.to) {
-    return findInsertedRevisionAtPosition(state, range.from)
+    const safePos = Math.max(0, Math.min(range.from, doc.content.size))
+    const $pos = doc.resolve(safePos)
+    const before = $pos.nodeBefore?.marks.find(isInsertedRevisionMark)?.attrs ?? null
+    const after = $pos.nodeAfter?.marks.find(isInsertedRevisionMark)?.attrs ?? null
+
+    if (before && after && hasSameInsertedRevisionIdentity(before, after)) {
+      return before
+    }
+
+    return before ?? after
   }
 
   let insertedAttrs: RevisionAttributes | null = null
   let hasText = false
   let coveredBySameRevision = true
 
-  state.doc.nodesBetween(range.from, range.to, (node) => {
+  doc.nodesBetween(range.from, range.to, (node) => {
     if (!node.isText || !node.text) {
       return coveredBySameRevision
     }
@@ -332,6 +532,10 @@ export function findInsertedRevisionCoveringRange(state: EditorState, range: Tex
   })
 
   return hasText && coveredBySameRevision ? insertedAttrs : null
+}
+
+export function findInsertedRevisionCoveringRange(state: EditorState, range: TextRange) {
+  return findInsertedRevisionCoveringRangeInDoc(state.doc, range)
 }
 
 function makeRevisionAttrs(
@@ -440,7 +644,7 @@ export function applyInsertedText(
   text: string,
   range: TextRange,
   options: RevisionTrackingOptions,
-  inputOptions: { allowMerge: boolean; forceReplace?: boolean } = { allowMerge: true },
+  inputOptions: { allowMerge: boolean } = { allowMerge: true },
 ) {
   if (!options.enabled || !text) {
     return false
@@ -455,8 +659,15 @@ export function applyInsertedText(
     return applyTextWithinInsertedRevision(view, text, range, existingInsertedAttrs)
   }
 
-  const isReplacement = inputOptions.forceReplace === true || range.from !== range.to
-  const insertedAttrs = resolveInsertedRevision(state, range.from, options, !isReplacement && inputOptions.allowMerge, isReplacement)
+  const originalSegments = range.from === range.to ? [] : collectRevisionTextSegments(state, range)
+  const replacesPlainText = originalSegments.some((segment) => segment.kind === "plain")
+  const insertedAttrs = resolveInsertedRevision(
+    state,
+    range.from,
+    options,
+    range.from === range.to && inputOptions.allowMerge,
+    replacesPlainText,
+  )
   const insertedKind = insertedAttrs.kind
   const insertedMark = createRevisionMark(state, insertedAttrs)
 
@@ -471,27 +682,29 @@ export function applyInsertedText(
 
   const insertedTo = range.from + textNode.nodeSize
 
-  if (isReplacement && rangeContainsText(state, range)) {
-    const originalMark = createRevisionMark(state, makeOriginalRevisionAttrs(insertedAttrs))
+  let originalMark: ProseMirrorMark | null = null
+
+  if (replacesPlainText) {
+    originalMark = createRevisionMark(state, makeOriginalRevisionAttrs(insertedAttrs))
 
     if (!originalMark) {
       return false
     }
+  }
 
-    const originalSegments = collectRevisionTextSegments(state, range)
+  // 只要用户原选区非空，就要物理移除其中从未属于底稿的 inserted 文本；
+  // 普通正文才会转成当前 replace/original，已有 deleted/original 历史展示层则原样保留。
+  for (let i = originalSegments.length - 1; i >= 0; i--) {
+    const segment = originalSegments[i]
+    const originalFrom = tr.mapping.map(segment.from, 1)
+    const originalTo = tr.mapping.map(segment.to, 1)
 
-    // 替换选区可能混有 inserted 文本；这些文字从未存在于底稿，不能被标成 original。
-    for (let i = originalSegments.length - 1; i >= 0; i--) {
-      const segment = originalSegments[i]
-      const originalFrom = tr.mapping.map(segment.from, 1)
-      const originalTo = tr.mapping.map(segment.to, 1)
-
-      if (segment.isInserted) {
-        tr.delete(originalFrom, originalTo)
-      } else {
-        tr.addMark(originalFrom, originalTo, originalMark)
-      }
+    if (segment.kind === "inserted") {
+      tr.delete(originalFrom, originalTo)
+    } else if (segment.kind === "plain" && originalMark) {
+      tr.addMark(originalFrom, originalTo, originalMark)
     }
+    // 已存在的 deleted/original 修订属于历史语义，替换选区时不覆盖它们的 revision 身份。
   }
 
   tr.setSelection(TextSelection.create(tr.doc, insertedTo))
@@ -504,6 +717,140 @@ export function applyInsertedText(
     to: insertedTo,
   } satisfies RevisionPluginMeta)
 
+  view.dispatch(tr.scrollIntoView())
+  return true
+}
+
+function markPastedNode(node: ProseMirrorNode, insertedMark: ProseMirrorMark): ProseMirrorNode {
+  if (node.isText) {
+    // 粘贴只继承普通排版 marks；外部文档携带的 comment/revision 身份不属于当前审稿会话，必须剥离。
+    const ordinaryMarks = node.marks.filter((mark) => mark.type.name !== "comment" && mark.type.name !== "revision")
+
+    return node.mark(insertedMark.addToSet(ordinaryMarks))
+  }
+
+  if (node.isLeaf) {
+    return node
+  }
+
+  const children: ProseMirrorNode[] = []
+  node.content.forEach((child) => {
+    children.push(markPastedNode(child, insertedMark))
+  })
+
+  const content = Fragment.fromArray(children)
+
+  if (isNovelTextBlockNode(node)) {
+    // 从本编辑器复制整段时，Slice 会携带原 paragraph/heading 的 block id。
+    // 粘贴副本绝不能复用该 id；尤其粘到原块之前时，后置全局 first-wins 去重会错误改写真正原块，
+    // 让批注/编辑建议等既有锚点转而指向副本。这里在插入前明确清空，BlockId 插件只会给新块分配新身份。
+    return node.type.create({ ...node.attrs, id: null }, content, node.marks)
+  }
+
+  return node.copy(content)
+}
+
+function markPastedSlice(slice: Slice, insertedMark: ProseMirrorMark) {
+  const children: ProseMirrorNode[] = []
+
+  slice.content.forEach((node) => {
+    children.push(markPastedNode(node, insertedMark))
+  })
+
+  return new Slice(Fragment.fromArray(children), slice.openStart, slice.openEnd)
+}
+
+function sliceContainsText(slice: Slice) {
+  let hasText = false
+
+  slice.content.descendants((node) => {
+    if (node.isText && Boolean(node.text)) {
+      hasText = true
+      return false
+    }
+
+    return !hasText
+  })
+
+  return hasText
+}
+
+export function applyInsertedSlice(
+  view: EditorView,
+  slice: Slice,
+  range: TextRange,
+  options: RevisionTrackingOptions,
+  inputOptions: { uiEvent?: "paste" | "drop" } = {},
+) {
+  if (!options.enabled || !sliceContainsText(slice)) {
+    return false
+  }
+
+  const { state } = view
+  const existingInsertedAttrs = findInsertedRevisionCoveringRange(state, range)
+  const originalSegments = range.from === range.to ? [] : collectRevisionTextSegments(state, range)
+  const replacesPlainText = originalSegments.some((segment) => segment.kind === "plain")
+  const insertedAttrs =
+    existingInsertedAttrs ?? resolveInsertedRevision(state, range.from, options, false, replacesPlainText)
+  const insertedMark = createRevisionMark(state, insertedAttrs)
+
+  if (!insertedMark) {
+    return false
+  }
+
+  const revisionSlice = markPastedSlice(slice, insertedMark)
+  const tr = state.tr
+
+  if (existingInsertedAttrs) {
+    // 同一 inserted 修订内部粘贴属于直接改写，不保留被替换的旧 inserted 文字。
+    tr.replaceRange(range.from, range.to, revisionSlice)
+  } else {
+    // 替换底稿时先在选区起点插入修订内容，原选区文字继续留在文档中并在下方标成 original。
+    // replaceRange 能保留 ProseMirror 已解析的段落结构，避免把多段粘贴压成一个含换行符的 text node。
+    tr.replaceRange(range.from, range.from, revisionSlice)
+  }
+
+  const insertedFrom = tr.mapping.map(range.from, -1)
+  const insertedTo = tr.mapping.map(range.from, 1)
+  let originalMark: ProseMirrorMark | null = null
+
+  if (!existingInsertedAttrs && replacesPlainText) {
+    originalMark = createRevisionMark(state, makeOriginalRevisionAttrs(insertedAttrs))
+
+    if (!originalMark) {
+      return false
+    }
+  }
+
+  if (!existingInsertedAttrs) {
+    for (let index = originalSegments.length - 1; index >= 0; index--) {
+      const segment = originalSegments[index]
+      const originalFrom = tr.mapping.map(segment.from, 1)
+      const originalTo = tr.mapping.map(segment.to, 1)
+
+      if (segment.kind === "inserted") {
+        tr.delete(originalFrom, originalTo)
+      } else if (segment.kind === "plain" && originalMark) {
+        tr.addMark(originalFrom, originalTo, originalMark)
+      }
+      // deleted/original 是旧审计展示层；粘贴覆盖选区时仍要保留其原 revision 身份。
+    }
+  }
+
+  const safeCursor = Math.max(0, Math.min(insertedTo, tr.doc.content.size))
+  tr.setSelection(ProseMirrorSelection.near(tr.doc.resolve(safeCursor), -1))
+  tr.setMeta(revisionTrackingKey, {
+    id: insertedAttrs.id,
+    groupId: insertedAttrs.groupId,
+    kind: insertedAttrs.kind,
+    role: "inserted",
+    from: insertedFrom,
+    to: insertedTo,
+  } satisfies RevisionPluginMeta)
+  const uiEvent = inputOptions.uiEvent ?? "paste"
+
+  tr.setMeta(uiEvent, true)
+  tr.setMeta("uiEvent", uiEvent)
   view.dispatch(tr.scrollIntoView())
   return true
 }
@@ -527,71 +874,132 @@ export function markDeletedRange(
   }
 
   const pluginState = revisionTrackingKey.getState(state)
-  let lastId = pluginState?.lastId
-  let lastGroupId = pluginState?.lastGroupId
-  let lastPos = pluginState?.lastPos
-  const lastKind = pluginState?.lastKind
+  const deleteDirection: RevisionDeleteDirection = selectionSide === "end" ? "forward" : "backward"
+  const canContinuePreviousDelete = Boolean(
+    pluginState?.lastDeleteAttrs &&
+      pluginState.deleteDirection === deleteDirection &&
+      pluginState.continuationBoundary !== null &&
+      (deleteDirection === "backward"
+        ? range.to === pluginState.continuationBoundary
+        : range.from === pluginState.continuationBoundary),
+  )
   const operationGroupId = createPrefixedId("revision_group")
+  const attrsBySegment = new Map<number, RevisionAttributes>()
 
-  let hasChanges = false
-  let lastMarkedAttrs: RevisionAttributes | null = null
+  // 先按文档顺序把 plain 段聚合成连续区间，再为每个区间分配一次修订身份。
+  // 事务仍会在下方从右向左执行，这样既能稳定处理 position，又不会让 Delete/Backspace 的方向影响 id 选择。
+  let runStartIndex: number | null = null
+  let runEndIndex: number | null = null
 
-  // 从右向左处理，避免删除文本导致左侧未处理区段的 position 偏移失效
-  for (let i = segments.length - 1; i >= 0; i--) {
-    const { from, to, isInserted } = segments[i]
-    if (isInserted) {
-      tr.delete(from, to)
-      hasChanges = true
-    } else {
-      const canReuseLastRevision = Boolean(lastKind === "delete" && lastId && (from === lastPos || to === lastPos))
-      const attrs = makeRevisionAttrs(
-        options,
-        "delete",
-        "deleted",
-        canReuseLastRevision ? lastGroupId : operationGroupId,
-        canReuseLastRevision ? lastId : undefined,
-      )
-      const mark = createRevisionMark(state, attrs)
-      if (mark) {
-        tr.addMark(from, to, mark)
-        lastId = attrs.id
-        lastGroupId = attrs.groupId
-        lastPos = from
-        lastMarkedAttrs = attrs
-        hasChanges = true
+  function assignPlainRun() {
+    if (runStartIndex === null || runEndIndex === null) {
+      return
+    }
+
+    const runFrom = segments[runStartIndex].from
+    const runTo = segments[runEndIndex].to
+    const touchesContinuationEdge =
+      canContinuePreviousDelete &&
+      (deleteDirection === "backward" ? runTo === range.to : runFrom === range.from)
+    const attrs = touchesContinuationEdge
+      ? pluginState!.lastDeleteAttrs!
+      : makeRevisionAttrs(options, "delete", "deleted", operationGroupId)
+
+    for (let index = runStartIndex; index <= runEndIndex; index++) {
+      if (segments[index].kind === "plain") {
+        attrsBySegment.set(index, attrs)
       }
+    }
+
+    runStartIndex = null
+    runEndIndex = null
+  }
+
+  for (let index = 0; index < segments.length; index++) {
+    const segment = segments[index]
+
+    if (segment.kind !== "plain") {
+      assignPlainRun()
+      continue
+    }
+
+    if (runStartIndex === null) {
+      runStartIndex = index
+      runEndIndex = index
+      continue
+    }
+
+    const previous = segments[runEndIndex!]
+
+    if (previous.to === segment.from) {
+      runEndIndex = index
+    } else {
+      assignPlainRun()
+      runStartIndex = index
+      runEndIndex = index
     }
   }
 
+  assignPlainRun()
+
+  let hasChanges = false
+  let leftmostMarkedAttrs: RevisionAttributes | null = null
+  let rightmostMarkedAttrs: RevisionAttributes | null = null
+
+  // 从右向左处理，避免物理删除 inserted 文本后让左侧尚未处理的 position 失效。
+  for (let i = segments.length - 1; i >= 0; i--) {
+    const { from, to, kind } = segments[i]
+
+    if (kind === "inserted") {
+      tr.delete(from, to)
+      hasChanges = true
+    } else if (kind === "plain") {
+      const attrs = attrsBySegment.get(i)
+
+      if (!attrs) {
+        continue
+      }
+
+      const mark = createRevisionMark(state, attrs)
+
+      if (mark) {
+        tr.addMark(from, to, mark)
+        leftmostMarkedAttrs = attrs
+        rightmostMarkedAttrs ??= attrs
+        hasChanges = true
+      }
+    }
+    // deleted/original 属于已经存在的历史展示层；删除选区可以跨过它们，但绝不能覆盖原 revision mark。
+  }
+
   if (!hasChanges) {
-    return false
+    // 选区如果只包含历史修订，仍需消费本次删除事件，防止 ProseMirror 默认行为把其物理移除。
+    return segments.some((segment) => segment.kind === "deleted" || segment.kind === "original")
   }
 
   const resolvedFrom = tr.mapping.map(range.from)
   const resolvedTo = tr.mapping.map(range.to)
-  tr.setSelection(TextSelection.create(tr.doc, selectionSide === "end" ? resolvedTo : resolvedFrom))
+  const cursorPos = selectionSide === "end" ? resolvedTo : resolvedFrom
+  tr.setSelection(TextSelection.create(tr.doc, cursorPos))
 
-  if (lastMarkedAttrs) {
+  const continuationAttrs = deleteDirection === "backward" ? leftmostMarkedAttrs : rightmostMarkedAttrs
+
+  if (continuationAttrs) {
     tr.setMeta(revisionTrackingKey, {
-      id: lastMarkedAttrs.id,
-      groupId: lastMarkedAttrs.groupId,
+      id: continuationAttrs.id,
+      groupId: continuationAttrs.groupId,
       kind: "delete",
       role: "deleted",
       from: resolvedFrom,
-      to: tr.mapping.map(range.to),
+      to: resolvedTo,
+      deleteDirection,
+      continuationBoundary: cursorPos,
+      revisionAttrs: continuationAttrs,
     } satisfies RevisionPluginMeta)
   }
 
   dispatch?.(tr.scrollIntoView())
   return true
-}
-
-function plainTextFromClipboard(event: ClipboardEvent) {
-  if (!event.clipboardData || event.clipboardData.files.length > 0) {
-    return null
-  }
-
-  return event.clipboardData.getData("text/plain")
 }
 
 function domSelectionFromRoot(view: EditorView) {
@@ -644,6 +1052,53 @@ function rangeFromDOMSelection(view: EditorView) {
   return normalizeRange(view.state, anchor, head)
 }
 
+const backwardBeforeInputTypes = new Set([
+  "deleteContentBackward",
+  "deleteWordBackward",
+  "deleteSoftLineBackward",
+  "deleteHardLineBackward",
+])
+
+const forwardBeforeInputTypes = new Set([
+  "deleteContentForward",
+  "deleteWordForward",
+  "deleteSoftLineForward",
+  "deleteHardLineForward",
+])
+
+const revisionInsertBeforeInputTypes = new Set([
+  "insertText",
+  "insertReplacementText",
+  "insertTranspose",
+  "insertFromDictation",
+  "insertFromYank",
+])
+
+function rangeFromBeforeInput(view: EditorView, event: InputEvent) {
+  const targetRange = event.getTargetRanges?.()[0]
+
+  if (!targetRange) {
+    return rangeFromSelection(view.state, view.state.selection)
+  }
+
+  const from = posFromDOM(view, targetRange.startContainer, targetRange.startOffset, -1)
+  const to = posFromDOM(view, targetRange.endContainer, targetRange.endOffset, 1)
+
+  if (from == null || to == null) {
+    return rangeFromSelection(view.state, view.state.selection)
+  }
+
+  return normalizeRange(view.state, from, to)
+}
+
+function confirmCommentDeletion(state: EditorState, range: TextRange) {
+  if (!rangePhysicallyRemovesComment(state, range)) {
+    return true
+  }
+
+  return window.confirm("要删除的新增文字包含批注，继续会一并移除该批注定位。确认继续吗？")
+}
+
 function captureRange(view: EditorView): TextRange {
   // 正常情况下优先用 DOM 选区：compositionstart 时浏览器光标可能领先于 ProseMirror 的 state.selection。
   // 但 view 尚未挂载或 root 不可用时（headless/测试环境）访问 DOM 选区会抛错，此时退回 ProseMirror 选区。
@@ -660,14 +1115,90 @@ function captureRange(view: EditorView): TextRange {
   return rangeFromSelection(view.state, view.state.selection)
 }
 
-function insertedRangeFromCompositionBase(state: EditorState, base: CompositionBase) {
-  const replacedSize = Math.max(0, base.to - base.from)
-  const insertedSize = state.doc.content.size - base.docContentSize + replacedSize
+function normalizeRangeInDoc(doc: ProseMirrorNode, range: TextRange) {
+  const from = Math.max(0, Math.min(range.from, doc.content.size))
+  const to = Math.max(0, Math.min(range.to, doc.content.size))
 
-  // compositionend 后可能先发生点击、侧栏定位等选区事务；这些事务不会改变文档大小。
-  // 因此这里用“当前文档大小 - composition 开始时文档大小 + 被替换区间大小”
-  // 反推 IME 本次真正插入了多少内容，而不是读取已经可能变化的 state.selection。
-  return normalizeRange(state, base.from, base.from + Math.max(0, insertedSize))
+  return {
+    from: Math.min(from, to),
+    to: Math.max(from, to),
+  }
+}
+
+function unionTextRanges(left: TextRange | null, right: TextRange): TextRange {
+  if (!left) {
+    return right
+  }
+
+  return {
+    from: Math.min(left.from, right.from),
+    to: Math.max(left.to, right.to),
+  }
+}
+
+function mapTextRange(finalize: CompositionFinalizeResult, range: TextRange): TextRange {
+  const { mapping, stickyBoundary } = finalize
+
+  if (range.from === range.to) {
+    // 下一次输入若正好发生在上一段候选文本末尾，应停留在 inserted 与恢复 original 之间；
+    // 其它位置（例如后续段落）仍使用 assoc=1，才能随前文恢复内容向后正确平移。
+    const assoc = stickyBoundary !== null && range.from === stickyBoundary ? -1 : 1
+    const pos = mapping.map(range.from, assoc)
+
+    return { from: pos, to: pos }
+  }
+
+  return {
+    from: mapping.map(range.from, -1),
+    to: mapping.map(range.to, 1),
+  }
+}
+
+function observeCompositionTransaction(base: CompositionBase, transaction: Transaction) {
+  const compositionId = transaction.getMeta("composition") as number | string | undefined
+
+  if (!transaction.docChanged || compositionId == null) {
+    return
+  }
+
+  if (base.compositionId !== null && base.compositionId !== compositionId) {
+    // 不同 composition id 属于另一次输入法会话；旧会话应先 finalize，不能把两次输入的范围并在一起。
+    return
+  }
+
+  base.compositionId = compositionId
+
+  for (const stepMap of transaction.mapping.maps) {
+    // insertedRange 始终保存在“当前 step 之前”的坐标中，先映射已有范围，再合并该 step 新生成的范围。
+    if (base.insertedRange) {
+      const mappedFrom = stepMap.map(base.insertedRange.from, -1)
+      const mappedTo = stepMap.map(base.insertedRange.to, 1)
+      base.insertedRange = {
+        from: Math.min(mappedFrom, mappedTo),
+        to: Math.max(mappedFrom, mappedTo),
+      }
+    }
+
+    // 在追加当前 StepMap 前，inverse 能把 step 的旧坐标精确还原到 compositionstart 文档。
+    // 这样等长 reconversion、光标前替换和多轮 preedit 都能找到真正原文，而不依赖全文 size 差。
+    const inverseToBase = base.mapping.invert()
+
+    stepMap.forEach((oldFrom, oldTo, newFrom, newTo) => {
+      const originalFrom = inverseToBase.map(oldFrom, -1)
+      const originalTo = inverseToBase.map(oldTo, 1)
+
+      base.originalRange = unionTextRanges(base.originalRange, {
+        from: Math.min(originalFrom, originalTo),
+        to: Math.max(originalFrom, originalTo),
+      })
+      base.insertedRange = unionTextRanges(base.insertedRange, {
+        from: Math.min(newFrom, newTo),
+        to: Math.max(newFrom, newTo),
+      })
+    })
+
+    base.mapping.appendMap(stepMap)
+  }
 }
 
 function selectionStillAtCompositionEnd(state: EditorState, insertedRange: TextRange) {
@@ -699,63 +1230,142 @@ function preserveOrSetCompositionSelection(
   }
 }
 
-export function finalizeComposition(view: EditorView, base: CompositionBase, options: RevisionTrackingOptions) {
-  const { state } = view
-  const insertedRange = insertedRangeFromCompositionBase(state, base)
-
-  if (!options.enabled || insertedRange.from === insertedRange.to) {
-    return false
+function buildCompositionFinalizationTransaction(
+  state: EditorState,
+  base: CompositionBase,
+  options: RevisionTrackingOptions,
+) {
+  if (!options.enabled || !base.originalRange || !base.insertedRange) {
+    // 没有任何带 composition meta 的文档 StepMap，说明输入法被取消或没有产生实际修改。
+    return null
   }
 
-  if (base.existingInsertedAttrs) {
-    const insertedMark = createRevisionMark(state, base.existingInsertedAttrs)
+  const originalRange = normalizeRangeInDoc(base.doc, base.originalRange)
+  const insertedRange = normalizeRange(state, base.insertedRange.from, base.insertedRange.to)
+  const originalSlice = base.doc.slice(originalRange.from, originalRange.to)
+  const currentSlice = state.doc.slice(insertedRange.from, insertedRange.to)
 
-    if (!insertedMark) {
-      return false
+  if (originalSlice.eq(currentSlice)) {
+    // 输入法候选被取消、或 reconversion 最终恢复成完全相同的内容与 marks 时，不生成任何修订。
+    return null
+  }
+
+  const existingInsertedAttrs =
+    originalRange.from === originalRange.to
+      ? base.existingInsertedAttrs
+      : findInsertedRevisionCoveringRangeInDoc(base.doc, originalRange)
+
+  if (existingInsertedAttrs) {
+    const tr = state.tr
+
+    if (insertedRange.from !== insertedRange.to) {
+      const insertedMark = createRevisionMark(state, existingInsertedAttrs)
+
+      if (!insertedMark) {
+        return null
+      }
+
+      tr.addMark(insertedRange.from, insertedRange.to, insertedMark)
     }
-
-    const tr = state.tr.addMark(insertedRange.from, insertedRange.to, insertedMark)
+    // inserted 文本本来就不是底稿：IME 把它改空时保留 native 的物理删除结果，不创建 deleted 修订。
     const cursorPos = insertedRange.to
-
     preserveOrSetCompositionSelection(state, tr, insertedRange, cursorPos)
     tr.setMeta(revisionTrackingKey, {
-      id: base.existingInsertedAttrs.id,
-      groupId: base.existingInsertedAttrs.groupId,
-      kind: base.existingInsertedAttrs.kind,
+      id: existingInsertedAttrs.id,
+      groupId: existingInsertedAttrs.groupId,
+      kind: existingInsertedAttrs.kind,
       role: "inserted",
       from: insertedRange.from,
       to: cursorPos,
       composition: true,
+      forcePublish: !tr.docChanged,
     } satisfies RevisionPluginMeta)
-    view.dispatch(tr)
-    return true
+    return tr
   }
 
-  const isReplacement = base.from !== base.to
-  const insertedAttrs = resolveInsertedRevision(state, insertedRange.from, options, !isReplacement, isReplacement)
-  const insertedKind = insertedAttrs.kind
+  const isReplacement = originalRange.from !== originalRange.to
+
+  if (insertedRange.from === insertedRange.to) {
+    if (!isReplacement) {
+      return null
+    }
+
+    // “有原文、最终提交为空”是一次删除，不允许 native transaction 把底稿永久真删。
+    // 恢复时只把普通正文标成 deleted；已有 deleted/original 必须保留原 revision 身份，
+    // 原本属于 inserted 的文字则继续维持 native 的物理删除结果。
+    const deletedAttrs = makeRevisionAttrs(options, "delete", "deleted")
+    const deletedMark = createRevisionMark(state, deletedAttrs)
+
+    if (!deletedMark) {
+      return null
+    }
+
+    const restored = prepareRestoredCompositionSlice(originalSlice, deletedMark)
+
+    if (restored.slice.size === 0) {
+      return null
+    }
+
+    const tr = state.tr.replace(insertedRange.from, insertedRange.from, restored.slice)
+    const deletedTo = insertedRange.from + restored.slice.size
+
+    preserveOrSetCompositionSelection(state, tr, insertedRange, insertedRange.from)
+
+    if (restored.hasPlainText) {
+      tr.setMeta(revisionTrackingKey, {
+        id: deletedAttrs.id,
+        groupId: deletedAttrs.groupId,
+        kind: "delete",
+        role: "deleted",
+        from: insertedRange.from,
+        to: deletedTo,
+        composition: true,
+        deleteDirection: "backward",
+        continuationBoundary: insertedRange.from,
+        revisionAttrs: deletedAttrs,
+      } satisfies RevisionPluginMeta)
+    }
+
+    return tr
+  }
+
+  // originalRange 非空只说明浏览器替换过可见 DOM；其中可能全是旧 inserted/deleted/original。
+  // 只有真实普通正文存在时才创建 replace 修订，否则应视作一次新的 insert，并保留旧历史身份。
+  const restorationProbe = prepareRestoredCompositionSlice(originalSlice, null)
+  const replacesPlainText = originalRange.from !== originalRange.to && restorationProbe.hasPlainText
+  const insertedAttrs = resolveInsertedRevision(
+    state,
+    insertedRange.from,
+    options,
+    originalRange.from === originalRange.to,
+    replacesPlainText,
+  )
   const insertedMark = createRevisionMark(state, insertedAttrs)
 
   if (!insertedMark) {
-    return false
+    return null
   }
 
   const tr = state.tr.addMark(insertedRange.from, insertedRange.to, insertedMark)
 
-  const originalSlice = isReplacement && base.slice.size > 0 ? stripInsertedTextFromSlice(base.slice) : null
+  if (originalRange.from !== originalRange.to && restorationProbe.slice.size > 0) {
+    let restored = restorationProbe
 
-  if (originalSlice && originalSlice.size > 0) {
-    const originalMark = createRevisionMark(state, makeOriginalRevisionAttrs(insertedAttrs))
+    if (replacesPlainText) {
+      const originalMark = createRevisionMark(state, makeOriginalRevisionAttrs(insertedAttrs))
 
-    if (!originalMark) {
-      return false
+      if (!originalMark) {
+        return null
+      }
+
+      restored = prepareRestoredCompositionSlice(originalSlice, originalMark)
     }
 
     const originalFrom = insertedRange.to
-    const originalTo = originalFrom + originalSlice.size
 
-    tr.replace(originalFrom, originalFrom, originalSlice)
-    tr.addMark(originalFrom, originalTo, originalMark)
+    // 修订 mark 已经在 Slice 内按文本段精确写好，不能再对整个区间 addMark，
+    // 否则会覆盖其中原有 deleted/original 的 revision id 与审计信息。
+    tr.replace(originalFrom, originalFrom, restored.slice)
   }
 
   const cursorPos = insertedRange.to
@@ -764,40 +1374,73 @@ export function finalizeComposition(view: EditorView, base: CompositionBase, opt
   tr.setMeta(revisionTrackingKey, {
     id: insertedAttrs.id,
     groupId: insertedAttrs.groupId,
-    kind: insertedKind,
+    kind: insertedAttrs.kind,
     role: "inserted",
     from: insertedRange.from,
     to: cursorPos,
     composition: true,
+    forcePublish: !tr.docChanged,
   } satisfies RevisionPluginMeta)
+  return tr
+}
+
+export function finalizeComposition(view: EditorView, base: CompositionBase, options: RevisionTrackingOptions) {
+  const tr = buildCompositionFinalizationTransaction(view.state, base, options)
+
+  if (!tr) {
+    return false
+  }
+
   view.dispatch(tr)
   return true
 }
 
-// 输入法（composition）状态机：每个编辑器实例独享一份闭包状态。
-// 抽成工厂有两个目的：一是让 handleTextInput/handlePaste 能共享同一个 isComposing 标志；
-// 二是把“连打丢失修订”的修复逻辑收敛到一处，并可在单测里用假定时器直接驱动验证。
+// 输入法（composition）状态机：浏览器仍负责候选窗和临时 DOM，控制器只观察带 composition meta 的 transaction。
+// 最终修订优先由 appendTransaction 在同一 applyTransaction 批次追加；timer 只负责“没有尾事务”时触发，绝不再猜范围。
 export function createRevisionCompositionController(getOptions: () => RevisionTrackingOptions) {
   let isComposing = false
   let compositionBase: CompositionBase | null = null
   let compositionTimer: ReturnType<typeof setTimeout> | null = null
 
   function flushPendingComposition(view: EditorView) {
-    if (!compositionTimer || !compositionBase) {
-      return false
+    if (!compositionBase || isComposing) {
+      return null
     }
 
-    // IME 连打时，上一段 compositionend 排进 setTimeout 的 finalize 可能还没执行。
-    // 旧逻辑在 compositionstart 里直接 clearTimeout 丢弃它，导致上一段输入永远不被标记成修订
-    // （表现为“在新增/替换区域继续输入会丢失之前的修订”）。这里改为先把上一段补打上再开始新一段：
-    // 此刻新 composition 尚未输入字符，文档与选区仍停在上一段末尾，finalizeComposition 的范围计算依旧准确。
-    clearTimeout(compositionTimer)
+    if (compositionTimer) {
+      clearTimeout(compositionTimer)
+    }
+
     compositionTimer = null
-
-    const finalized = finalizeComposition(view, compositionBase, getOptions())
-
+    const base = compositionBase
     compositionBase = null
-    return finalized
+    const stickyBoundary = base.insertedRange?.to ?? null
+    const tr = buildCompositionFinalizationTransaction(view.state, base, getOptions())
+
+    if (!tr) {
+      return null
+    }
+
+    view.dispatch(tr)
+    return {
+      mapping: tr.mapping,
+      stickyBoundary,
+    }
+  }
+
+  function takePendingCompositionTransaction(state: EditorState) {
+    if (!compositionBase || isComposing) {
+      return null
+    }
+
+    if (compositionTimer) {
+      clearTimeout(compositionTimer)
+    }
+
+    compositionTimer = null
+    const base = compositionBase
+    compositionBase = null
+    return buildCompositionFinalizationTransaction(state, base, getOptions())
   }
 
   const runtime: RevisionCompositionRuntime = {
@@ -806,7 +1449,7 @@ export function createRevisionCompositionController(getOptions: () => RevisionTr
       return isComposing
     },
     hasPendingFinalize() {
-      return Boolean(compositionTimer && compositionBase)
+      return Boolean(compositionBase && !isComposing)
     },
     flushPendingFinalize(view: EditorView) {
       return flushPendingComposition(view)
@@ -815,6 +1458,18 @@ export function createRevisionCompositionController(getOptions: () => RevisionTr
 
   return {
     ...runtime,
+    observeTransaction(transaction: Transaction) {
+      if (compositionBase) {
+        observeCompositionTransaction(compositionBase, transaction)
+      }
+    },
+    appendFinalization(transactions: readonly Transaction[], state: EditorState) {
+      const hasFinalCompositionChange = transactions.some(
+        (transaction) => transaction.docChanged && transaction.getMeta("composition") != null,
+      )
+
+      return hasFinalCompositionChange ? takePendingCompositionTransaction(state) : null
+    },
     handleCompositionStart(view: EditorView) {
       const options = getOptions()
 
@@ -828,34 +1483,40 @@ export function createRevisionCompositionController(getOptions: () => RevisionTr
 
       isComposing = true
       compositionBase = {
-        ...range,
-        slice: view.state.doc.slice(range.from, range.to),
-        docContentSize: view.state.doc.content.size,
-        // compositionend 发生时文档已被浏览器改写，必须在开始时记录是否处在已有 inserted 修订内。
+        selection: range,
+        doc: view.state.doc,
+        mapping: new Mapping(),
+        originalRange: null,
+        insertedRange: null,
+        compositionId: null,
+        // compositionend 时 native transaction 可能已经改写选区，因此必须在开始时记录 inserted 身份。
         existingInsertedAttrs: findInsertedRevisionCoveringRange(view.state, range),
       }
 
       return false
     },
     handleCompositionEnd(view: EditorView) {
-      const options = getOptions()
-
-      if (!options.enabled || !compositionBase) {
+      if (!getOptions().enabled || !compositionBase) {
         isComposing = false
         return false
       }
 
       const base = compositionBase
 
-      // 仍用 setTimeout(0) 等浏览器把 composition 的最终文本同步进 ProseMirror，再据此计算插入范围。
-      // 与旧逻辑的区别在于：若下一段输入在它执行前到来，会由 flushPendingComposition 先行补打，而不是被丢弃。
+      // ProseMirror 会在内置 compositionend 处理器中同步 flush，或把最终 DOMObserver flush 放进微任务。
+      // timer 运行得更晚，只在没有可供 appendTransaction 收口的尾事务时执行同一个 transaction builder。
       isComposing = false
       compositionTimer = setTimeout(() => {
         compositionTimer = null
-        finalizeComposition(view, base, options)
 
-        if (compositionBase === base) {
-          compositionBase = null
+        if (compositionBase !== base) {
+          return
+        }
+
+        const tr = takePendingCompositionTransaction(view.state)
+
+        if (tr) {
+          view.dispatch(tr)
         }
       }, 0)
 
@@ -892,7 +1553,7 @@ export function flushPendingRevisionComposition(editor: Editor | null) {
 
   const runtime = revisionCompositionRuntimeByView.get(editor.view)
 
-  return runtime?.flushPendingFinalize(editor.view) ?? false
+  return Boolean(runtime?.flushPendingFinalize(editor.view))
 }
 
 export const NovelDocument = Document.extend({
@@ -934,37 +1595,118 @@ export const NovelHeading = Heading.extend({
   },
 })
 
+function isNovelTextBlockNode(node: ProseMirrorNode) {
+  return node.type.name === "paragraph" || node.type.name === "heading"
+}
+
+function isUsableBlockId(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0
+}
+
+export function normalizeNovelBlockIdsInState(state: EditorState) {
+  const unavailableIds = new Set<string>()
+
+  // 第一遍预留全部现有合法 id，确保为坏数据生成新值时不会碰撞后文尚未遍历到的合法锚点。
+  state.doc.forEach((node) => {
+    if (isNovelTextBlockNode(node) && isUsableBlockId(node.attrs.id)) {
+      unavailableIds.add(node.attrs.id)
+    }
+  })
+
+  const seenIds = new Set<string>()
+  const tr = state.tr
+  let changed = false
+
+  state.doc.forEach((node, pos) => {
+    if (!isNovelTextBlockNode(node)) {
+      return
+    }
+
+    const existingId = node.attrs.id
+
+    if (isUsableBlockId(existingId) && !seenIds.has(existingId)) {
+      seenIds.add(existingId)
+      return
+    }
+
+    const kind = node.type.name === "heading" ? "h" : "p"
+    const generatedBase = createNovelBlockId(kind)
+    let id = generatedBase
+    let suffix = 1
+
+    while (unavailableIds.has(id)) {
+      id = `${generatedBase}_${suffix}`
+      suffix += 1
+    }
+
+    unavailableIds.add(id)
+    seenIds.add(id)
+    tr.setNodeMarkup(pos, undefined, { ...node.attrs, id })
+    changed = true
+  })
+
+  if (!changed) {
+    return null
+  }
+
+  // BlockId 是结构不变量而不是用户编辑内容，不能单独进入 undo 历史。
+  // 不手工 setSelection：Transaction 会把 state.selection 自动映射到所有 setNodeMarkup step 之后的文档。
+  tr.setMeta("addToHistory", false)
+  tr.setMeta("novelBlockIdNormalization", true)
+  return tr
+}
+
+function transactionsMayChangeBlockIdentity(
+  transactions: readonly Transaction[],
+  oldState: EditorState,
+  newState: EditorState,
+) {
+  if (!transactions.some((transaction) => transaction.docChanged)) {
+    return false
+  }
+
+  if (oldState.doc.childCount !== newState.doc.childCount) {
+    // Enter/split、跨段合并和多段粘贴会改变顶层块数量，也最容易复制旧 id 或产生空 id。
+    return true
+  }
+
+  if (
+    transactions.some(
+      (transaction) =>
+        transaction.getMeta("paste") ||
+        transaction.getMeta("drop") ||
+        transaction.getMeta("uiEvent") === "paste" ||
+        transaction.getMeta("uiEvent") === "drop" ||
+        transaction.getMeta("preventUpdate"),
+    )
+  ) {
+    return true
+  }
+
+  const { $from } = newState.selection
+
+  if ($from.depth < 1) {
+    return false
+  }
+
+  const currentBlock = $from.node(1)
+
+  // 普通文字和 mark 修改只检查当前块即可，避免长篇小说每输入一个字都 O(N) 扫描整篇文档。
+  return isNovelTextBlockNode(currentBlock) && !isUsableBlockId(currentBlock.attrs.id)
+}
+
 export const BlockId = Extension.create({
   name: "blockId",
 
   addProseMirrorPlugins() {
     return [
       new Plugin({
-        appendTransaction(transactions, _oldState, newState) {
-          if (!transactions.some((transaction) => transaction.docChanged)) {
+        appendTransaction(transactions, oldState, newState) {
+          if (!transactionsMayChangeBlockIdentity(transactions, oldState, newState)) {
             return null
           }
 
-          const tr = newState.tr
-          let changed = false
-
-          newState.doc.descendants((node, pos) => {
-            if (node.type.name !== "paragraph" && node.type.name !== "heading") {
-              return true
-            }
-
-            if (typeof node.attrs.id === "string" && node.attrs.id) {
-              return true
-            }
-
-            const id = node.type.name === "heading" ? createNovelBlockId("h") : createNovelBlockId("p")
-
-            tr.setNodeMarkup(pos, undefined, { ...node.attrs, id })
-            changed = true
-            return true
-          })
-
-          return changed ? tr : null
+          return normalizeNovelBlockIdsInState(newState)
         },
       }),
     ]
@@ -1139,6 +1881,11 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
     return [
       new Plugin<RevisionPluginState>({
         key: revisionTrackingKey,
+        appendTransaction(transactions, _oldState, newState) {
+          // compositionend 后如果 ProseMirror 还有最后一笔原生 DOM transaction，优先在同一个
+          // applyTransaction 批次里追加最终修订；Tiptap 对外只会观察到已经带完整 revision 语义的 state。
+          return composition.appendFinalization(transactions, newState)
+        },
         view(view) {
           revisionCompositionRuntimeByView.set(view, composition)
 
@@ -1150,25 +1897,31 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
           }
         },
         state: {
-          init: () => ({ lastId: null, lastGroupId: null, lastKind: null, lastPos: null }),
-          apply(transaction, value, _oldState, newState) {
-            if (transaction.selectionSet && !transaction.docChanged && !transaction.getMeta(revisionTrackingKey)) {
-              return { lastId: null, lastGroupId: null, lastKind: null, lastPos: null }
-            }
+          init: () => ({ lastDeleteAttrs: null, continuationBoundary: null, deleteDirection: null }),
+          apply(transaction, value) {
+            // controller 必须在 appendTransaction 运行前看到原生 composition 的每个 StepMap；
+            // state.apply 正好按真实事务顺序执行，且不会触碰 DOM。
+            composition.observeTransaction(transaction)
 
             const meta = transaction.getMeta(revisionTrackingKey) as RevisionPluginMeta | undefined
 
-            if (meta?.id) {
+            if (
+              meta?.kind === "delete" &&
+              meta.revisionAttrs &&
+              meta.deleteDirection &&
+              typeof meta.continuationBoundary === "number"
+            ) {
               return {
-                lastId: meta.id,
-                lastGroupId: meta.groupId,
-                lastKind: meta.kind,
-                lastPos: meta.kind === "delete" ? meta.from : meta.to,
+                lastDeleteAttrs: meta.revisionAttrs,
+                continuationBoundary: meta.continuationBoundary,
+                deleteDirection: meta.deleteDirection,
               }
             }
 
-            if (transaction.docChanged) {
-              return { ...value, lastPos: newState.selection.from }
+            if (meta?.id || transaction.docChanged || transaction.selectionSet) {
+              // 输入、粘贴、undo/redo、setContent 和未知外部事务都必须中止连续删除。
+              // 只有上面的显式 delete meta 可以延续 identity，避免 undo 后“复活”已经撤销的 revision id。
+              return { lastDeleteAttrs: null, continuationBoundary: null, deleteDirection: null }
             }
 
             return value
@@ -1180,17 +1933,22 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
               return false
             }
 
-            // 直接输入可能紧跟在中文输入法 compositionend 后面到来；
-            // 先补完上一段 IME 文本的修订标记，再按新的输入事件继续处理。
-            composition.flushPendingFinalize(view)
+            // from/to 属于 flush 前的 state。finalize replacement 时会把原文重新插回文档，
+            // 所以后续位置必须通过 finalize transaction.mapping 映射；继续使用旧坐标会把文字插进其它段落。
+            const inputRangeBeforeFinalize = normalizeRange(view.state, from, to)
+            const finalizeMapping = composition.flushPendingFinalize(view)
+            const mappedInputRange = finalizeMapping
+              ? mapTextRange(finalizeMapping, inputRangeBeforeFinalize)
+              : inputRangeBeforeFinalize
+            const inputRange = normalizeRange(view.state, mappedInputRange.from, mappedInputRange.to)
 
             if (!this.options.enabled) {
-              return applyPlainTextWithoutRevision(view, text, normalizeRange(view.state, from, to))
+              return applyPlainTextWithoutRevision(view, text, inputRange)
             }
 
-            return applyInsertedText(view, text, normalizeRange(view.state, from, to), this.options)
+            return applyInsertedText(view, text, inputRange, this.options)
           },
-          handlePaste: (view, event) => {
+          handlePaste: (view, _event, slice) => {
             if (composition.isComposing() || view.composing) {
               return false
             }
@@ -1198,24 +1956,70 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
             // 粘贴也可能发生在 IME 补标计时器之前；这里先收口上一段输入，避免粘贴内容和上一段无标记文本混在一起。
             composition.flushPendingFinalize(view)
 
-            const text = plainTextFromClipboard(event)
-
             if (!this.options.enabled) {
-              return text ? applyPlainTextWithoutRevision(view, text, rangeFromSelection(view.state, view.state.selection)) : false
+              // 非修订模式完全交还 ProseMirror 默认 paste，让 HTML、段落和普通格式按原生 Slice 规则保留。
+              return false
             }
 
-            return text
-              ? applyInsertedText(view, text, rangeFromSelection(view.state, view.state.selection), this.options, {
-                  allowMerge: false,
-                })
-              : false
+            return applyInsertedSlice(
+              view,
+              slice,
+              rangeFromSelection(view.state, view.state.selection),
+              this.options,
+            )
+          },
+          handleDrop: (view, event, slice, moved) => {
+            if (composition.isComposing() || view.composing) {
+              return false
+            }
+
+            composition.flushPendingFinalize(view)
+
+            if (!this.options.enabled) {
+              return false
+            }
+
+            if (moved) {
+              // ProseMirror 默认的内部拖移会“真删源选区 + 普通插入目标”，无法表达审稿语义。
+              // 在修订模式下明确消费移动式拖放，避免正文绕过 revision；按住复制修饰键的 drag-copy
+              // 以及从外部拖入文字仍走下方统一 Slice 插入管线。用户若要移动正文可使用剪切/粘贴。
+              if (event.dataTransfer) {
+                event.dataTransfer.dropEffect = "none"
+              }
+
+              return true
+            }
+
+            const coordinates = view.posAtCoords({ left: event.clientX, top: event.clientY })
+
+            if (!coordinates) {
+              // 无法可靠解析落点时也不能交还默认 drop，否则会产生没有 revision mark 的原文。
+              return true
+            }
+
+            const insertPosition = dropPoint(view.state.doc, coordinates.pos, slice) ?? coordinates.pos
+            applyInsertedSlice(
+              view,
+              slice,
+              { from: insertPosition, to: insertPosition },
+              this.options,
+              { uiEvent: "drop" },
+            )
+
+            // 当前 schema 不支持的非文字 Slice 也应被消费，确保任何 drop 都不能绕过修订控制器。
+            return true
           },
           handleKeyDown: (view, event) => {
             if (!this.options.enabled || (event.key !== "Backspace" && event.key !== "Delete")) {
               return false
             }
 
-            if (composition.isComposing() || view.composing) {
+            if (composition.isComposing() || view.composing || event.isComposing || event.keyCode === 229) {
+              return false
+            }
+
+            if (view.state.selection.empty && (event.altKey || event.ctrlKey || event.metaKey)) {
+              // 按词/按行删除的真实范围由 beforeinput.getTargetRanges 提供；keydown 固定 ±1 会吞错范围并拆坏 Unicode。
               return false
             }
 
@@ -1229,17 +2033,14 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
               range.from !== range.to
                 ? range
                 : event.key === "Backspace"
-                  ? normalizeRange(state, state.selection.from - 1, state.selection.from)
-              : forwardDeleteRangeSkippingDeletedText(state, state.selection.from)
+                  ? getRevisionDeleteTargetRange(state, state.selection.from, "backward")
+                  : getRevisionDeleteTargetRange(state, state.selection.from, "forward")
 
-            if (range.from !== range.to && rangeContainsCommentMark(state, targetRange)) {
-              // 批注锚点如果随正文删除，会让右侧讨论栏失去定位；这里先要求用户确认，避免误删批注语义。
-              const confirmed = window.confirm("选中内容包含批注标记，删除会一并移除批注定位。确认继续吗？")
-
-              if (!confirmed) {
-                event.preventDefault()
-                return true
-              }
+            if (!confirmCommentDeletion(state, targetRange)) {
+              // 即使原选区为空，目标字素也可能是带批注的 inserted 文本；其物理删除会让批注锚点消失，
+              // 因此必须按已经解析出的真实 targetRange 统一确认，不能只检查键下时的 selection。
+              event.preventDefault()
+              return true
             }
 
             return markDeletedRange(state, targetRange, this.options, view.dispatch, event.key === "Delete" ? "end" : "start")
@@ -1247,14 +2048,103 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
           handleDOMEvents: {
             compositionstart: (view) => composition.handleCompositionStart(view),
             compositionend: (view) => composition.handleCompositionEnd(view),
-            mousedown: (view) => {
-              // 鼠标点击会先改变 DOM 选区，再触发 ProseMirror 选区事务；
-              // 在点击前补完 pending composition，可以避免异步补标把范围算到用户刚点击的其它段落。
-              if (!composition.isComposing() && !view.composing) {
-                composition.flushPendingFinalize(view)
+            beforeinput: (view, domEvent) => {
+              const event = domEvent as InputEvent
+
+              if (
+                !this.options.enabled ||
+                !event.cancelable ||
+                event.isComposing ||
+                composition.isComposing() ||
+                view.composing
+              ) {
+                return false
               }
 
-              return false
+              const isBackwardDelete = backwardBeforeInputTypes.has(event.inputType)
+              const isForwardDelete = forwardBeforeInputTypes.has(event.inputType)
+              const isRevisionInsert = revisionInsertBeforeInputTypes.has(event.inputType)
+
+              if (!isBackwardDelete && !isForwardDelete && !isRevisionInsert) {
+                return false
+              }
+
+              // StaticRange 与 handleTextInput 的 from/to 一样属于 finalize 前的 state；统一通过 Mapping 升级坐标。
+              const rangeBeforeFinalize = rangeFromBeforeInput(view, event)
+              const finalizeMapping = composition.flushPendingFinalize(view)
+              const mappedRange = finalizeMapping
+                ? mapTextRange(finalizeMapping, rangeBeforeFinalize)
+                : rangeBeforeFinalize
+              let targetRange = normalizeRange(view.state, mappedRange.from, mappedRange.to)
+
+              if (isRevisionInsert && typeof event.data === "string" && event.data.length > 0) {
+                const applied = applyInsertedText(view, event.data, targetRange, this.options)
+
+                if (applied) {
+                  event.preventDefault()
+                }
+
+                return applied
+              }
+
+              if (isRevisionInsert && (event.data === null || targetRange.from === targetRange.to)) {
+                // 某些语音/浏览器扩展会发出 data=null 的 insert 事件；没有可重放文本时不能擅自改成删除。
+                return false
+              }
+
+              const direction: RevisionDeleteDirection = isForwardDelete ? "forward" : "backward"
+
+              if (targetRange.from === targetRange.to) {
+                targetRange =
+                  getRevisionDeleteTargetRange(view.state, targetRange.from, direction)
+              }
+
+              if (!confirmCommentDeletion(view.state, targetRange)) {
+                event.preventDefault()
+                return true
+              }
+
+              const applied = markDeletedRange(
+                view.state,
+                targetRange,
+                this.options,
+                view.dispatch,
+                direction === "forward" ? "end" : "start",
+              )
+
+              if (applied) {
+                event.preventDefault()
+              }
+
+              return applied
+            },
+            cut: (view, domEvent) => {
+              const event = domEvent as ClipboardEvent
+
+              if (!this.options.enabled || composition.isComposing() || view.composing || view.state.selection.empty) {
+                return false
+              }
+
+              composition.flushPendingFinalize(view)
+              const { state } = view
+              const range = rangeFromSelection(state, state.selection)
+
+              if (!confirmCommentDeletion(state, range)) {
+                event.preventDefault()
+                return true
+              }
+
+              if (!event.clipboardData) {
+                // 无法可靠写入系统剪贴板时交还浏览器，避免出现“文字没复制却已经被标删”的破坏性结果。
+                return false
+              }
+
+              const { dom, text } = view.serializeForClipboard(state.selection.content())
+              event.preventDefault()
+              event.clipboardData.clearData()
+              event.clipboardData.setData("text/html", dom.innerHTML)
+              event.clipboardData.setData("text/plain", text)
+              return markDeletedRange(state, range, this.options, view.dispatch)
             },
           },
         },
@@ -1620,7 +2510,8 @@ export function createNovelEditorExtensions(input: {
       paragraph: false,
       heading: false,
     }),
-    Underline,
+    // Tiptap 3 的 StarterKit 已经内置 underline；不能再注册同名独立扩展，
+    // 否则 ProseMirror 会出现重复 extension name 警告，并可能让 command/plugin 状态相互覆盖。
     TextStyle,
     Color,
     HighlightExtension,

@@ -216,11 +216,51 @@ export function assertNovelDocV1(value: unknown): asserts value is NovelDocJson 
   }
 }
 
-function cloneBlockWithId(block: NovelBlockNode) {
+function isNovelTextBlock(block: NovelBlockNode) {
+  // 只有顶层段落和标题会被批注、修订与编辑建议作为正文锚点引用。
+  // editSuggestion 等其它块拥有自己的业务 id，不能混入正文 block id 的去重范围。
+  return block.type === "paragraph" || block.type === "heading"
+}
+
+function isUsableNovelBlockId(value: unknown): value is string {
+  // 历史数据可能把 id 保存成 null、数字或空白字符串；这些值都不能作为稳定的正文锚点。
+  // 对非空字符串保留原值而不强制改写前缀，以兼容已经落库的合法自定义 id。
+  return typeof value === "string" && value.trim().length > 0
+}
+
+function createUniqueNovelBlockId(kind: "p" | "h", unavailableIds: Set<string>) {
+  const generatedBase = createNovelBlockId(kind)
+  let candidate = generatedBase
+  let suffix = 1
+
+  // UUID 正常情况下不会碰撞；仍在数据层做确定性兜底，保证生成结果不会覆盖任何已有合法 id。
+  // 若测试环境或极端运行环境返回了重复随机值，则递增后缀直到找到真正可用的 id。
+  while (unavailableIds.has(candidate)) {
+    candidate = `${generatedBase}_${suffix}`
+    suffix += 1
+  }
+
+  unavailableIds.add(candidate)
+  return candidate
+}
+
+function cloneBlockWithNormalizedId(
+  block: NovelBlockNode,
+  unavailableIds: Set<string>,
+  retainedOriginalIds: Set<string>,
+) {
   const attrs = isRecord(block.attrs) ? { ...block.attrs } : {}
 
-  if ((block.type === "paragraph" || block.type === "heading") && typeof attrs.id !== "string") {
-    attrs.id = block.type === "heading" ? createNovelBlockId("h") : createNovelBlockId("p")
+  if (isNovelTextBlock(block)) {
+    const originalId = attrs.id
+
+    if (isUsableNovelBlockId(originalId) && !retainedOriginalIds.has(originalId)) {
+      // 第一次出现的非空字符串 id 保持原样；这样已唯一的合法 id 不会因规范化而失去引用稳定性。
+      // 对重复 id 也保留第一次出现者，后续重复项会在下方获得与块类型匹配的新 id。
+      retainedOriginalIds.add(originalId)
+    } else {
+      attrs.id = createUniqueNovelBlockId(block.type === "heading" ? "h" : "p", unavailableIds)
+    }
   }
 
   return {
@@ -290,10 +330,25 @@ export function extractCleanNovelDocBlocks(doc: NovelDocJson): NovelBlockNode[] 
 }
 
 export function ensureNovelBlockIds(doc: NovelDocJson): NovelDocJson {
-  // Tiptap 插件会在编辑时补齐 block id；这里作为后端/测试兜底，保证保存快照结构完整。
+  // 先预留全部顶层段落和标题已有的合法 id，避免为前面的坏数据生成 id 时，
+  // 意外占用后面本来唯一且合法的 id；这是保证合法 id 稳定不变的关键。
+  const unavailableIds = new Set<string>()
+
+  for (const block of doc.content) {
+    if (isNovelTextBlock(block) && isUsableNovelBlockId(block.attrs?.id)) {
+      unavailableIds.add(block.attrs.id)
+    }
+  }
+
+  // Tiptap 插件仍会在交互时补齐 block id；这里作为保存、投影和后端路径的统一数据层兜底：
+  // 修复缺失、空白和重复 id，同时只处理顶层 paragraph/heading，不改写其它业务节点的 id。
+  const retainedOriginalIds = new Set<string>()
+
   return {
     ...doc,
-    content: doc.content.map(cloneBlockWithId),
+    content: doc.content.map((block) =>
+      cloneBlockWithNormalizedId(block, unavailableIds, retainedOriginalIds),
+    ),
   }
 }
 
