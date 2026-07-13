@@ -8,12 +8,13 @@ import { PageHeader } from "@/components/page-header"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { StatusBadge } from "@/components/status-badge"
+import { useConfirmDialog } from "@/components/ui/app-feedback"
 import { useRole } from "@/components/role-provider"
 import { fetchJson } from "@/lib/api"
 import { DOC_STATUS_LABEL_KEYS } from "@/types/domain"
 import { RELEASE_DOC_STATUS_LABEL_KEYS, RELEASE_DOC_STATUS_TONE, type ProjectDetail } from "@/types/project"
 import { useT } from "@/hooks/use-t"
-import { Unlock, FileText, CheckCircle2, Info, Lock, ArrowRight } from "lucide-react"
+import { Unlock, FileText, CheckCircle2, Info, Lock, ArrowRight, RotateCcw } from "lucide-react"
 
 type ProjectDetailResponse = {
   project: ProjectDetail
@@ -21,12 +22,13 @@ type ProjectDetailResponse = {
 
 export default function QcPage({ params }: { params: Promise<{ id: string }> }) {
   const t = useT()
+  const confirm = useConfirmDialog()
   const { id } = use(params)
   const { role } = useRole()
   const [project, setProject] = useState<ProjectDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null)
-  const [workingAction, setWorkingAction] = useState<null | "unlock" | "complete">(null)
+  const [workingAction, setWorkingAction] = useState<null | "unlock" | "regenerate" | "complete">(null)
 
   async function loadProject(successText?: string) {
     setLoading(true)
@@ -93,10 +95,53 @@ export default function QcPage({ params }: { params: Promise<{ id: string }> }) 
     }
   }
 
+  async function handleRegenerate() {
+    const confirmed = await confirm({
+      title: "确认重新质检",
+      description:
+        "重新质检会用全部已通过章节覆盖当前质检稿，清除当前质检稿中的未提交修改、批注和待办，并将稿件重新交给作者。历史 Revision 仍会保留；已完成项目将重新打开到质检阶段。",
+      confirmText: "覆盖并重新生成",
+      tone: "danger",
+    })
+
+    if (!confirmed) {
+      return
+    }
+
+    setWorkingAction("regenerate")
+    setMessage(null)
+
+    try {
+      await fetchJson(`/api/projects/${id}/qc/regenerate`, {
+        method: "POST",
+      })
+      await loadProject("质检稿已重新生成，旧质检内容已覆盖")
+    } catch (error) {
+      setMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "重新质检失败",
+      })
+    } finally {
+      setWorkingAction(null)
+    }
+  }
+
   const unapprovedChapters = project?.chapters.filter((item) => !item.approved) ?? []
   const allApproved = Boolean(project && project.totalChapters > 0 && project.approvedChapters === project.totalChapters)
   const canUnlock = role === "editor" || role === "admin"
-  const canComplete = Boolean(project && project.releaseDocStatus === "approved" && (role === "editor" || role === "admin"))
+  const canRegenerate = Boolean(
+    project &&
+      (project.lifecycle === "active" || project.lifecycle === "completed") &&
+      project.releaseDocStatus !== "locked" &&
+      project.docDirectory.releaseDocId &&
+      (role === "editor" || role === "admin"),
+  )
+  const canComplete = Boolean(
+    project &&
+      project.lifecycle === "active" &&
+      project.releaseDocStatus === "approved" &&
+      (role === "editor" || role === "admin"),
+  )
 
   return (
     <div className="flex flex-col gap-6">
@@ -167,9 +212,9 @@ export default function QcPage({ params }: { params: Promise<{ id: string }> }) 
             )}
 
             {canUnlock && (
-              <div className="mt-5">
+              <div className="mt-5 flex flex-wrap gap-2">
                 <Button
-                  disabled={!allApproved || project.releaseDocStatus !== "locked" || workingAction === "unlock"}
+                  disabled={!allApproved || project.releaseDocStatus !== "locked" || workingAction !== null}
                   variant={allApproved && project.releaseDocStatus === "locked" ? "default" : "outline"}
                   className={allApproved && project.releaseDocStatus === "locked" ? "" : "bg-transparent"}
                   onClick={() => void handleUnlock()}
@@ -185,6 +230,16 @@ export default function QcPage({ params }: { params: Promise<{ id: string }> }) 
                       ? "质检已解锁"
                       : "手动解锁质检"}
                 </Button>
+                {canRegenerate && (
+                  <Button
+                    variant="destructive"
+                    disabled={!allApproved || workingAction !== null}
+                    onClick={() => void handleRegenerate()}
+                  >
+                    <RotateCcw className="mr-1.5 size-4" />
+                    {workingAction === "regenerate" ? "重新生成中..." : "重新质检"}
+                  </Button>
+                )}
               </div>
             )}
           </Card>
@@ -194,6 +249,7 @@ export default function QcPage({ params }: { params: Promise<{ id: string }> }) 
             <ul className="flex flex-col gap-1.5">
               <li>初始内容来自全部已通过的正文章节 Revision。</li>
               <li>解锁后修改只作用于质检 Doc，不会回写单章。</li>
+              <li>重新质检会按最新章节号顺序覆盖当前质检稿，并重新进入作者提交、编辑审核流程。</li>
               <li>终稿导出默认优先取质检 Doc。</li>
             </ul>
           </Card>
@@ -201,7 +257,7 @@ export default function QcPage({ params }: { params: Promise<{ id: string }> }) 
           {canComplete && (
             <Card className="flex items-center justify-between p-4">
               <span className="text-sm text-foreground">质检已通过，可标记项目完成。</span>
-              <Button disabled={workingAction === "complete"} onClick={() => void handleComplete()}>
+              <Button disabled={workingAction !== null} onClick={() => void handleComplete()}>
                 <CheckCircle2 className="mr-1.5 size-4" />
                 {workingAction === "complete" ? "处理中..." : "标记项目完成"}
               </Button>

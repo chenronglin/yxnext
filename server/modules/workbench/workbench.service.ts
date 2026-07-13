@@ -113,7 +113,8 @@ function notificationCategory(rawType: string): NotificationCategory {
   if (rawType === "doc_returned") return "doc_return"
   if (rawType === "register_pending_approval") return "approval_request"
   if (rawType === "forgot_password_requested") return "forgot_password_request"
-  if (rawType === "project_enter_qc") return "enter_qc"
+  // 首次进入和覆盖后重新进入都属于质检阶段通知，在通知中心统一归入“进入质检”类别。
+  if (rawType === "project_enter_qc" || rawType === "project_qc_regenerated") return "enter_qc"
   if (rawType === "project_completed") return "project_done"
   if (rawType === "stage_warning") return "stage_warning"
   if (rawType === "binding_created" || rawType === "binding_removed" || rawType === "project_assignment_changed") {

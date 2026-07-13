@@ -174,6 +174,13 @@ export interface CreateChapterInput {
   chapterNo?: number | null
 }
 
+// 修改章节信息时同时提交结构化章节号和展示标题，方便作者一次纠正两处可能重复录入的序号文字；
+// 正文内容仍由 Doc 协作流程独立维护，不会被元数据修改操作覆盖。
+export interface UpdateChapterMetadataInput {
+  title: string
+  chapterNo: number
+}
+
 // 章节重排接口统一接收“目标顺序数组”，这样服务端可以一次性重算全部 sortOrder，
 // 避免前端多次调用带来的中间态冲突。
 export interface ReorderChapterInput {

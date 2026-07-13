@@ -12,6 +12,7 @@ import {
   translateUniqueConstraintError,
 } from "@/server/shared/invariant-keys"
 import { buildDocxBuffer } from "@/server/shared/docx-export"
+import { compareChaptersByChapterNo } from "@/lib/chapter-order"
 import { createNovelDocV1, createNovelHeading, extractCleanNovelDocBlocks, isNovelDocV1, textToNovelParagraphs, type NovelDocJson } from "@/lib/novel-doc"
 import type { ApiCurrentUser } from "@/server/shared/current-user"
 import { makePaginationMeta, parsePagination } from "@/server/shared/pagination"
@@ -29,6 +30,7 @@ import type {
   ReorderChapterInput,
   ReleaseDocStatus,
   StagePlan,
+  UpdateChapterMetadataInput,
 } from "@/types/project"
 
 type TxClient = Prisma.TransactionClient
@@ -687,6 +689,41 @@ async function unlockStagePlan(tx: TxClient, projectId: bigint, stageCode: "rele
   return stagePlan
 }
 
+async function restartReleaseStagePlan(tx: TxClient, projectId: bigint, now: Date) {
+  const stagePlan = await tx.projectStagePlan.findFirst({
+    where: {
+      projectId,
+      stageCode: "release",
+    },
+  })
+
+  if (!stagePlan) {
+    throw new ApiError({
+      status: 409,
+      code: "PROJECT_STAGE_PLAN_MISSING",
+      message: "质检阶段计划不存在，无法重新质检",
+    })
+  }
+
+  // 重新质检代表一次新的质检周期：即使旧周期已经审核完成，也要重新进入进行中状态，
+  // 并从本次覆盖生成时间重新计算截止日期，避免页面继续显示“质检已完成”的旧状态。
+  await tx.projectStagePlan.update({
+    where: {
+      stagePlanId: stagePlan.stagePlanId,
+    },
+    data: {
+      gateStatus: "unlocked",
+      timelineStatus: "in_progress",
+      unlockedAt: now,
+      startedAt: now,
+      dueAt: addDays(now, stagePlan.planDays),
+      completedAt: null,
+    },
+  })
+
+  return stagePlan
+}
+
 async function completeStagePlan(tx: TxClient, projectId: bigint, stageCode: "chapter", now: Date) {
   const stagePlan = await tx.projectStagePlan.findFirst({
     where: {
@@ -1063,6 +1100,106 @@ export async function reorderProjectChapters(actor: ApiCurrentUser, projectIdVal
   return getProjectDetail(actor, projectIdValue)
 }
 
+export async function updateProjectChapterMetadata(
+  actor: ApiCurrentUser,
+  projectIdValue: string,
+  docIdValue: string,
+  input: UpdateChapterMetadataInput,
+) {
+  const projectId = parseBigIntId(projectIdValue, "项目 ID")
+  const docId = parseBigIntId(docIdValue, "章节 Doc ID")
+  const title = trimToNull(input.title)
+  const chapterNo = input.chapterNo
+
+  if (!title) {
+    throw new ApiError({
+      status: 400,
+      code: "CHAPTER_TITLE_REQUIRED",
+      message: "章节标题不能为空",
+    })
+  }
+
+  if (!Number.isInteger(chapterNo) || chapterNo <= 0) {
+    throw new ApiError({
+      status: 400,
+      code: "CHAPTER_NO_INVALID",
+      message: "章节号必须是正整数",
+    })
+  }
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      const project = await findVisibleProjectOrThrow(tx, actor, projectId)
+      assertProjectWritable(project)
+      assertCollaboratorCanManageProject(actor, project)
+      assertChapterStructureEditable(project)
+
+      const chapterDoc = project.docs.find((doc) => doc.docId === docId && doc.docType === "chapter")
+
+      if (!chapterDoc) {
+        throw new ApiError({
+          status: 404,
+          code: "CHAPTER_DOC_NOT_FOUND",
+          message: "章节 Doc 不存在",
+        })
+      }
+
+      if (chapterDoc.chapterNo === chapterNo && chapterDoc.title === title) {
+        return
+      }
+
+      if (project.docs.some((doc) => doc.docType === "chapter" && doc.docId !== docId && doc.chapterNo === chapterNo)) {
+        throw new ApiError({
+          status: 409,
+          code: "CHAPTER_NO_CONFLICT",
+          message: "该章节号已存在，请调整后重试",
+        })
+      }
+
+      await tx.doc.update({
+        where: {
+          docId: chapterDoc.docId,
+        },
+        data: {
+          title,
+          chapterNo,
+          // chapterNoKey 是数据库层的并发唯一性兜底，修改章节号时必须同步更新。
+          chapterNoKey: makeChapterNoKey(project.projectId, chapterNo),
+        },
+      })
+
+      await writeOperationLog(tx, {
+        actor,
+        action: "project.chapter.metadata.update",
+        entityType: "doc",
+        entityId: chapterDoc.docId,
+        projectId: project.projectId,
+        docId: chapterDoc.docId,
+        beforeJson: {
+          title: chapterDoc.title,
+          chapterNo: chapterDoc.chapterNo,
+        },
+        afterJson: {
+          title,
+          chapterNo,
+        },
+      })
+    })
+  } catch (error) {
+    throw (
+      translateUniqueConstraintError(error, [
+        {
+          constraintIncludes: ["chapter_no_key"],
+          code: "CHAPTER_NO_CONFLICT",
+          message: "该章节号已存在，请调整后重试",
+        },
+      ]) ?? error
+    )
+  }
+
+  return getProjectDetail(actor, projectIdValue)
+}
+
 export async function deleteProjectChapter(
   actor: ApiCurrentUser,
   projectIdValue: string,
@@ -1154,17 +1291,35 @@ export async function deleteProjectChapter(
   return getProjectDetail(actor, projectIdValue)
 }
 
-export async function unlockProjectQc(actor: ApiCurrentUser, projectIdValue: string) {
+async function generateProjectQc(
+  actor: ApiCurrentUser,
+  projectIdValue: string,
+  mode: "unlock" | "regenerate",
+) {
   const projectId = parseBigIntId(projectIdValue, "项目 ID")
   const now = new Date()
+  const regenerating = mode === "regenerate"
 
   try {
     await prisma.$transaction(async (tx) => {
       const project = await findVisibleProjectOrThrow(tx, actor, projectId)
-      assertProjectWritable(project)
       assertEditorOrAdmin(actor, project)
 
-      if (project.releaseStatus !== "locked") {
+      if (regenerating) {
+        // 已完成项目允许通过重新质检回到活动状态；归档、取消和尚未启动的项目仍保持只读，
+        // 避免“重新质检”绕过其它生命周期治理规则。
+        if (project.lifecycleStatus !== "active" && project.lifecycleStatus !== "completed") {
+          throw new ApiError({
+            status: 409,
+            code: "PROJECT_READ_ONLY",
+            message: "当前项目状态不允许重新质检",
+          })
+        }
+      } else {
+        assertProjectWritable(project)
+      }
+
+      if (!regenerating && project.releaseStatus !== "locked") {
         throw new ApiError({
           status: 409,
           code: "PROJECT_QC_ALREADY_UNLOCKED",
@@ -1172,9 +1327,19 @@ export async function unlockProjectQc(actor: ApiCurrentUser, projectIdValue: str
         })
       }
 
+      if (regenerating && project.releaseStatus === "locked") {
+        throw new ApiError({
+          status: 409,
+          code: "PROJECT_QC_NOT_UNLOCKED",
+          message: "质检尚未首次解锁，不能重新质检",
+        })
+      }
+
     const chapterDocs = project.docs
       .filter((doc) => doc.docType === "chapter")
-      .sort((a, b) => a.sortOrder - b.sortOrder)
+      // 全文质检是面向最终阅读顺序的合稿，必须按结构化 chapterNo 排列，
+      // 不能继续使用“章节创建/人工重排顺序”sortOrder，否则后创建的第一章可能排在先创建的第十一章之后。
+      .sort(compareChaptersByChapterNo)
 
     if (chapterDocs.length === 0) {
       throw new ApiError({
@@ -1205,6 +1370,14 @@ export async function unlockProjectQc(actor: ApiCurrentUser, projectIdValue: str
 
     let releaseDocId: bigint
     const existingReleaseDoc = project.docs.find((doc) => doc.docType === "release")
+
+    if (regenerating && !existingReleaseDoc) {
+      throw new ApiError({
+        status: 409,
+        code: "PROJECT_QC_DOC_MISSING",
+        message: "原质检 Doc 不存在，无法重新质检",
+      })
+    }
 
     if (!existingReleaseDoc) {
       const releaseDoc = await tx.doc.create({
@@ -1326,6 +1499,8 @@ export async function unlockProjectQc(actor: ApiCurrentUser, projectIdValue: str
         data: {
           status: "draft",
           holderRole: "author",
+          // 覆盖生成后旧审核通过版本只保留在 Revision 历史中，不能继续作为当前终稿被导出。
+          finalRevisionId: null,
           currentWordCount: releaseWordCount,
           currentPlainText: releaseText || null,
           currentCleanText: releaseText || null,
@@ -1357,8 +1532,27 @@ export async function unlockProjectQc(actor: ApiCurrentUser, projectIdValue: str
       })),
     })
 
+    if (regenerating) {
+      // 旧质检可能正处于待审或退回待改状态；覆盖后这些待办已经失效，必须统一取消。
+      await tx.todoItem.updateMany({
+        where: {
+          docId: releaseDocId,
+          status: "open",
+        },
+        data: {
+          status: "cancelled",
+          cancelledAt: now,
+          openDedupeKey: null,
+        },
+      })
+    }
+
     await completeStagePlan(tx, project.projectId, "chapter", now)
-    await unlockStagePlan(tx, project.projectId, "release", now)
+    if (regenerating) {
+      await restartReleaseStagePlan(tx, project.projectId, now)
+    } else {
+      await unlockStagePlan(tx, project.projectId, "release", now)
+    }
 
     await tx.project.update({
       where: {
@@ -1367,14 +1561,23 @@ export async function unlockProjectQc(actor: ApiCurrentUser, projectIdValue: str
       data: {
         releaseStatus: "unlocked",
         currentStage: "release",
+        // 已完成项目重新质检时要恢复为活动项目，否则作者无法保存和提交新的质检稿。
+        ...(regenerating && project.lifecycleStatus === "completed"
+          ? {
+              lifecycleStatus: "active" as const,
+              completedAt: null,
+            }
+          : {}),
       },
     })
 
     await createProjectNotification(tx, {
       recipientUserId: project.authorId,
-      type: "project_enter_qc",
-      title: "项目已进入质检",
-      body: `《${project.title}》已解锁质检，请开始质检协作。`,
+      type: regenerating ? "project_qc_regenerated" : "project_enter_qc",
+      title: regenerating ? "质检稿已重新生成" : "项目已进入质检",
+      body: regenerating
+        ? `《${project.title}》的质检稿已由编辑重新生成，旧质检内容已被覆盖，请重新检查并提交。`
+        : `《${project.title}》已解锁质检，请开始质检协作。`,
       projectId: project.projectId,
       entityId: releaseDocId,
       docId: releaseDocId,
@@ -1382,14 +1585,17 @@ export async function unlockProjectQc(actor: ApiCurrentUser, projectIdValue: str
 
     await writeOperationLog(tx, {
       actor,
-      action: "project.qc.unlock",
+      action: regenerating ? "project.qc.regenerate" : "project.qc.unlock",
       entityType: "project",
       entityId: project.projectId,
       projectId: project.projectId,
       afterJson: {
         releaseStatus: "unlocked",
+        lifecycleStatus:
+          regenerating && project.lifecycleStatus === "completed" ? "active" : project.lifecycleStatus,
         releaseDocId: releaseDocId.toString(),
         chapterCount: chapterDocs.length,
+        overwritten: regenerating,
       },
     })
   })
@@ -1411,6 +1617,14 @@ export async function unlockProjectQc(actor: ApiCurrentUser, projectIdValue: str
   }
 
   return getProjectDetail(actor, projectIdValue)
+}
+
+export async function unlockProjectQc(actor: ApiCurrentUser, projectIdValue: string) {
+  return generateProjectQc(actor, projectIdValue, "unlock")
+}
+
+export async function regenerateProjectQc(actor: ApiCurrentUser, projectIdValue: string) {
+  return generateProjectQc(actor, projectIdValue, "regenerate")
 }
 
 export async function completeProject(actor: ApiCurrentUser, projectIdValue: string) {

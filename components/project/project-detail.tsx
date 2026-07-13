@@ -13,6 +13,7 @@ import { StageProgress } from "@/components/project/stage-progress"
 import { StagePlanTable } from "@/components/project/stage-plan-table"
 import { useRole } from "@/components/role-provider"
 import { fetchJson } from "@/lib/api"
+import { compareChaptersByChapterNo } from "@/lib/chapter-order"
 import { formatDateOnly } from "@/lib/utils"
 import { DOC_STATUS_LABEL_KEYS, HOLDER_ROLE_LABEL_KEYS, PROJECT_LIFECYCLE_LABEL_KEYS, PROJECT_STAGE_LABEL_KEYS } from "@/types/domain"
 import type { BadgeTone } from "@/types/domain"
@@ -24,7 +25,7 @@ import {
   type ProjectChapterLocator,
   type ProjectDetail as ProjectDetailView,
 } from "@/types/project"
-import { Plus, Unlock, CheckCircle2, Download, Lock, FileText, History, BookOpen, Trash2 } from "lucide-react"
+import { Plus, Unlock, CheckCircle2, Download, Lock, FileText, History, BookOpen, ClipboardCheck, Pencil, Trash2 } from "lucide-react"
 
 type ProjectDetailResponse = {
   project: ProjectDetailView
@@ -48,6 +49,11 @@ export function ProjectDetail({ id }: { id: string }) {
   })
   const [deleteTarget, setDeleteTarget] = useState<ProjectChapterLocator | null>(null)
   const [deletingChapterId, setDeletingChapterId] = useState<string | null>(null)
+  const [chapterNumberTarget, setChapterNumberTarget] = useState<ProjectChapterLocator | null>(null)
+  const [chapterTitleValue, setChapterTitleValue] = useState("")
+  const [chapterNumberValue, setChapterNumberValue] = useState("")
+  const [chapterNumberError, setChapterNumberError] = useState<string | null>(null)
+  const [updatingChapterNumber, setUpdatingChapterNumber] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -265,6 +271,66 @@ export function ProjectDetail({ id }: { id: string }) {
     }
   }
 
+  function openChapterNumberDialog(chapter: ProjectChapterLocator) {
+    // 弹窗始终使用数据库中的结构化章节号初始化，避免从“第 X 章”展示文字反向解析造成误差。
+    setChapterNumberTarget(chapter)
+    setChapterTitleValue(chapter.title)
+    setChapterNumberValue(chapter.chapterNo?.toString() ?? "")
+    setChapterNumberError(null)
+  }
+
+  async function handleUpdateChapterNumber() {
+    if (!project || !chapterNumberTarget) {
+      return
+    }
+
+    const chapterNoText = chapterNumberValue.trim()
+    const chapterTitle = chapterTitleValue.trim()
+    const parsedChapterNo = Number(chapterNoText)
+
+    if (!chapterTitle) {
+      setChapterNumberError("章节标题不能为空")
+      return
+    }
+
+    if (!chapterNoText || !Number.isInteger(parsedChapterNo) || parsedChapterNo <= 0) {
+      setChapterNumberError("章节号必须是正整数")
+      return
+    }
+
+    setUpdatingChapterNumber(true)
+    setChapterNumberError(null)
+
+    try {
+      const response = await fetchJson<ProjectDetailResponse>(
+        `/api/projects/${project.id}/chapters/${chapterNumberTarget.docId}`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            title: chapterTitle,
+            chapterNo: parsedChapterNo,
+          }),
+        },
+      )
+
+      setProject(response.project)
+      setChapterNumberTarget(null)
+      setChapterTitleValue("")
+      setChapterNumberValue("")
+      setMessage({
+        type: "success",
+        text: `章节信息已更新为第 ${parsedChapterNo} 章`,
+      })
+    } catch (error) {
+      setChapterNumberError(error instanceof Error ? error.message : "章节号修改失败")
+    } finally {
+      setUpdatingChapterNumber(false)
+    }
+  }
+
   if (loading) {
     return <div className="rounded-md border border-border bg-card px-4 py-10 text-center text-sm text-muted-foreground">正在加载项目详情...</div>
   }
@@ -333,6 +399,15 @@ export function ProjectDetail({ id }: { id: string }) {
                   </div>
                 )}
                 <div className="grid grid-cols-2 gap-2">
+                  {(role === "editor" || role === "admin") && (
+                    <Button asChild size="sm" variant="outline" className="h-7 w-full justify-center bg-transparent px-2 text-xs">
+                      <Link href={`/projects/${project.id}/qc`}>
+                        <ClipboardCheck className="mr-1 size-3.5" />
+                        质检管理
+                      </Link>
+                    </Button>
+                  )}
+
                   {!readonly && (role === "editor" || role === "admin") && (
                     <Button
                       size="sm"
@@ -400,6 +475,7 @@ export function ProjectDetail({ id }: { id: string }) {
         canManageChapters={canManageChapters}
         deletingChapterId={deletingChapterId}
         onCreateChapter={openChapterDialog}
+        onEditChapterNumber={openChapterNumberDialog}
         onDeleteChapter={setDeleteTarget}
       />
 
@@ -472,6 +548,80 @@ export function ProjectDetail({ id }: { id: string }) {
         </DialogContent>
       </Dialog>
 
+      <Dialog
+        open={Boolean(chapterNumberTarget)}
+        onOpenChange={(open) => {
+          if (!open && !updatingChapterNumber) {
+            setChapterNumberTarget(null)
+            setChapterTitleValue("")
+            setChapterNumberValue("")
+            setChapterNumberError(null)
+          }
+        }}
+      >
+        <DialogContent className={CHAPTER_DIALOG_WIDTH_CLASS}>
+          <DialogHeader>
+            <DialogTitle>修改章节信息</DialogTitle>
+            <DialogDescription>
+              可同时纠正章节号和标题中的序号文字。全文质检将按修改后的章节号排序生成。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3 md:grid-cols-[140px_minmax(0,1fr)]">
+            <div className="grid gap-1.5">
+              <label className="text-xs font-medium text-muted-foreground" htmlFor="edit-chapter-no">
+                新章节号
+              </label>
+              <Input
+                id="edit-chapter-no"
+                type="number"
+                inputMode="numeric"
+                min={1}
+                step={1}
+                value={chapterNumberValue}
+                onChange={(event) => {
+                  setChapterNumberValue(event.target.value)
+                  setChapterNumberError(null)
+                }}
+                disabled={updatingChapterNumber}
+                autoFocus
+              />
+            </div>
+            <div className="grid gap-1.5">
+              <label className="text-xs font-medium text-muted-foreground" htmlFor="edit-chapter-title">
+                章节标题
+              </label>
+              <Input
+                id="edit-chapter-title"
+                value={chapterTitleValue}
+                onChange={(event) => {
+                  setChapterTitleValue(event.target.value)
+                  setChapterNumberError(null)
+                }}
+                disabled={updatingChapterNumber}
+              />
+            </div>
+            {chapterNumberError && <p className="text-sm text-red-600 md:col-span-2">{chapterNumberError}</p>}
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              className="bg-transparent"
+              disabled={updatingChapterNumber}
+              onClick={() => {
+                setChapterNumberTarget(null)
+                setChapterTitleValue("")
+              }}
+            >
+              取消
+            </Button>
+            <Button type="button" disabled={updatingChapterNumber} onClick={() => void handleUpdateChapterNumber()}>
+              {updatingChapterNumber ? "保存中..." : "保存章节信息"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={Boolean(deleteTarget)} onOpenChange={(open) => !open && !deletingChapterId && setDeleteTarget(null)}>
         <DialogContent className={CHAPTER_DIALOG_WIDTH_CLASS}>
           <DialogHeader>
@@ -522,12 +672,14 @@ function ProjectDocumentPanel({
   canManageChapters,
   deletingChapterId,
   onCreateChapter,
+  onEditChapterNumber,
   onDeleteChapter,
 }: {
   project: ProjectDetailView
   canManageChapters: boolean
   deletingChapterId: string | null
   onCreateChapter: () => void
+  onEditChapterNumber: (chapter: ProjectChapterLocator) => void
   onDeleteChapter: (chapter: ProjectChapterLocator) => void
 }) {
   const fixedDocs = [
@@ -550,11 +702,8 @@ function ProjectDocumentPanel({
       summary: project.docSummary.find((item) => item.key === "release"),
     },
   ]
-  const chapters = [...project.docDirectory.chapterDocs].sort((left, right) => {
-    const leftOrder = left.sortOrder || left.chapterNo || 0
-    const rightOrder = right.sortOrder || right.chapterNo || 0
-    return leftOrder - rightOrder
-  })
+  // 项目详情与全文质检共用同一套章节号排序规则，作者保存新章节号后可以立即看到真实的质检顺序。
+  const chapters = [...project.docDirectory.chapterDocs].sort(compareChaptersByChapterNo)
 
   return (
     <Card className="overflow-hidden">
@@ -618,6 +767,7 @@ function ProjectDocumentPanel({
                       chapter={chapter}
                       canManageChapters={canManageChapters}
                       deleting={deletingChapterId === chapter.docId}
+                      onEditChapterNumber={onEditChapterNumber}
                       onDeleteChapter={onDeleteChapter}
                     />
                   ))}
@@ -665,12 +815,14 @@ function ChapterEntry({
   chapter,
   canManageChapters,
   deleting,
+  onEditChapterNumber,
   onDeleteChapter,
 }: {
   projectId: string
   chapter: ProjectChapterLocator
   canManageChapters: boolean
   deleting: boolean
+  onEditChapterNumber: (chapter: ProjectChapterLocator) => void
   onDeleteChapter: (chapter: ProjectChapterLocator) => void
 }) {
   const t = useT()
@@ -714,6 +866,18 @@ function ChapterEntry({
               <BookOpen className="size-3.5" />
             </Link>
           </Button>
+          {canManageChapters && (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-7 px-2"
+              title="修改章节号和标题"
+              onClick={() => onEditChapterNumber(chapter)}
+            >
+              <Pencil className="size-3.5" />
+            </Button>
+          )}
           {canDeleteChapter && (
             <Button
               type="button"
