@@ -4,12 +4,13 @@ import type { Editor } from "@tiptap/core"
 import type { Mark as ProseMirrorMark } from "@tiptap/pm/model"
 import { TextSelection } from "@tiptap/pm/state"
 import type { EditorState, Transaction } from "@tiptap/pm/state"
-import { MessageSquareText, Minus, PanelRightClose, Plus, Replace, Trash2 } from "lucide-react"
+import { MessageSquareText, Minus, PanelRightClose, PencilLine, Plus, Replace, Trash2 } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
 
-import { setActiveDiscussion } from "@/components/doc/tiptap/extensions"
+import { setActiveDiscussion, updateCommentBody } from "@/components/doc/tiptap/extensions"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
+import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 
 type DiscussionSource = "comment" | "revision"
@@ -399,8 +400,35 @@ export function DiscussionSidebar({
 }) {
   const [items, setItems] = useState<DiscussionItem[]>([])
   const [activeKey, setActiveKey] = useState<string | null>(null)
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null)
+  const [commentDraft, setCommentDraft] = useState("")
   const cardRefs = useRef(new Map<string, HTMLElement>())
+  const editTextareaRef = useRef<HTMLTextAreaElement>(null)
   const updateTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  function closeCommentEditor() {
+    // 关闭时同时清空草稿，避免下次编辑另一条批注时短暂显示上一条内容。
+    setEditingCommentId(null)
+    setCommentDraft("")
+  }
+
+  function openCommentEditor(item: DiscussionItem) {
+    // 编辑入口只会传入 comment；这里仍直接从当前条目取值，让用户可以在原文基础上继续补充。
+    setEditingCommentId(item.id)
+    setCommentDraft(item.body ?? "")
+  }
+
+  function saveCommentEdit(item: DiscussionItem) {
+    if (!editor || item.source !== "comment") {
+      return
+    }
+
+    const saved = updateCommentBody(editor, item.id, commentDraft)
+
+    if (saved) {
+      closeCommentEditor()
+    }
+  }
 
   useEffect(() => {
     if (!editor) {
@@ -462,6 +490,22 @@ export function DiscussionSidebar({
     }
   }, [activeKey])
 
+  useEffect(() => {
+    if (editingCommentId) {
+      // 等内联编辑器挂载后聚焦并把光标移到末尾，直接满足“继续补充一点话”的主要操作路径。
+      editTextareaRef.current?.focus()
+      const draftLength = editTextareaRef.current?.value.length ?? 0
+      editTextareaRef.current?.setSelectionRange(draftLength, draftLength)
+    }
+  }, [editingCommentId])
+
+  useEffect(() => {
+    if (editingCommentId && !items.some((item) => item.source === "comment" && item.id === editingCommentId)) {
+      // 批注被其它操作删除后及时收起失效编辑器，避免保存一个已经不存在的 commentId。
+      closeCommentEditor()
+    }
+  }, [editingCommentId, items])
+
   const summary = useMemo(
     () => ({
       comments: items.filter((item) => item.kind === "comment").length,
@@ -505,6 +549,9 @@ export function DiscussionSidebar({
           <div className="grid gap-2.5">
             {items.map((item) => {
               const active = item.key === activeKey
+              const editing = item.source === "comment" && item.id === editingCommentId
+              const normalizedDraft = commentDraft.trim()
+              const commentUnchanged = normalizedDraft === (item.body ?? "").trim()
 
               return (
                 <article
@@ -535,26 +582,84 @@ export function DiscussionSidebar({
                       <KindIcon kind={item.kind} />
                       {item.label}
                     </span>
-                    <button
-                      className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
-                      type="button"
-                      title={readOnly ? "当前内容只读，不能删除标记" : "删除标记"}
-                      disabled={readOnly}
-                      onClick={(event) => {
-                        event.stopPropagation()
+                    <div className="flex shrink-0 items-center gap-0.5">
+                      {item.source === "comment" && (
+                        <button
+                          className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-amber-100 hover:text-amber-800 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+                          type="button"
+                          title={readOnly ? "当前内容只读，不能修改批注" : "修改批注"}
+                          aria-label={readOnly ? "当前内容只读，不能修改批注" : "修改批注"}
+                          disabled={readOnly}
+                          onClick={(event) => {
+                            // 卡片点击用于正文定位；修改按钮只打开输入区，不能让同一次点击同时改变正文选区。
+                            event.stopPropagation()
+                            openCommentEditor(item)
+                          }}
+                        >
+                          <PencilLine className="size-4" />
+                        </button>
+                      )}
+                      <button
+                        className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+                        type="button"
+                        title={readOnly ? "当前内容只读，不能删除标记" : "删除标记"}
+                        aria-label={readOnly ? "当前内容只读，不能删除标记" : "删除标记"}
+                        disabled={readOnly}
+                        onClick={(event) => {
+                          event.stopPropagation()
 
-                        if (editor && !readOnly) {
-                          removeDiscussionMark(editor, item)
-                        }
-                      }}
-                    >
-                      <Trash2 className="size-4" />
-                    </button>
+                          if (editor && !readOnly) {
+                            removeDiscussionMark(editor, item)
+                          }
+                        }}
+                      >
+                        <Trash2 className="size-4" />
+                      </button>
+                    </div>
                   </div>
                   <blockquote className="mt-2 border-l-2 border-foreground/15 pl-2 text-sm leading-6 text-muted-foreground">
                     “{truncateText(item.quote)}”
                   </blockquote>
-                  {item.body && <p className="mt-2 text-sm leading-6 text-foreground/90">{item.body}</p>}
+                  {editing ? (
+                    <div
+                      className="mt-2 grid gap-2"
+                      onClick={(event) => event.stopPropagation()}
+                      onKeyDown={(event) => event.stopPropagation()}
+                    >
+                      <Textarea
+                        ref={editTextareaRef}
+                        className="min-h-24 resize-y bg-background text-sm leading-6"
+                        value={commentDraft}
+                        aria-label="批注内容"
+                        placeholder="输入批注内容"
+                        onChange={(event) => setCommentDraft(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Escape") {
+                            closeCommentEditor()
+                          }
+
+                          if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && normalizedDraft && !commentUnchanged) {
+                            saveCommentEdit(item)
+                          }
+                        }}
+                      />
+                      <div className="flex justify-end gap-2">
+                        <Button type="button" variant="ghost" size="sm" onClick={closeCommentEditor}>
+                          取消
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          disabled={!normalizedDraft || commentUnchanged}
+                          onClick={() => saveCommentEdit(item)}
+                        >
+                          保存
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    item.body && <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-foreground/90">{item.body}</p>
+                  )}
                   {item.kind === "replace" && (
                     <div className="mt-2 grid gap-1 text-xs leading-5">
                       <p className="text-orange-700">原文：{truncateText(item.originalText ?? "")}</p>

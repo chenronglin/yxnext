@@ -1803,6 +1803,55 @@ export function addCommentToRange(
   return true
 }
 
+export function updateCommentBody(editor: Editor, commentId: string, nextBody: string) {
+  const body = nextBody.trim()
+  const markType = editor.state.schema.marks.comment
+
+  // 空批注、失效身份和只读编辑器都不能产生事务；在数据层统一兜底，避免其它入口绕过界面禁用状态。
+  if (!editor.isEditable || !commentId || !body || !markType) {
+    return false
+  }
+
+  const tr = editor.state.tr
+  const updatedAt = new Date().toISOString()
+  let found = false
+
+  // 同一条批注可能跨越多个文本节点，或因加粗、修订等其它 mark 被拆成多个片段。
+  // 必须按 commentId 更新全部片段，才能防止侧栏内容与鼠标悬浮 title 在不同位置显示旧值。
+  editor.state.doc.descendants((node, pos) => {
+    if (!node.isText) {
+      return
+    }
+
+    node.marks.forEach((mark) => {
+      if (mark.type.name !== "comment" || mark.attrs.id !== commentId) {
+        return
+      }
+
+      found = true
+      tr.removeMark(pos, pos + node.nodeSize, mark)
+      tr.addMark(
+        pos,
+        pos + node.nodeSize,
+        markType.create({
+          ...mark.attrs,
+          body,
+          // 保留创建人和创建时间，只刷新修改时间，保证批注的审计信息不会被编辑操作覆盖。
+          updatedAt,
+        }),
+      )
+    })
+  })
+
+  if (!found) {
+    return false
+  }
+
+  // mark 属性修改会进入现有 onUpdate/自动保存链路，无需增加新的接口或后端字段。
+  editor.view.dispatch(tr)
+  return true
+}
+
 export const RevisionMark = Mark.create<RevisionTrackingOptions>({
   name: "revision",
   inclusive: false,
@@ -2199,15 +2248,30 @@ export function insertEditSuggestionAfterSelection(editor: Editor, createdBy: No
     .run()
 }
 
-function EditSuggestionView({ node, updateAttributes, deleteNode }: ReactNodeViewProps) {
+// 分类选项是静态配置；提升到模块级后，编辑建议每次输入并同步节点属性时不再重复创建数组。
+const EDIT_SUGGESTION_CATEGORY_OPTIONS: Array<{ value: NovelSuggestionCategory; label: string }> = [
+  { value: "structure", label: "结构" },
+  { value: "logic", label: "逻辑" },
+  { value: "rhythm", label: "节奏" },
+  { value: "expression", label: "表达" },
+  { value: "plot", label: "情节" },
+  { value: "character", label: "角色" },
+  { value: "worldbuilding", label: "设定" },
+  { value: "continuity", label: "连续性" },
+  { value: "other", label: "其他" },
+]
+
+function EditSuggestionView({ editor, node, updateAttributes, deleteNode }: ReactNodeViewProps) {
   const attrs = node.attrs as EditSuggestionAttrs
-  const [body, setBody] = useState(attrs.body ?? "")
-  const [category, setCategory] = useState<NovelSuggestionCategory>((attrs.category as NovelSuggestionCategory) ?? "other")
-  const [editing, setEditing] = useState(!attrs.body)
+  // 输入值直接以 ProseMirror 节点属性为唯一数据源，避免 React 本地草稿与自动保存使用的文档 JSON 分叉。
+  const body = attrs.body ?? ""
+  const category = (attrs.category as NovelSuggestionCategory) ?? "other"
+  const editable = editor.isEditable
+  const [editing, setEditing] = useState(editable && !body)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
-    if (editing) {
+    if (editable && editing) {
       // Tiptap 插入 NodeView 后会继续处理本轮 selection 事务，立即 focus 可能被编辑器抢回。
       // 延迟到下一帧再滚动和聚焦，确保点击“编辑建议”后光标稳定落到建议输入框。
       const frameId = window.requestAnimationFrame(() => {
@@ -2222,7 +2286,16 @@ function EditSuggestionView({ node, updateAttributes, deleteNode }: ReactNodeVie
 
       return () => window.cancelAnimationFrame(frameId)
     }
-  }, [editing])
+  }, [editable, editing])
+
+  function persistSuggestionAttributes(nextAttributes: Partial<Pick<EditSuggestionAttrs, "body" | "category">>) {
+    // 每次输入或切换分类都立即写回文档节点，使外层 onUpdate 能把最新建议纳入防抖自动保存。
+    // 即使用户不再点击小保存图标而直接执行“退回作者”，流程前的 flushAutoSave 也能拿到完整内容。
+    updateAttributes({
+      ...nextAttributes,
+      updatedAt: new Date().toISOString(),
+    })
+  }
 
   function saveSuggestion() {
     const nextBody = body.trim()
@@ -2231,25 +2304,12 @@ function EditSuggestionView({ node, updateAttributes, deleteNode }: ReactNodeVie
       return
     }
 
-    updateAttributes({
-      body: nextBody,
-      category,
-      updatedAt: new Date().toISOString(),
-    })
+    // 保存按钮只负责结束编辑并规范化首尾空白；正文在键入过程中已经持续写回节点。
+    if (nextBody !== body) {
+      persistSuggestionAttributes({ body: nextBody })
+    }
     setEditing(false)
   }
-
-  const categoryOptions: Array<{ value: NovelSuggestionCategory; label: string }> = [
-    { value: "structure", label: "结构" },
-    { value: "logic", label: "逻辑" },
-    { value: "rhythm", label: "节奏" },
-    { value: "expression", label: "表达" },
-    { value: "plot", label: "情节" },
-    { value: "character", label: "角色" },
-    { value: "worldbuilding", label: "设定" },
-    { value: "continuity", label: "连续性" },
-    { value: "other", label: "其他" },
-  ]
 
   return (
     <NodeViewWrapper
@@ -2262,8 +2322,8 @@ function EditSuggestionView({ node, updateAttributes, deleteNode }: ReactNodeVie
         <div className="flex min-w-0 flex-col gap-0.5">
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="mr-1 font-medium text-amber-800">编辑建议</span>
-            {editing ? (
-              categoryOptions.map((option) => {
+            {editable && editing ? (
+              EDIT_SUGGESTION_CATEGORY_OPTIONS.map((option) => {
                 const active = category === option.value
 
                 return (
@@ -2276,7 +2336,11 @@ function EditSuggestionView({ node, updateAttributes, deleteNode }: ReactNodeVie
                         ? "border-amber-400 bg-amber-500 text-white"
                         : "border-amber-200 bg-white text-amber-800 hover:bg-amber-100",
                     )}
-                    onClick={() => setCategory(option.value)}
+                    onClick={() => {
+                      if (!active) {
+                        persistSuggestionAttributes({ category: option.value })
+                      }
+                    }}
                   >
                     {option.label}
                   </button>
@@ -2284,14 +2348,14 @@ function EditSuggestionView({ node, updateAttributes, deleteNode }: ReactNodeVie
               })
             ) : (
               <span className="inline-flex h-6 items-center rounded-md border border-amber-200 bg-amber-100 px-2 text-[11px] font-medium text-amber-800">
-                {categoryOptions.find((option) => option.value === category)?.label ?? "其他"}
+                {EDIT_SUGGESTION_CATEGORY_OPTIONS.find((option) => option.value === category)?.label ?? "其他"}
               </span>
             )}
           </div>
           <span className="truncate text-xs text-amber-700/75">{attrs.createdBy?.nameSnapshot ?? "未知用户"}</span>
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          {editing && (
+          {editable && editing && (
             <button
               className="inline-flex size-7 items-center justify-center rounded-md text-amber-700 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
               type="button"
@@ -2302,7 +2366,7 @@ function EditSuggestionView({ node, updateAttributes, deleteNode }: ReactNodeVie
               <Save className="size-4" />
             </button>
           )}
-          {!editing && (
+          {editable && !editing && (
             <button
               className="inline-flex size-7 items-center justify-center rounded-md text-amber-700 hover:bg-amber-100"
               type="button"
@@ -2312,25 +2376,27 @@ function EditSuggestionView({ node, updateAttributes, deleteNode }: ReactNodeVie
               <PencilLine className="size-4" />
             </button>
           )}
-          <button
-            className="inline-flex size-7 items-center justify-center rounded-md text-red-500 hover:bg-red-50"
-            type="button"
-            onClick={deleteNode}
-            title="删除建议"
-          >
-            <Trash2 className="size-4" />
-          </button>
+          {editable && (
+            <button
+              className="inline-flex size-7 items-center justify-center rounded-md text-red-500 hover:bg-red-50"
+              type="button"
+              onClick={deleteNode}
+              title="删除建议"
+            >
+              <Trash2 className="size-4" />
+            </button>
+          )}
         </div>
       </div>
 
-      {editing ? (
+      {editable && editing ? (
         <div className="pt-2">
           <textarea
             ref={textareaRef}
             className="min-h-16 w-full resize-y rounded-md border border-amber-200 bg-white px-3 py-2 leading-6 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
             value={body}
             placeholder="输入编辑建议"
-            onChange={(event) => setBody(event.target.value)}
+            onChange={(event) => persistSuggestionAttributes({ body: event.target.value })}
             onKeyDown={(event) => {
               if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
                 saveSuggestion()

@@ -774,17 +774,49 @@ describe("returnDocToAuthor", () => {
   })
 
   it("编辑退回成功时关闭待审待办并生成作者待改待办", async () => {
+    const suggestionContent = makeNovelContent([
+      createNovelParagraph({ id: "block_p_1", text: "需要修改的正文" }),
+      {
+        type: "editSuggestion",
+        attrs: {
+          id: "suggestion_1",
+          anchorBlockId: "block_p_1",
+          position: "after",
+          category: "logic",
+          body: "请补充核心冲突发生的原因。",
+          createdBy: {
+            userId: editorActor.id,
+            role: editorActor.role,
+            nameSnapshot: editorActor.name,
+          },
+          createdAt: FIXED_TIME.toISOString(),
+          updatedAt: FIXED_TIME.toISOString(),
+        },
+      },
+    ])
     const beforeDoc = makeDocRecord({
       status: "submitted",
       holderRole: "editor",
-      activeDraft: makeDraft({ ownerRole: "editor", ownerUserId: editorActor.userId, lockVersion: 3 }),
+      activeDraft: makeDraft({
+        ownerRole: "editor",
+        ownerUserId: editorActor.userId,
+        lockVersion: 3,
+        contentJson: suggestionContent,
+        suggestionCount: 1,
+      }),
     })
     const afterDoc = makeDocRecord({
       status: "rejected",
       holderRole: "author",
       activeDraftId: 777n,
       latestRevisionId: 901n,
-      activeDraft: makeDraft({ draftId: 777n, ownerRole: "author", ownerUserId: authorActor.userId }),
+      activeDraft: makeDraft({
+        draftId: 777n,
+        ownerRole: "author",
+        ownerUserId: authorActor.userId,
+        contentJson: suggestionContent,
+        suggestionCount: 1,
+      }),
       lastAction: "editor_reject",
       reviewedAt: FIXED_TIME,
       lastHandoffNote: "请按建议重写",
@@ -800,6 +832,24 @@ describe("returnDocToAuthor", () => {
 
     const source = expectDraftSource(result.source)
 
+    // Revision 与交给作者的新 CurrentDraft 必须使用同一份建议 JSON；若这里分叉，就会出现历史版本有内容而作者当前稿为空。
+    expect(mockTx.docRevision.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          contentJson: suggestionContent,
+          suggestionCount: 1,
+        }),
+      }),
+    )
+    expect(mockTx.docCurrentDraft.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          contentJson: suggestionContent,
+          suggestionCount: 1,
+        }),
+      }),
+    )
+    expect(source.contentJson).toEqual(suggestionContent)
     expect(mockTx.todoItem.updateMany).toHaveBeenCalled()
     // 退回备注必须同时写入待办和通知，否则作者在待办/通知入口只能看到泛化文案。
     expect(mockTx.todoItem.upsert).toHaveBeenCalledWith(
