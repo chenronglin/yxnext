@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { compareChaptersByChapterNo } from "@/lib/chapter-order"
+import { buildChapterNavigation, compareChaptersByChapterNo } from "@/lib/chapter-order"
 
 type TestChapter = {
   title: string
@@ -43,5 +43,36 @@ describe("compareChaptersByChapterNo", () => {
     const orderedTitles = [...chapters].sort(compareChaptersByChapterNo).map((chapter) => chapter.title)
 
     expect(orderedTitles).toEqual(["第二章先录入版本", "第二章后录入版本"])
+  })
+})
+
+describe("buildChapterNavigation", () => {
+  const chapters = [
+    { docId: "11", chapterNo: 11, sortOrder: 2, title: "第十一章" },
+    { docId: "1", chapterNo: 1, sortOrder: 3, title: "第一章" },
+    { docId: "2", chapterNo: 2, sortOrder: 1, title: "第二章" },
+  ]
+
+  it("按结构化章节号计算当前章和相邻章节", () => {
+    const navigation = buildChapterNavigation(chapters, "2")
+
+    expect(navigation.orderedChapters.map((chapter) => chapter.docId)).toEqual(["1", "2", "11"])
+    expect(navigation.currentIndex).toBe(1)
+    expect(navigation.previousChapter?.docId).toBe("1")
+    expect(navigation.nextChapter?.docId).toBe("11")
+  })
+
+  it("在首章、末章和未知 Doc 上返回明确的导航边界", () => {
+    const first = buildChapterNavigation(chapters, "1")
+    const last = buildChapterNavigation(chapters, "11")
+    const missing = buildChapterNavigation(chapters, "999")
+
+    expect(first.previousChapter).toBeNull()
+    expect(first.nextChapter?.docId).toBe("2")
+    expect(last.previousChapter?.docId).toBe("2")
+    expect(last.nextChapter).toBeNull()
+    expect(missing.currentIndex).toBe(-1)
+    expect(missing.previousChapter).toBeNull()
+    expect(missing.nextChapter).toBeNull()
   })
 })

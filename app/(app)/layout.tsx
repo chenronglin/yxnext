@@ -24,6 +24,10 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     redirect("/settings?mustChangePassword=1")
   }
 
+  // 当前稿件页需要同时容纳章节目录、正文和批注栏，因此单独使用整个后台内容宽度；
+  // Clean 阅读、历史版本和普通业务页仍沿用 6xl 限宽，避免阅读行长和列表密度发生无关变化。
+  const isCurrentDocWorkspace = /^\/projects\/\d+\/docs\/\d+\/?$/.test(currentPath)
+
   return (
     <RoleProvider initialUser={currentUser}>
       <PasswordResetGuard />
@@ -33,7 +37,9 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
           <div className="flex flex-1 flex-col overflow-hidden">
             <AppTopbar />
             <main className="flex-1 overflow-y-auto px-4 py-6 md:px-8">
-              <div className="mx-auto w-full max-w-6xl">{children}</div>
+              <div className={isCurrentDocWorkspace ? "mx-auto w-full max-w-none" : "mx-auto w-full max-w-6xl"}>
+                {children}
+              </div>
             </main>
           </div>
         </div>
