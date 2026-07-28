@@ -58,6 +58,10 @@ type WithdrawInput = {
   reason?: string | null
 }
 
+type ConvertToProjectInput = {
+  projectTitle?: string | null
+}
+
 type OperationLogInput = {
   actor: ApiCurrentUser
   action: string
@@ -1407,7 +1411,11 @@ export async function withdrawSiPreissue(actor: ApiCurrentUser, recordIdValue: s
   }
 }
 
-export async function convertSiPreissueToProject(actor: ApiCurrentUser, recordIdValue: string) {
+export async function convertSiPreissueToProject(
+  actor: ApiCurrentUser,
+  recordIdValue: string,
+  input: ConvertToProjectInput = {},
+) {
   ensureEditorActor(actor)
 
   const preissueId = parseBigIntId(recordIdValue, "预发记录 ID")
@@ -1506,7 +1514,27 @@ export async function convertSiPreissueToProject(actor: ApiCurrentUser, recordId
       }
 
       const snapshot = existing.siSnapshotJson
-      const title = readSnapshotString(snapshot, "title", existing.storyIdea.title)
+      const sourceSiTitle = readSnapshotString(snapshot, "title", existing.storyIdea.title)
+      // 未显式传入名称时兼容旧调用方，继续使用 SI 快照名称；一旦调用方传值，则必须把它当作独立项目名称校验。
+      // 这里与路由层重复做业务校验，避免服务函数被测试、脚本或后续内部任务直接调用时绕过约束。
+      const title = input.projectTitle === undefined ? sourceSiTitle.trim() : input.projectTitle?.trim()
+
+      if (!title) {
+        throw new ApiError({
+          status: 400,
+          code: "PROJECT_TITLE_REQUIRED",
+          message: "项目名称不能为空",
+        })
+      }
+
+      if (title.length > 255) {
+        throw new ApiError({
+          status: 400,
+          code: "PROJECT_TITLE_TOO_LONG",
+          message: "项目名称不能超过 255 个字符",
+        })
+      }
+
       const freshTwist = readSnapshotString(snapshot, "freshTwist", existing.storyIdea.freshTwist ?? "")
       const coreSynopsis = readSnapshotString(snapshot, "coreSynopsis", existing.storyIdea.coreSynopsis ?? "")
       const now = new Date()
@@ -1677,6 +1705,9 @@ export async function convertSiPreissueToProject(actor: ApiCurrentUser, recordId
           preissueStatus: "converted",
           siStatus: "converted",
           projectId: project.projectId.toString(),
+          // 同时记录来源 SI 名称和用户确认的项目名称，便于审计时明确两者没有发生隐式联动。
+          sourceSiTitle,
+          projectTitle: title,
           synopsisDocId: doc.docId.toString(),
           synopsisDraftId: draft.draftId.toString(),
         },

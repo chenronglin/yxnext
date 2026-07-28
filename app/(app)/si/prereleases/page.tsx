@@ -110,6 +110,8 @@ export default function PrereleaseRecordsPage() {
   const [pagination, setPagination] = useState({ page: filters.page, pageSize: filters.pageSize, total: 0, totalPages: 1 })
   const [withdrawTarget, setWithdrawTarget] = useState<PrereleaseRecord | null>(null)
   const [convertTarget, setConvertTarget] = useState<PrereleaseRecord | null>(null)
+  const [projectTitle, setProjectTitle] = useState("")
+  const [convertError, setConvertError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null)
 
@@ -215,28 +217,65 @@ export default function PrereleaseRecordsPage() {
   async function handleConvert() {
     if (!convertTarget || submitting) return
 
+    const normalizedProjectTitle = projectTitle.trim()
+
+    if (!normalizedProjectTitle) {
+      setConvertError("请输入项目名称")
+      return
+    }
+
+    if (normalizedProjectTitle.length > 255) {
+      setConvertError("项目名称不能超过 255 个字符")
+      return
+    }
+
     setSubmitting(true)
     setMessage(null)
+    setConvertError(null)
 
     try {
-      // 转项目成功后直接进入项目页；项目创建细节不在前端拼装。
+      // 预发列表和 SI 详情必须提交同一个独立项目名称字段，避免不同入口再次回退为隐式复用 SI 名称。
       const response = await fetchJson<ConvertProjectResponse>(
         `/api/si-prepublish/${convertTarget.recordId}/convert-to-project`,
         {
           method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            projectTitle: normalizedProjectTitle,
+          }),
         },
       )
 
       setConvertTarget(null)
+      setProjectTitle("")
       router.push(`/projects/${response.project.projectId}`)
       router.refresh()
     } catch (error) {
-      setMessage({
-        type: "error",
-        text: error instanceof Error ? error.message : "转项目失败，请稍后重试",
-      })
+      // 错误保留在当前弹窗内，让用户可以直接修改项目名称后重试。
+      setConvertError(error instanceof Error ? error.message : "转项目失败，请稍后重试")
+    } finally {
       setSubmitting(false)
     }
+  }
+
+  function openConvertDialog(record: PrereleaseRecord) {
+    if (submitting) return
+
+    // 每次打开都以该条预发快照中的 SI 名称作为默认值，但项目名称状态与 SI 数据保持独立。
+    setConvertTarget(record)
+    setProjectTitle(record.siTitle)
+    setConvertError(null)
+    setMessage(null)
+  }
+
+  function closeConvertDialog() {
+    if (submitting) return
+
+    setConvertTarget(null)
+    setProjectTitle("")
+    setConvertError(null)
   }
 
   return (
@@ -384,7 +423,7 @@ export default function PrereleaseRecordsPage() {
                               <Undo2 className="mr-1 size-3.5" />
                               收回
                             </Button>
-                            <Button size="sm" className="h-8 px-2" onClick={() => setConvertTarget(record)}>
+                            <Button size="sm" className="h-8 px-2" onClick={() => openConvertDialog(record)}>
                               <ArrowRightCircle className="mr-1 size-3.5" />
                               转项目
                             </Button>
@@ -461,20 +500,66 @@ export default function PrereleaseRecordsPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={Boolean(convertTarget)} onOpenChange={(open) => !open && setConvertTarget(null)}>
-        <DialogContent className="max-w-md">
+      <Dialog
+        open={Boolean(convertTarget)}
+        onOpenChange={(open) => {
+          if (!open) closeConvertDialog()
+        }}
+      >
+        <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>确认转项目</DialogTitle>
+            <DialogTitle>项目命名</DialogTitle>
             <DialogDescription>
-              将基于《{convertTarget?.siTitle}》与作者「{convertTarget?.authorName}」创建新项目，并进入梗概阶段。确认后该记录不可再次转项目。
+              项目名称默认使用 SI 名称，你可以在转项目前修改；后续修改项目名称也不会影响 SI 名称。
             </DialogDescription>
           </DialogHeader>
+
+          {convertTarget && (
+            <div className="flex flex-col gap-4 py-1">
+              {/* 保留来源 SI 与作者信息，方便编辑在列表场景下确认当前正在转换的记录。 */}
+              <div className="rounded-lg border border-border bg-muted/40 p-3 text-sm">
+                <p className="font-medium text-foreground">来源 SI：{convertTarget.siTitle}</p>
+                <p className="mt-1 text-xs text-muted-foreground">合作作者：{convertTarget.authorName}</p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground" htmlFor="prerelease-project-title">
+                  项目名称
+                </label>
+                <Input
+                  id="prerelease-project-title"
+                  value={projectTitle}
+                  onChange={(event) => {
+                    setProjectTitle(event.target.value)
+                    setConvertError(null)
+                  }}
+                  maxLength={255}
+                  placeholder="请输入项目名称"
+                  disabled={submitting}
+                  autoFocus
+                />
+                <p className="text-xs text-muted-foreground">该名称独立于 SI 名称，可在项目详情页随时修改。</p>
+              </div>
+
+              {convertError && (
+                <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600">
+                  {convertError}
+                </p>
+              )}
+            </div>
+          )}
+
           <DialogFooter>
-            <Button variant="outline" className="bg-transparent" onClick={() => setConvertTarget(null)}>
+            <Button
+              variant="outline"
+              className="bg-transparent"
+              disabled={submitting}
+              onClick={closeConvertDialog}
+            >
               取消
             </Button>
-            <Button disabled={submitting} onClick={() => void handleConvert()}>
-              {submitting ? "处理中..." : "确认转项目"}
+            <Button disabled={submitting || !projectTitle.trim()} onClick={() => void handleConvert()}>
+              {submitting ? "正在创建..." : "确认转项目"}
             </Button>
           </DialogFooter>
         </DialogContent>

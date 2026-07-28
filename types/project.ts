@@ -167,6 +167,11 @@ export interface ProjectDetail extends ProjectItem {
   docDirectory: ProjectDocDirectory
 }
 
+// 项目名称是项目自身的可编辑元数据，不会回写来源 SI；单独建模可避免后续接口误复用 SI 更新入参。
+export interface UpdateProjectTitleInput {
+  title: string
+}
+
 // 正文章节创建接口只需要最少的可编辑字段；章节号允许前端显式传入，
 // 以便后续支持“第 X 章”与自由标题并存的录入方式。
 export interface CreateChapterInput {

@@ -10,6 +10,8 @@ import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
 import { useConfirmDialog, useToast } from "@/components/ui/app-feedback"
 import { Card } from "@/components/ui/card"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
 import { fetchJson } from "@/lib/api"
 import { formatDateOnly } from "@/lib/utils"
@@ -59,6 +61,9 @@ export function SiDetail({ si }: { si: SiItem }) {
   const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null)
   const [pendingRecordId, setPendingRecordId] = useState<string | null>(null)
   const [workingAction, setWorkingAction] = useState<"archive" | "delete" | null>(null)
+  const [convertTarget, setConvertTarget] = useState<PrereleaseRecord | null>(null)
+  const [projectTitle, setProjectTitle] = useState("")
+  const [convertError, setConvertError] = useState<string | null>(null)
 
   const records = si.preissues
   const convertedRecord = records.find((record) => record.status === "converted")
@@ -103,35 +108,64 @@ export function SiDetail({ si }: { si: SiItem }) {
     }
   }
 
-  async function handleConvert(record: PrereleaseRecord) {
+  function openConvertDialog(record: PrereleaseRecord) {
     if (pendingRecordId) return
 
-    const confirmed = await confirm({
-      title: "确认转项目",
-      description: `将基于《${record.siTitle}》与作者「${record.authorName}」创建新项目，并进入梗概阶段。`,
-      confirmText: "确认转项目",
-    })
-    if (!confirmed) return
-
-    setPendingRecordId(record.recordId)
+    // 每次打开都从预发快照的 SI 名称重新初始化，但只写入本地表单；用户修改后会作为独立项目名称提交。
+    setConvertTarget(record)
+    setProjectTitle(record.siTitle)
+    setConvertError(null)
     setMessage(null)
+  }
+
+  function closeConvertDialog() {
+    if (pendingRecordId) return
+
+    setConvertTarget(null)
+    setProjectTitle("")
+    setConvertError(null)
+  }
+
+  async function handleConvert() {
+    if (!convertTarget || pendingRecordId) return
+
+    const normalizedProjectTitle = projectTitle.trim()
+
+    if (!normalizedProjectTitle) {
+      setConvertError("请输入项目名称")
+      return
+    }
+
+    if (normalizedProjectTitle.length > 255) {
+      setConvertError("项目名称不能超过 255 个字符")
+      return
+    }
+
+    setPendingRecordId(convertTarget.recordId)
+    setMessage(null)
+    setConvertError(null)
 
     try {
-      // 转项目成功后进入新项目页；项目、阶段计划和梗概 Doc 的创建都由后端事务完成。
+      // 显式提交独立项目名称；项目、阶段计划和梗概 Doc 仍由后端在同一个事务内创建。
       const response = await fetchJson<ConvertProjectResponse>(
-        `/api/si-prepublish/${record.recordId}/convert-to-project`,
+        `/api/si-prepublish/${convertTarget.recordId}/convert-to-project`,
         {
           method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            projectTitle: normalizedProjectTitle,
+          }),
         },
       )
 
+      setConvertTarget(null)
       router.push(`/projects/${response.project.projectId}`)
       router.refresh()
     } catch (error) {
-      setMessage({
-        type: "error",
-        text: error instanceof Error ? error.message : "转项目失败，请稍后重试",
-      })
+      // 失败信息留在命名弹窗内，避免用户关闭弹窗后才发现名称未提交成功。
+      setConvertError(error instanceof Error ? error.message : "转项目失败，请稍后重试")
     } finally {
       setPendingRecordId(null)
     }
@@ -296,7 +330,7 @@ export function SiDetail({ si }: { si: SiItem }) {
                         <Button
                           size="sm"
                           disabled={pendingRecordId === record.recordId}
-                          onClick={() => void handleConvert(record)}
+                          onClick={() => openConvertDialog(record)}
                         >
                           <ArrowRightCircle className="mr-1 size-3.5" />
                           {pendingRecordId === record.recordId ? "处理中..." : "确认转项目"}
@@ -403,6 +437,77 @@ export function SiDetail({ si }: { si: SiItem }) {
           router.refresh()
         }}
       />
+
+      <Dialog
+        open={Boolean(convertTarget)}
+        onOpenChange={(open) => {
+          if (!open) closeConvertDialog()
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>项目命名</DialogTitle>
+            <DialogDescription>
+              项目名称默认使用 SI 名称，你可以在转项目前修改；后续修改项目名称也不会影响 SI 名称。
+            </DialogDescription>
+          </DialogHeader>
+
+          {convertTarget && (
+            <div className="flex flex-col gap-4 py-1">
+              {/* 明确展示来源 SI 和合作作者，让用户在命名时仍能确认本次转换对象。 */}
+              <div className="rounded-lg border border-border bg-muted/40 p-3 text-sm">
+                <p className="font-medium text-foreground">来源 SI：{convertTarget.siTitle}</p>
+                <p className="mt-1 text-xs text-muted-foreground">合作作者：{convertTarget.authorName}</p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground" htmlFor="convert-project-title">
+                  项目名称
+                </label>
+                <Input
+                  id="convert-project-title"
+                  value={projectTitle}
+                  onChange={(event) => {
+                    setProjectTitle(event.target.value)
+                    setConvertError(null)
+                  }}
+                  maxLength={255}
+                  placeholder="请输入项目名称"
+                  disabled={pendingRecordId === convertTarget.recordId}
+                  autoFocus
+                />
+                <p className="text-xs text-muted-foreground">该名称独立于 SI 名称，可在项目详情页随时修改。</p>
+              </div>
+
+              {convertError && (
+                <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600">
+                  {convertError}
+                </p>
+              )}
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              className="bg-transparent"
+              disabled={Boolean(pendingRecordId)}
+              onClick={closeConvertDialog}
+            >
+              取消
+            </Button>
+            <Button
+              type="button"
+              disabled={!projectTitle.trim() || Boolean(pendingRecordId)}
+              onClick={() => void handleConvert()}
+            >
+              <ArrowRightCircle className="mr-1.5 size-4" />
+              {pendingRecordId ? "正在创建..." : "确认转项目"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

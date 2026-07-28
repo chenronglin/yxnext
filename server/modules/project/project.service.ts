@@ -31,6 +31,7 @@ import type {
   ReleaseDocStatus,
   StagePlan,
   UpdateChapterMetadataInput,
+  UpdateProjectTitleInput,
 } from "@/types/project"
 
 type TxClient = Prisma.TransactionClient
@@ -841,6 +842,91 @@ export async function getProjectDetail(actor: ApiCurrentUser, projectIdValue: st
   return {
     project: toProjectDetail(project),
   }
+}
+
+export async function updateProjectTitle(
+  actor: ApiCurrentUser,
+  projectIdValue: string,
+  input: UpdateProjectTitleInput,
+) {
+  const projectId = parseBigIntId(projectIdValue, "项目 ID")
+  const title = input.title.trim()
+
+  // 路由层负责用户输入提示，服务层仍保留同等约束，防止内部调用绕过 HTTP 校验写入非法名称。
+  if (!title) {
+    throw new ApiError({
+      status: 400,
+      code: "PROJECT_TITLE_REQUIRED",
+      message: "项目名称不能为空",
+    })
+  }
+
+  if (title.length > 255) {
+    throw new ApiError({
+      status: 400,
+      code: "PROJECT_TITLE_TOO_LONG",
+      message: "项目名称不能超过 255 个字符",
+    })
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const project = await findVisibleProjectOrThrow(tx, actor, projectId)
+    assertEditorOrAdmin(actor, project)
+
+    // 项目完成或归档后仍允许修正名称，因此这里刻意不调用 assertProjectWritable；名称修改不影响正文与阶段状态。
+    if (project.title === title) {
+      return {
+        project: {
+          id: project.projectId.toString(),
+          projectId: project.projectId.toString(),
+          title: project.title,
+          updatedAt: project.updatedAt.toISOString(),
+        },
+      }
+    }
+
+    const updated = await tx.project.update({
+      where: {
+        projectId,
+      },
+      data: {
+        title,
+      },
+      select: {
+        projectId: true,
+        title: true,
+        updatedAt: true,
+      },
+    })
+
+    await writeOperationLog(tx, {
+      actor,
+      action: "project.title.update",
+      entityType: "project",
+      entityId: projectId,
+      projectId,
+      beforeJson: {
+        title: project.title,
+      },
+      afterJson: {
+        title: updated.title,
+      },
+      // 来源 SI 名称只作为审计上下文记录，整个修改流程不会更新 StoryIdea。
+      metadataJson: {
+        sourceSiId: project.sourceSiId.toString(),
+        sourceSiTitle: project.sourceSi.title,
+      },
+    })
+
+    return {
+      project: {
+        id: updated.projectId.toString(),
+        projectId: updated.projectId.toString(),
+        title: updated.title,
+        updatedAt: updated.updatedAt.toISOString(),
+      },
+    }
+  })
 }
 
 export async function getProjectDocDirectory(actor: ApiCurrentUser, projectIdValue: string) {

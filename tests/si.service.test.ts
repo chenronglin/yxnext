@@ -307,15 +307,28 @@ describe("si.service", () => {
       },
     })
 
-    await convertSiPreissueToProject(editorActor, "10")
+    await convertSiPreissueToProject(editorActor, "10", {
+      projectTitle: "  独立项目名称  ",
+    })
 
     expect(mockTx.project.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
+          // 项目名称使用用户在转项目弹窗中确认的值，不再被 SI 快照名称覆盖。
+          title: "独立项目名称",
           intro: sourceSynopsis,
         }),
       }),
     )
+    expect(mockTx.storyIdea.update).toHaveBeenCalledWith({
+      where: {
+        siId: 20n,
+      },
+      data: {
+        // 转项目只推进 SI 状态，不应把独立项目名称反向写回 SI.title。
+        status: "converted",
+      },
+    })
     expect(mockTx.doc.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({

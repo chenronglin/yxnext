@@ -31,6 +31,15 @@ type ProjectDetailResponse = {
   project: ProjectDetailView
 }
 
+type UpdateProjectTitleResponse = {
+  project: {
+    id: string
+    projectId: string
+    title: string
+    updatedAt: string
+  }
+}
+
 // 章节弹窗统一按屏幕二分之一显示，新增和删除保持一致的视觉宽度。
 const CHAPTER_DIALOG_WIDTH_CLASS = "w-[50vw] max-w-[50vw] sm:max-w-[50vw]"
 
@@ -54,6 +63,10 @@ export function ProjectDetail({ id }: { id: string }) {
   const [chapterNumberValue, setChapterNumberValue] = useState("")
   const [chapterNumberError, setChapterNumberError] = useState<string | null>(null)
   const [updatingChapterNumber, setUpdatingChapterNumber] = useState(false)
+  const [projectTitleDialogOpen, setProjectTitleDialogOpen] = useState(false)
+  const [projectTitleValue, setProjectTitleValue] = useState("")
+  const [projectTitleError, setProjectTitleError] = useState<string | null>(null)
+  const [updatingProjectTitle, setUpdatingProjectTitle] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -102,6 +115,8 @@ export function ProjectDetail({ id }: { id: string }) {
   const canComplete = Boolean(project && !readonly && project.releaseDocStatus === "approved" && (role === "editor" || role === "admin"))
   // 正文章节的新建和结构调整只由作者发起，编辑进入章节页后只处理稿件协作和审核。
   const canManageChapters = Boolean(project && !readonly && project.stage === "chapter" && role === "author")
+  // 项目名称属于编辑治理信息：当前项目编辑和管理员可修改，作者只能查看；完成或归档不影响改名权限。
+  const canRenameProject = role === "editor" || role === "admin"
   const canExportProject = role === "editor" || role === "admin"
   const canExportRelease = Boolean(canExportProject && project?.docDirectory.releaseDocId)
   const hasActionItems = canUnlockRelease || canComplete || canExportProject || canExportRelease
@@ -161,6 +176,73 @@ export function ProjectDetail({ id }: { id: string }) {
       })
     } finally {
       setWorkingAction(null)
+    }
+  }
+
+  function openProjectTitleDialog() {
+    if (!project) return
+
+    setProjectTitleValue(project.title)
+    setProjectTitleError(null)
+    setMessage(null)
+    setProjectTitleDialogOpen(true)
+  }
+
+  function closeProjectTitleDialog() {
+    if (updatingProjectTitle) return
+
+    setProjectTitleDialogOpen(false)
+    setProjectTitleValue("")
+    setProjectTitleError(null)
+  }
+
+  async function handleUpdateProjectTitle() {
+    if (!project || updatingProjectTitle) return
+
+    const title = projectTitleValue.trim()
+
+    if (!title) {
+      setProjectTitleError("请输入项目名称")
+      return
+    }
+
+    if (title.length > 255) {
+      setProjectTitleError("项目名称不能超过 255 个字符")
+      return
+    }
+
+    setUpdatingProjectTitle(true)
+    setProjectTitleError(null)
+
+    try {
+      const response = await fetchJson<UpdateProjectTitleResponse>(`/api/projects/${project.id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ title }),
+      })
+
+      // 接口只返回本次变化的项目元数据，局部合并即可，避免改名后重新拉取整份 Doc 目录和阶段计划。
+      setProject((current) =>
+        current
+          ? {
+              ...current,
+              title: response.project.title,
+              updatedAt: response.project.updatedAt,
+            }
+          : current,
+      )
+      setProjectTitleDialogOpen(false)
+      setProjectTitleValue("")
+      setMessage({
+        type: "success",
+        text: "项目名称已修改",
+      })
+    } catch (error) {
+      setProjectTitleError(error instanceof Error ? error.message : "项目名称修改失败，请稍后重试")
+    } finally {
+      setUpdatingProjectTitle(false)
     }
   }
 
@@ -350,8 +432,20 @@ export function ProjectDetail({ id }: { id: string }) {
     <div className="flex flex-col gap-6">
       <PageHeader
         breadcrumb={["我的项目", project.title]}
+        title={project.title}
+        description={`来源 SI：${project.sourceSi}`}
         showBorder={false}
-        actions={readonly ? <StatusBadge label="只读" tone="neutral" /> : undefined}
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            {canRenameProject && (
+              <Button variant="outline" className="bg-transparent" onClick={openProjectTitleDialog}>
+                <Pencil className="mr-1.5 size-4" />
+                修改项目名称
+              </Button>
+            )}
+            {readonly && <StatusBadge label="只读" tone="neutral" />}
+          </div>
+        }
       />
 
       {message && (
@@ -480,6 +574,62 @@ export function ProjectDetail({ id }: { id: string }) {
       />
 
       <StagePlanTable project={project} editable={false} />
+
+      <Dialog
+        open={projectTitleDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) closeProjectTitleDialog()
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>修改项目名称</DialogTitle>
+            <DialogDescription>
+              修改只会更新当前项目名称，不会同步修改来源 SI「{project.sourceSi}」。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-1">
+            <label className="text-sm font-medium text-foreground" htmlFor="project-title">
+              项目名称
+            </label>
+            <Input
+              id="project-title"
+              value={projectTitleValue}
+              onChange={(event) => {
+                setProjectTitleValue(event.target.value)
+                setProjectTitleError(null)
+              }}
+              maxLength={255}
+              placeholder="请输入项目名称"
+              disabled={updatingProjectTitle}
+              autoFocus
+            />
+            {projectTitleError && <p className="text-sm text-red-600">{projectTitleError}</p>}
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              className="bg-transparent"
+              disabled={updatingProjectTitle}
+              onClick={closeProjectTitleDialog}
+            >
+              取消
+            </Button>
+            <Button
+              type="button"
+              disabled={
+                updatingProjectTitle ||
+                !projectTitleValue.trim() ||
+                projectTitleValue.trim() === project.title
+              }
+              onClick={() => void handleUpdateProjectTitle()}
+            >
+              {updatingProjectTitle ? "保存中..." : "保存名称"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={chapterDialogOpen}
