@@ -823,21 +823,28 @@ function WorkflowNoteDialog({
 
   return (
     <Dialog open={Boolean(action)} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col overflow-hidden sm:max-w-lg">
+        <DialogHeader className="shrink-0">
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
 
-        <Textarea
-          rows={7}
-          value={note}
-          onChange={(event) => onNoteChange(event.target.value)}
-          disabled={busy}
-          placeholder={placeholder}
-        />
+        {/*
+          通用 Textarea 默认会随内容增高；退回建议很长时会把底部确认按钮顶出视口。
+          这里把流程说明区限制在弹窗剩余高度内，并让文本框自身滚动，保证页头与操作区始终可见。
+        */}
+        <div className="min-h-0 flex-1 overflow-hidden">
+          <Textarea
+            rows={7}
+            className="field-sizing-fixed h-44 max-h-full min-h-24 resize-none overflow-y-auto"
+            value={note}
+            onChange={(event) => onNoteChange(event.target.value)}
+            disabled={busy}
+            placeholder={placeholder}
+          />
+        </div>
 
-        <DialogFooter>
+        <DialogFooter className="shrink-0">
           <Button type="button" variant="outline" className="bg-transparent" disabled={busy} onClick={() => onOpenChange(false)}>
             取消
           </Button>
