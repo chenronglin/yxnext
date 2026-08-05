@@ -543,6 +543,33 @@ describe("修订 composition（中文输入法）路径", () => {
     editor.destroy()
   })
 
+  it("光标在原文末尾输入时收窄浏览器上报的整段替换，只把新增批注标成 inserted", () => {
+    const baseText = "作者原文"
+    const commentText = "编辑批注"
+    const editor = makeEditor(baseText)
+    vi.useFakeTimers()
+    const controller = createRevisionCompositionController(() => OPTIONS)
+    const paragraphStart = 1
+    const paragraphEnd = paragraphStart + baseText.length
+
+    // Safari/Chrome 的 DOMObserver 在特定输入法和文本节点边界下，可能不会上报最小的“段尾插入”，
+    // 而是把整个文本节点报告为“作者原文 → 作者原文编辑批注”。修订层必须先剥掉事务两端
+    // 完全相同的内容，否则会把作者原文误判成被替换内容，并在段尾恢复出一份重复的删除文本。
+    setSelection(editor, paragraphEnd)
+    controller.handleCompositionStart(editor.view)
+    browserInsert(editor, controller, paragraphStart, paragraphEnd, `${baseText}${commentText}`)
+    controller.handleCompositionEnd(editor.view)
+    vi.runOnlyPendingTimers()
+
+    expect(editor.state.doc.textContent).toBe(`${baseText}${commentText}`)
+    expect(insertedText(editor)).toBe(commentText)
+    expect(originalText(editor)).toBe("")
+    expect(deletedText(editor)).toBe("")
+    expect(revisionIdCount(editor)).toBe(1)
+    vi.useRealTimers()
+    editor.destroy()
+  })
+
   it("跨段选择多个不同 inserted 后由 composition 提交空内容时安全物理删除，不恢复非法开放 Slice", () => {
     const makeInsertedAttrs = (id: string) => ({
       id,

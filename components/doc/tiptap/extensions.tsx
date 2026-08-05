@@ -1125,6 +1125,80 @@ function normalizeRangeInDoc(doc: ProseMirrorNode, range: TextRange) {
   }
 }
 
+function narrowCompositionRangesForCursorInsertion(
+  baseDoc: ProseMirrorNode,
+  currentDoc: ProseMirrorNode,
+  compositionStartSelection: TextRange,
+  observedOriginalRange: TextRange,
+  observedInsertedRange: TextRange,
+) {
+  // ProseMirror 的 DOMObserver 通常会把输入法修改收敛为最小 ReplaceStep，但 Safari/Chrome 在文本节点边界、
+  // 拼音候选或浏览器扩展参与时，可能把“段尾新增”粗略报告成“整段旧文本 → 整段旧文本加新字”。
+  // StepMap 仍限定本次 composition 的安全边界；只有确认光标两侧原文在新范围中原样保留时，
+  // 才把粗粒度替换收窄为纯新增。局部文本比较也避免每次中文候选提交都扫描整部长文。
+  const fallback = {
+    originalRange: observedOriginalRange,
+    insertedRange: observedInsertedRange,
+  }
+
+  if (
+    compositionStartSelection.from !== compositionStartSelection.to ||
+    compositionStartSelection.from < observedOriginalRange.from ||
+    compositionStartSelection.from > observedOriginalRange.to
+  ) {
+    return fallback
+  }
+
+  const originalFrom = baseDoc.resolve(observedOriginalRange.from)
+  const originalTo = baseDoc.resolve(observedOriginalRange.to)
+  const insertedFrom = currentDoc.resolve(observedInsertedRange.from)
+  const insertedTo = currentDoc.resolve(observedInsertedRange.to)
+
+  if (
+    !originalFrom.sameParent(originalTo) ||
+    !insertedFrom.sameParent(insertedTo) ||
+    !originalFrom.parent.isTextblock ||
+    !insertedFrom.parent.isTextblock
+  ) {
+    return fallback
+  }
+
+  const originalText = baseDoc.textBetween(observedOriginalRange.from, observedOriginalRange.to)
+  const currentText = currentDoc.textBetween(observedInsertedRange.from, observedInsertedRange.to)
+
+  if (
+    originalText.length !== observedOriginalRange.to - observedOriginalRange.from ||
+    currentText.length !== observedInsertedRange.to - observedInsertedRange.from ||
+    currentText.length <= originalText.length
+  ) {
+    // 含跨块结构、内联原子或没有净新增时不能使用字符串偏移推导 ProseMirror position。
+    return fallback
+  }
+
+  const prefixLength = compositionStartSelection.from - observedOriginalRange.from
+  const prefix = originalText.slice(0, prefixLength)
+  const suffix = originalText.slice(prefixLength)
+
+  if (!currentText.startsWith(prefix) || !currentText.endsWith(suffix)) {
+    // 空光标也可能触发输入法重转换并真实替换前文；两侧原文未完整保留时必须尊重原 StepMap。
+    return fallback
+  }
+
+  const narrowedInsertedFrom = observedInsertedRange.from + prefix.length
+  const insertedTextLength = currentText.length - originalText.length
+
+  return {
+    originalRange: {
+      from: compositionStartSelection.from,
+      to: compositionStartSelection.to,
+    },
+    insertedRange: {
+      from: narrowedInsertedFrom,
+      to: narrowedInsertedFrom + insertedTextLength,
+    },
+  }
+}
+
 function unionTextRanges(left: TextRange | null, right: TextRange): TextRange {
   if (!left) {
     return right
@@ -1240,8 +1314,15 @@ function buildCompositionFinalizationTransaction(
     return null
   }
 
-  const originalRange = normalizeRangeInDoc(base.doc, base.originalRange)
-  const insertedRange = normalizeRange(state, base.insertedRange.from, base.insertedRange.to)
+  const observedOriginalRange = normalizeRangeInDoc(base.doc, base.originalRange)
+  const observedInsertedRange = normalizeRange(state, base.insertedRange.from, base.insertedRange.to)
+  const { originalRange, insertedRange } = narrowCompositionRangesForCursorInsertion(
+    base.doc,
+    state.doc,
+    base.selection,
+    observedOriginalRange,
+    observedInsertedRange,
+  )
   const originalSlice = base.doc.slice(originalRange.from, originalRange.to)
   const currentSlice = state.doc.slice(insertedRange.from, insertedRange.to)
 
