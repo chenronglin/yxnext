@@ -1,6 +1,6 @@
 import "server-only"
 
-import { Document, HeadingLevel, Packer, Paragraph, ShadingType, TextRun } from "docx"
+import { AlignmentType, Document, HeadingLevel, Packer, Paragraph, ShadingType, TextRun } from "docx"
 
 import { extractCleanNovelDocBlocks, isNovelTextNode, type NovelBlockNode, type NovelContentNode, type NovelDocJson, type NovelMarkJson } from "@/lib/novel-doc"
 
@@ -119,10 +119,16 @@ function headingLevel(block: NovelBlockNode) {
   return HeadingLevel.HEADING_1
 }
 
+function paragraphAlignment(block: NovelBlockNode) {
+  // 编辑器目前只开放居中；未设置或历史数据中的其它值继续交给 Word 使用默认左对齐。
+  return block.attrs?.textAlign === "center" ? AlignmentType.CENTER : undefined
+}
+
 function blockToParagraph(block: NovelBlockNode) {
   return new Paragraph({
     children: inlineContentToRuns(block.content),
     heading: headingLevel(block),
+    alignment: paragraphAlignment(block),
     spacing: {
       after: 240,
     },

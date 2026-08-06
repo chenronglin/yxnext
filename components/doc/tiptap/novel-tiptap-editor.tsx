@@ -3,7 +3,7 @@
 import { EditorContent, useEditor, useEditorState } from "@tiptap/react"
 import { BubbleMenu } from "@tiptap/react/menus"
 import type { Editor } from "@tiptap/core"
-import { Bold, ChevronDown, Eraser, Heading1, Heading2, Heading3, Italic, MessageSquarePlus, Palette, Pilcrow, Quote, Save, Strikethrough, Trash2, UnderlineIcon } from "lucide-react"
+import { AlignCenter, Bold, ChevronDown, Eraser, Heading1, Heading2, Heading3, Italic, MessageSquarePlus, Palette, Pilcrow, Quote, Save, Strikethrough, Trash2, UnderlineIcon } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
 
 import {
@@ -97,6 +97,7 @@ function selectSelectionBubbleState({ editor }: { editor: Editor }) {
     heading1: editor.isActive("heading", { level: 1 }),
     heading2: editor.isActive("heading", { level: 2 }),
     heading3: editor.isActive("heading", { level: 3 }),
+    centered: editor.isActive({ textAlign: "center" }),
     bold: editor.isActive("bold"),
     italic: editor.isActive("italic"),
     underline: editor.isActive("underline"),
@@ -263,6 +264,14 @@ function SelectionBubble({
           </ToolbarButton>
           <ToolbarButton title="三级标题" active={toolbarState.heading3} onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}>
             <Heading3 className="size-4" />
+          </ToolbarButton>
+          <span className="mx-1 h-5 w-px bg-border" />
+          <ToolbarButton
+            title="居中 / 取消居中"
+            active={toolbarState.centered}
+            onClick={() => editor.chain().focus().toggleTextAlign("center").run()}
+          >
+            <AlignCenter className="size-4" />
           </ToolbarButton>
           <span className="mx-1 h-5 w-px bg-border" />
           <ToolbarButton title="加粗" active={toolbarState.bold} onClick={() => editor.chain().focus().toggleBold().run()}>

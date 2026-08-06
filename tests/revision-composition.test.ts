@@ -570,6 +570,34 @@ describe("修订 composition（中文输入法）路径", () => {
     editor.destroy()
   })
 
+  it("先输入空格会建立 inserted 修订边界，随后中文批注沿用该边界且不复制作者原文", () => {
+    const baseText = "作者原文"
+    const commentText = "编辑批注"
+    const editor = makeEditor(baseText)
+    vi.useFakeTimers()
+    const paragraphEnd = 1 + baseText.length
+
+    // 空格不经过中文输入法 composition，而是先走直接输入管线，因此会立即成为一段 inserted 修订。
+    // 后续输入法从该修订末尾开始，浏览器只需更新新增文本节点，不会再把作者正文节点并入替换范围。
+    applyInsertedText(editor.view, " ", { from: paragraphEnd, to: paragraphEnd }, OPTIONS)
+    const commentStart = paragraphEnd + 1
+    const controller = createRevisionCompositionController(() => OPTIONS)
+
+    setSelection(editor, commentStart)
+    controller.handleCompositionStart(editor.view)
+    browserInsert(editor, controller, commentStart, commentStart, commentText)
+    controller.handleCompositionEnd(editor.view)
+    vi.runOnlyPendingTimers()
+
+    expect(editor.state.doc.textContent).toBe(`${baseText} ${commentText}`)
+    expect(insertedText(editor)).toBe(` ${commentText}`)
+    expect(originalText(editor)).toBe("")
+    expect(deletedText(editor)).toBe("")
+    expect(revisionIdCount(editor)).toBe(1)
+    vi.useRealTimers()
+    editor.destroy()
+  })
+
   it("跨段选择多个不同 inserted 后由 composition 提交空内容时安全物理删除，不恢复非法开放 Slice", () => {
     const makeInsertedAttrs = (id: string) => ({
       id,

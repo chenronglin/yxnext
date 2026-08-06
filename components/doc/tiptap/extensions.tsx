@@ -8,6 +8,7 @@ import Heading from "@tiptap/extension-heading"
 import Highlight from "@tiptap/extension-highlight"
 import Paragraph from "@tiptap/extension-paragraph"
 import Placeholder from "@tiptap/extension-placeholder"
+import TextAlign from "@tiptap/extension-text-align"
 import { TextStyle } from "@tiptap/extension-text-style"
 import StarterKit from "@tiptap/starter-kit"
 import { Fragment, Slice, type Mark as ProseMirrorMark, type Node as ProseMirrorNode } from "@tiptap/pm/model"
@@ -2644,6 +2645,14 @@ const HighlightExtension = Highlight.configure({
   multicolor: true,
 })
 
+const TextAlignExtension = TextAlign.configure({
+  // 当前产品只开放正文与一至三级标题的左对齐/居中；其它块级业务节点不能被排版命令改写。
+  types: ["paragraph", "heading"],
+  alignments: ["left", "center"],
+  // null 表示沿用浏览器默认左对齐，避免给所有历史段落批量写入无意义的 textAlign 属性。
+  defaultAlignment: null,
+})
+
 export function createNovelEditorExtensions(input: {
   trackChanges: boolean
   createdBy: NovelCreatedBy
@@ -2662,6 +2671,7 @@ export function createNovelEditorExtensions(input: {
     TextStyle,
     Color,
     HighlightExtension,
+    TextAlignExtension,
     CharacterCount,
     PlaceholderExtension,
     BlockId,

@@ -190,7 +190,7 @@ describe("Novel Editor Tiptap JSON v1", () => {
     const doc = makeDoc([
       {
         type: "heading",
-        attrs: { id: "block_h_1", level: 2 },
+        attrs: { id: "block_h_1", level: 2, textAlign: "center" },
         content: [{ type: "text", text: "章节小标题", marks: [{ type: "bold" }] }],
       },
       {
@@ -237,7 +237,7 @@ describe("Novel Editor Tiptap JSON v1", () => {
     expect(blocks).toHaveLength(3)
     expect(blocks[0]).toMatchObject({
       type: "heading",
-      attrs: { level: 2 },
+      attrs: { level: 2, textAlign: "center" },
       content: [{ type: "text", text: "章节小标题", marks: [{ type: "bold" }] }],
     })
     expect(blocks[1]).toMatchObject({
