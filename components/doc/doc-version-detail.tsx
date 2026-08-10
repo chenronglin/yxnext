@@ -90,40 +90,44 @@ export function DocVersionDetail({
   }, [detail])
 
   return (
-    <div className="flex flex-col gap-4">
-      {message && <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">{message}</div>}
+    // 历史工作视图与当前稿件共用同一套固定高度、独立滚动模型，避免长批注栏把正文容器撑高后
+    // 让定位逻辑误判目标已经可见。Clean 阅读和旧格式预览仍在中间内容区独立滚动。
+    <div className="flex h-[calc(100dvh-7rem)] min-h-0 flex-col gap-4 overflow-hidden">
+      {message && <div className="shrink-0 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">{message}</div>}
 
       {loading ? (
         <Card className="px-4 py-10 text-center text-sm text-muted-foreground">正在加载历史版本详情...</Card>
       ) : detail ? (
         <>
-          <PageHeader
-            breadcrumb={[detail.project.title, docTypeLabel(detail.doc.docType), "历史版本", `R${detail.revisionNo}`]}
-            title={`R${detail.revisionNo} · ${detail.doc.title}`}
-            description="历史版本只读，用于回溯、对比与审计"
-            actions={
-              <div className="flex gap-2">
-                <Button variant="outline" className="bg-transparent" onClick={() => setClean((value) => !value)}>
-                  {clean ? <PenLine className="mr-1.5 size-4" /> : <BookOpen className="mr-1.5 size-4" />}
-                  {clean ? "工作视图" : "Clean 阅读"}
-                </Button>
-                <Button asChild variant="outline" className="bg-transparent">
-                  <Link href={`${base}/versions`}>
-                    <ArrowLeft className="mr-1.5 size-4" />
-                    返回列表
-                  </Link>
-                </Button>
-              </div>
-            }
-          />
+          <div className="shrink-0">
+            <PageHeader
+              breadcrumb={[detail.project.title, docTypeLabel(detail.doc.docType), "历史版本", `R${detail.revisionNo}`]}
+              title={`R${detail.revisionNo} · ${detail.doc.title}`}
+              description="历史版本只读，用于回溯、对比与审计"
+              actions={
+                <div className="flex gap-2">
+                  <Button variant="outline" className="bg-transparent" onClick={() => setClean((value) => !value)}>
+                    {clean ? <PenLine className="mr-1.5 size-4" /> : <BookOpen className="mr-1.5 size-4" />}
+                    {clean ? "工作视图" : "Clean 阅读"}
+                  </Button>
+                  <Button asChild variant="outline" className="bg-transparent">
+                    <Link href={`${base}/versions`}>
+                      <ArrowLeft className="mr-1.5 size-4" />
+                      返回列表
+                    </Link>
+                  </Button>
+                </div>
+              }
+            />
+          </div>
 
-          <Card className="p-4">
+          <Card className="shrink-0 p-4">
             <p className="mb-1 text-xs font-medium text-muted-foreground">提交 / 审核说明</p>
             <p className="text-sm text-foreground/90">{detail.handoffNote ?? "该次交接未填写说明。"}</p>
           </Card>
 
           {clean || !contentJson || !revisionActor ? (
-            <Card className="p-6">
+            <Card className="min-h-0 flex-1 overflow-y-auto p-6">
               {clean && <p className="mb-4 text-xs text-muted-foreground">当前为 Clean 阅读模式，正文已隐藏批注修订标记。</p>}
               {!contentJson && <p className="mb-4 text-xs text-muted-foreground">当前历史版本缺少可还原的编辑器结构，已切换为文本预览。</p>}
               <article className="mx-auto flex max-w-3xl flex-col gap-5">
@@ -140,7 +144,7 @@ export function DocVersionDetail({
               </article>
             </Card>
           ) : (
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
+            <div className="grid min-h-0 flex-1 gap-4 overflow-hidden xl:grid-cols-[minmax(0,1fr)_340px]">
               <NovelTiptapEditor
                 value={contentJson}
                 editable={false}
@@ -150,10 +154,11 @@ export function DocVersionDetail({
                 readonlyLabel="历史版本只读"
                 onChange={() => undefined}
                 onReady={setEditor}
+                className="min-h-0"
               />
 
-              <aside className="grid content-start gap-4">
-                <DiscussionSidebar editor={editor} />
+              <aside className="min-h-0 overflow-hidden">
+                <DiscussionSidebar editor={editor} className="h-full min-h-0" />
               </aside>
             </div>
           )}

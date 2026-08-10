@@ -122,7 +122,13 @@ declare module "@tiptap/core" {
 
 const revisionTrackingKey = new PluginKey<RevisionPluginState>("novel-revision-tracking")
 
-const discussionHighlightKey = new PluginKey<{ activeId: string | null }>("novel-discussion-highlight")
+type DiscussionHighlightState = {
+  // 使用“来源 + 业务 id”作为高亮键，避免 comment 与 revision 恰好同 id 时互相串色。
+  // revision 侧栏按 groupId 聚合，因此该键也允许一个侧栏条目精确高亮同组的多个 revision mark。
+  activeKey: string | null
+}
+
+const discussionHighlightKey = new PluginKey<DiscussionHighlightState>("novel-discussion-highlight")
 
 type RevisionCompositionRuntime = {
   isComposing: () => boolean
@@ -2581,12 +2587,57 @@ export const ActiveBlock = Extension.create({
   },
 })
 
-export function setActiveDiscussion(editor: Editor, id: string | null) {
-  const current = discussionHighlightKey.getState(editor.state)?.activeId ?? null
+export function setActiveDiscussion(editor: Editor, key: string | null) {
+  const current = discussionHighlightKey.getState(editor.state)?.activeKey ?? null
 
-  if (current !== id) {
-    editor.view.dispatch(editor.state.tr.setMeta(discussionHighlightKey, { activeId: id }))
+  if (current !== key) {
+    // 高亮是纯界面状态，只写入插件 meta，不修改正文 JSON，也不会污染历史版本数据。
+    editor.view.dispatch(editor.state.tr.setMeta(discussionHighlightKey, { activeKey: key }))
   }
+}
+
+function discussionKeyFromMark(mark: ProseMirrorMark) {
+  const id = typeof mark.attrs.id === "string" ? mark.attrs.id : ""
+
+  if (!id) {
+    return null
+  }
+
+  if (mark.type.name === "comment") {
+    return `comment:${id}`
+  }
+
+  if (mark.type.name !== "revision") {
+    return null
+  }
+
+  // 跨段落修订会拆成多个 mark，但侧栏按 groupId 展示为一条；高亮必须使用同一聚合规则。
+  const groupId = typeof mark.attrs.groupId === "string" ? mark.attrs.groupId : ""
+  return `revision:${groupId || id}`
+}
+
+export function getDiscussionHighlightDecorations(state: EditorState, activeKey: string | null) {
+  if (!activeKey) {
+    return null
+  }
+
+  const decorations: Decoration[] = []
+
+  // 直接按 mark 的稳定业务键生成 decoration，不读取浏览器 DOM selection 或 focus。
+  // 因此可编辑稿件、已定稿稿件和历史只读稿件会得到完全相同的正文高亮结果。
+  state.doc.descendants((node, pos) => {
+    if (!node.isText) {
+      return
+    }
+
+    const matched = node.marks.some((mark) => discussionKeyFromMark(mark) === activeKey)
+
+    if (matched) {
+      decorations.push(Decoration.inline(pos, pos + node.nodeSize, { class: "is-discussion-active" }))
+    }
+  })
+
+  return DecorationSet.create(state.doc, decorations)
 }
 
 export const DiscussionHighlight = Extension.create({
@@ -2594,41 +2645,18 @@ export const DiscussionHighlight = Extension.create({
 
   addProseMirrorPlugins() {
     return [
-      new Plugin<{ activeId: string | null }>({
+      new Plugin<DiscussionHighlightState>({
         key: discussionHighlightKey,
         state: {
-          init: () => ({ activeId: null }),
+          init: () => ({ activeKey: null }),
           apply(transaction, value) {
             return transaction.getMeta(discussionHighlightKey) ?? value
           },
         },
         props: {
           decorations(state) {
-            const activeId = discussionHighlightKey.getState(state)?.activeId
-
-            if (!activeId) {
-              return null
-            }
-
-            const decorations: Decoration[] = []
-
-            state.doc.descendants((node, pos) => {
-              if (!node.isText) {
-                return
-              }
-
-              const matched = node.marks.some(
-                (mark) =>
-                  (mark.type.name === "comment" || mark.type.name === "revision") &&
-                  mark.attrs.id === activeId,
-              )
-
-              if (matched) {
-                decorations.push(Decoration.inline(pos, pos + node.nodeSize, { class: "is-discussion-active" }))
-              }
-            })
-
-            return DecorationSet.create(state.doc, decorations)
+            const activeKey = discussionHighlightKey.getState(state)?.activeKey
+            return getDiscussionHighlightDecorations(state, activeKey ?? null)
           },
         },
       }),

@@ -232,7 +232,7 @@ function keyFromMarks(marks: readonly ProseMirrorMark[]) {
   return revision ? keyFor("revision", revisionDiscussionId(revision)) : null
 }
 
-function getActiveKeyFromSelection(state: EditorState) {
+export function getActiveKeyFromSelection(state: EditorState) {
   const { selection } = state
 
   if (selection.empty) {
@@ -246,8 +246,14 @@ function getActiveKeyFromSelection(state: EditorState) {
   let activeKey: string | null = null
 
   state.doc.nodesBetween(selection.from, selection.to, (node) => {
-    if (activeKey || !node.isText) {
+    if (activeKey) {
       return false
+    }
+
+    if (!node.isText) {
+      // ProseMirror 中返回 false 会阻止继续访问当前节点的子节点。
+      // 段落、标题等父节点本身没有 mark，但必须继续下钻，才能读到真正承载批注的文本节点。
+      return
     }
 
     activeKey = keyFromMarks(node.marks)
@@ -321,9 +327,16 @@ function selectDiscussionItem(editor: Editor, item: DiscussionItem) {
     return
   }
 
-  // 先设置真实选区，再按自定义滚动容器定位；不使用 ProseMirror 默认滚动，避免触发外层页面滚动。
+  // EditorState 选区用于保持可编辑模式原有的文本选择体验；显式插件高亮则保证只读历史版本
+  // 即使焦点仍停留在右侧卡片，也能清楚、准确地标出对应正文。
   editor.view.dispatch(editor.state.tr.setSelection(TextSelection.create(editor.state.doc, from, to)))
-  editor.commands.focus(undefined, { scrollIntoView: false })
+  setActiveDiscussion(editor, item.key)
+
+  if (editor.isEditable) {
+    // 只有可编辑稿件才把 DOM 焦点交给正文；只读模式强制 focus 会失败，并抹掉用户可见的定位反馈。
+    editor.commands.focus(undefined, { scrollIntoView: false })
+  }
+
   scrollDiscussionRangeIntoEditorView(editor, from, to)
 }
 
@@ -481,7 +494,8 @@ export function DiscussionSidebar({
 
     const activeItem = items.find((item) => item.key === activeKey)
 
-    setActiveDiscussion(editor, activeItem?.id ?? null)
+    // 插件使用完整 key 区分批注/修订，并与跨段 revision 的 groupId 聚合规则保持一致。
+    setActiveDiscussion(editor, activeItem?.key ?? null)
   }, [activeKey, editor, items])
 
   useEffect(() => {
