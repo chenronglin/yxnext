@@ -36,3 +36,25 @@ export function formatDateOnly(value: string | Date | null | undefined) {
 
   return `${year}-${month}-${day}`
 }
+
+export function formatDateTimeToSeconds(value: string | Date | null | undefined) {
+  if (!value || value === "—") {
+    return "—"
+  }
+
+  const parsed = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(parsed.getTime())) {
+    // 无法识别的历史值原样返回，避免格式化失败后把审计时间错误显示为空。
+    return String(value)
+  }
+
+  // 审计时间按浏览器所在时区展示，并固定补齐两位数字，最终精确到秒。
+  const year = parsed.getFullYear()
+  const month = String(parsed.getMonth() + 1).padStart(2, "0")
+  const day = String(parsed.getDate()).padStart(2, "0")
+  const hour = String(parsed.getHours()).padStart(2, "0")
+  const minute = String(parsed.getMinutes()).padStart(2, "0")
+  const second = String(parsed.getSeconds()).padStart(2, "0")
+
+  return `${year}-${month}-${day} ${hour}:${minute}:${second}`
+}

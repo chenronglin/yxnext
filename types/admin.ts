@@ -73,11 +73,21 @@ export interface AuditLog {
   time: string
   operator: string
   role: Role
+  // action 保存数据库中的稳定编码，actionLabel 提供管理员页面使用的中文文案。
   action: string
+  actionLabel: string
   target: string
+  // changeSummary 是中文化并限制长度后的变更摘要，仅用于详情弹窗展示。
+  changeSummary: string
   before: string
   after: string
   note: string
+}
+
+export interface AuditActionOption {
+  // 筛选请求使用 value 精确匹配数据库编码，label 只负责中文展示。
+  value: string
+  label: string
 }
 
 export interface DashboardStats {

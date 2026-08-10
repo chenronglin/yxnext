@@ -14,6 +14,7 @@ export async function GET(request: NextRequest) {
     const result = await listAuditLogs(actor, {
       keyword: searchParams.get("keyword"),
       action: searchParams.get("action"),
+      page: searchParams.get("page"),
     })
 
     return ok(result)

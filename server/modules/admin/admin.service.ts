@@ -12,6 +12,7 @@ import { buildDocxBuffer } from "@/server/shared/docx-export"
 import { makeActiveBindingKey, makeActiveDocKey, translateUniqueConstraintError } from "@/server/shared/invariant-keys"
 import { assertRole } from "@/server/shared/current-user"
 import { makePaginationMeta, parsePagination } from "@/server/shared/pagination"
+import { formatAuditAction, formatAuditChange, formatAuditNote } from "@/lib/audit-log"
 import { createNovelDocV1, isNovelDocV1, textToNovelParagraphs } from "@/lib/novel-doc"
 import type { ApiCurrentUser } from "@/server/shared/current-user"
 import type {
@@ -108,6 +109,7 @@ type ProjectFilters = {
 type AuditFilters = {
   keyword?: string | null
   action?: string | null
+  page?: string | null
 }
 
 type RangeKey = "7d" | "30d" | "90d" | "all"
@@ -748,10 +750,12 @@ function toAuditLog(log: Prisma.OperationLogGetPayload<{
     operator: log.actor ? userName(log.actor) : "系统",
     role: (log.actor?.role ?? "admin") as Role,
     action: log.action,
+    actionLabel: formatAuditAction(log.action),
     target: makeAuditTarget(log),
+    changeSummary: formatAuditChange(log.beforeJson, log.afterJson),
     before: summarizeValue(log.beforeJson),
     after: summarizeValue(log.afterJson),
-    note: summarizeValue(log.metadataJson),
+    note: formatAuditNote(log.metadataJson),
   }
 }
 
@@ -2390,85 +2394,105 @@ export async function listAuditLogs(actor: ApiCurrentUser, filters: AuditFilters
 
   const keyword = trimToNull(filters.keyword)
   const action = trimToNull(filters.action)
+  // 审计页面固定每页 20 条；服务端忽略客户端自定义 pageSize，保证接口和页面口径一致。
+  const pagination = parsePagination({ page: filters.page, pageSize: 20 }, 20)
 
-  const logs = await prisma.operationLog.findMany({
-    where: {
-      ...(action && action !== "all" ? { action } : {}),
-      ...(keyword
-        ? {
-            OR: [
-              {
-                actor: {
-                  displayName: {
-                    contains: keyword,
-                  },
+  // 列表与总数必须复用同一份筛选条件，避免翻页摘要和实际记录数量不一致。
+  const where: Prisma.OperationLogWhereInput = {
+    ...(action && action !== "all" ? { action } : {}),
+    ...(keyword
+      ? {
+          OR: [
+            {
+              actor: {
+                displayName: {
+                  contains: keyword,
                 },
               },
-              {
-                actor: {
-                  username: {
-                    contains: keyword,
-                  },
+            },
+            {
+              actor: {
+                username: {
+                  contains: keyword,
                 },
               },
-              {
-                project: {
-                  title: {
-                    contains: keyword,
-                  },
+            },
+            {
+              project: {
+                title: {
+                  contains: keyword,
                 },
               },
-              {
-                storyIdea: {
-                  title: {
-                    contains: keyword,
-                  },
+            },
+            {
+              storyIdea: {
+                title: {
+                  contains: keyword,
                 },
               },
-              {
-                doc: {
-                  title: {
-                    contains: keyword,
-                  },
+            },
+            {
+              doc: {
+                title: {
+                  contains: keyword,
                 },
               },
-            ],
-          }
-        : {}),
-    },
-    include: {
-      actor: {
-        select: {
-          username: true,
-          displayName: true,
-          role: true,
+            },
+          ],
+        }
+      : {}),
+  }
+
+  // 当前页、筛选后总数和全量操作类型彼此独立，并行查询可以缩短接口等待时间。
+  const [logs, total, actionGroups] = await Promise.all([
+    prisma.operationLog.findMany({
+      where,
+      include: {
+        actor: {
+          select: {
+            username: true,
+            displayName: true,
+            role: true,
+          },
+        },
+        project: {
+          select: {
+            title: true,
+          },
+        },
+        doc: {
+          select: {
+            title: true,
+          },
+        },
+        storyIdea: {
+          select: {
+            title: true,
+          },
         },
       },
-      project: {
-        select: {
-          title: true,
-        },
+      // logId 是同一毫秒内的稳定次级排序键，防止相邻页出现重复或遗漏。
+      orderBy: [{ createdAt: "desc" }, { logId: "desc" }],
+      skip: pagination.skip,
+      take: pagination.take,
+    }),
+    prisma.operationLog.count({ where }),
+    prisma.operationLog.groupBy({
+      by: ["action"],
+      orderBy: {
+        action: "asc",
       },
-      doc: {
-        select: {
-          title: true,
-        },
-      },
-      storyIdea: {
-        select: {
-          title: true,
-        },
-      },
-    },
-    orderBy: {
-      createdAt: "desc",
-    },
-    take: 200,
-  })
+    }),
+  ])
 
   return {
     logs: logs.map(toAuditLog),
-    actions: Array.from(new Set(logs.map((item) => item.action))),
+    // 下拉框保留原始编码作为筛选值，同时提供与表格一致的中文展示文案。
+    actions: actionGroups.map((item) => ({
+      value: item.action,
+      label: formatAuditAction(item.action),
+    })),
+    ...makePaginationMeta(total, pagination),
   }
 }
 
