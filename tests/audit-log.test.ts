@@ -36,6 +36,7 @@ describe("审计日志展示格式", () => {
   it("把已登记的操作编码转换为中文，并为未知编码保留可追溯原值", () => {
     expect(formatAuditAction("doc.save")).toBe("保存文档")
     expect(formatAuditAction("admin.project.archive")).toBe("归档项目")
+    expect(formatAuditAction("si.title.update")).toBe("修改 SI 标题")
     expect(formatAuditAction("future.audit.action")).toBe("future.audit.action")
   })
 

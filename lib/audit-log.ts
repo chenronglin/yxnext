@@ -16,6 +16,7 @@ const AUDIT_ACTION_LABELS: Readonly<Record<string, string>> = {
   editor_approve: "编辑审核通过",
   "si.create": "创建 SI",
   "si.update": "更新 SI",
+  "si.title.update": "修改 SI 标题",
   "si.prepublish": "预发 SI",
   "si.rollback": "回滚 SI 版本",
   "si.archive": "归档 SI",

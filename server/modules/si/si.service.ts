@@ -33,6 +33,10 @@ type SiInput = {
   authorIds?: Array<string | number | bigint>
 }
 
+type UpdateStoryIdeaTitleInput = {
+  title: string
+}
+
 type SiListFilters = {
   keyword?: string | null
   status?: string | null
@@ -1140,6 +1144,162 @@ export async function updateStoryIdea(actor: ApiCurrentUser, siIdValue: string, 
   })
 
   return getStoryIdea(actor, result.toString())
+}
+
+export async function updateStoryIdeaTitle(
+  actor: ApiCurrentUser,
+  siIdValue: string,
+  input: UpdateStoryIdeaTitleInput,
+) {
+  const siId = parseBigIntId(siIdValue, "SI ID")
+  const title = input.title.trim()
+
+  // 路由层会给出即时的表单校验提示，服务层仍重复校验，避免内部调用绕过 HTTP 约束写入非法标题。
+  if (!title) {
+    throw new ApiError({
+      status: 400,
+      code: "SI_TITLE_REQUIRED",
+      message: "SI 标题不能为空",
+    })
+  }
+
+  if (title.length > 255) {
+    throw new ApiError({
+      status: 400,
+      code: "SI_TITLE_TOO_LONG",
+      message: "SI 标题不能超过 255 个字符",
+    })
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.storyIdea.findUnique({
+      where: {
+        siId,
+      },
+      include: {
+        mainType: true,
+        fitAuthors: true,
+      },
+    })
+
+    if (!existing) {
+      throw new ApiError({
+        status: 404,
+        code: "SI_NOT_FOUND",
+        message: "SI 不存在",
+      })
+    }
+
+    // 沿用 SI 原有的归属权限：管理员可操作，编辑只能修改自己创建的 SI。
+    ensureCanManageSi(actor, existing)
+
+    // “已转项目”只冻结 SI 正文和策划字段，标题允许通过本专用入口修正；归档数据仍保持完全只读。
+    if (existing.status === "archived") {
+      throw new ApiError({
+        status: 409,
+        code: "SI_TITLE_ARCHIVED",
+        message: "已归档的 SI 不可修改标题",
+      })
+    }
+
+    // 用户未实际改名时不生成重复版本和审计记录，也不触碰 updatedAt。
+    if (existing.title === title) {
+      return {
+        si: {
+          id: existing.siId.toString(),
+          title: existing.title,
+          updatedAt: existing.updatedAt.toISOString(),
+        },
+      }
+    }
+
+    const beforeSnapshot = makeSnapshot({
+      siId: existing.siId,
+      title: existing.title,
+      mainTypeId: existing.mainTypeId,
+      mainTypeName: existing.mainType?.name ?? null,
+      trope: existing.trope,
+      fitAuthorIds: existing.fitAuthors.map((item) => item.authorId),
+      fitAuthorNote: existing.fitAuthorNote,
+      remarks: existing.remarks,
+      freshTwist: existing.freshTwist,
+      coreSynopsis: existing.coreSynopsis,
+    })
+    const afterSnapshot = makeSnapshot({
+      siId: existing.siId,
+      title,
+      mainTypeId: existing.mainTypeId,
+      mainTypeName: existing.mainType?.name ?? null,
+      trope: existing.trope,
+      fitAuthorIds: existing.fitAuthors.map((item) => item.authorId),
+      fitAuthorNote: existing.fitAuthorNote,
+      remarks: existing.remarks,
+      freshTwist: existing.freshTwist,
+      coreSynopsis: existing.coreSynopsis,
+    })
+
+    await tx.storyIdea.update({
+      where: {
+        siId,
+      },
+      data: {
+        // 这里只更新 StoryIdea.title，关联 Project.title 和历史 SiPreissue.siSnapshotJson 均不会被改写。
+        title,
+      },
+    })
+
+    // 标题属于 SI 版本快照的一部分；即使 SI 已转项目，也要追加版本，保证版本历史与当前标题一致。
+    const version = await tx.storyIdeaVersion.create({
+      data: {
+        siId,
+        versionNo: existing.currentVersionNo + 1,
+        action: "update",
+        snapshotJson: afterSnapshot,
+        editorId: actor.userId,
+        contentHash: hashJson(afterSnapshot),
+      },
+    })
+
+    const updated = await tx.storyIdea.update({
+      where: {
+        siId,
+      },
+      data: {
+        currentVersionNo: existing.currentVersionNo + 1,
+        latestVersionId: version.siVersionId,
+      },
+      select: {
+        siId: true,
+        title: true,
+        updatedAt: true,
+      },
+    })
+
+    await writeOperationLog(tx, {
+      actor,
+      action: "si.title.update",
+      entityType: "story_idea",
+      entityId: siId,
+      siId,
+      beforeJson: {
+        title: existing.title,
+      },
+      afterJson: {
+        title: updated.title,
+      },
+      metadataJson: {
+        siStatus: existing.status,
+      },
+    })
+
+    return {
+      si: {
+        id: updated.siId.toString(),
+        title: updated.title,
+        updatedAt: updated.updatedAt.toISOString(),
+      },
+    }
+  })
 }
 
 export async function prepublishStoryIdea(actor: ApiCurrentUser, siIdValue: string, input: PrepublishInput) {

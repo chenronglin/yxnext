@@ -19,6 +19,7 @@ const { mockPrisma, mockTx } = vi.hoisted(() => {
     project: {
       findFirst: vi.fn(),
       create: vi.fn(),
+      update: vi.fn(),
     },
     stagePlanDefault: {
       findMany: vi.fn(),
@@ -36,6 +37,9 @@ const { mockPrisma, mockTx } = vi.hoisted(() => {
     storyIdea: {
       findUnique: vi.fn(),
       update: vi.fn(),
+    },
+    storyIdeaVersion: {
+      create: vi.fn(),
     },
     notification: {
       create: vi.fn(),
@@ -64,7 +68,12 @@ vi.mock("@/server/db/prisma", () => ({
   prisma: mockPrisma,
 }))
 
-import { convertSiPreissueToProject, listSiPreissues, prepublishStoryIdea } from "@/server/modules/si/si.service"
+import {
+  convertSiPreissueToProject,
+  listSiPreissues,
+  prepublishStoryIdea,
+  updateStoryIdeaTitle,
+} from "@/server/modules/si/si.service"
 import type { ApiCurrentUser } from "@/server/shared/current-user"
 
 const authorActor: ApiCurrentUser = {
@@ -362,5 +371,171 @@ describe("si.service", () => {
         }),
       }),
     )
+  })
+})
+
+describe("updateStoryIdeaTitle", () => {
+  const originalUpdatedAt = new Date("2026-08-10T08:00:00.000Z")
+  const renamedUpdatedAt = new Date("2026-08-10T08:10:00.000Z")
+
+  function makeConvertedStoryIdea() {
+    return {
+      siId: 20n,
+      title: "转项目前的 SI 标题",
+      mainTypeId: 5n,
+      trope: "身份反转",
+      fitAuthorNote: "适合悬疑作者",
+      remarks: "内部备注",
+      freshTwist: "叙述性诡计",
+      coreSynopsis: "核心梗概",
+      creatorEditorId: editorActor.userId,
+      status: "converted",
+      currentVersionNo: 3,
+      latestVersionId: 30n,
+      createdAt: new Date("2026-08-01T08:00:00.000Z"),
+      updatedAt: originalUpdatedAt,
+      archivedAt: null,
+      mainType: {
+        mainTypeId: 5n,
+        name: "悬疑推理",
+      },
+      fitAuthors: [
+        {
+          siId: 20n,
+          authorId: authorActor.userId,
+        },
+      ],
+    }
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockTx.storyIdea.findUnique.mockResolvedValue(makeConvertedStoryIdea())
+    mockTx.storyIdea.update
+      // 第一次只修改 StoryIdea.title；第二次挂接新版本并返回界面需要的轻量结果。
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({
+        siId: 20n,
+        title: "转换后的新 SI 标题",
+        updatedAt: renamedUpdatedAt,
+      })
+    mockTx.storyIdeaVersion.create.mockResolvedValue({
+      siVersionId: 31n,
+    })
+    mockTx.operationLog.create.mockResolvedValue({})
+  })
+
+  it("允许创建编辑修改已转项目 SI 的标题，但不联动项目名称和历史预发快照", async () => {
+    const result = await updateStoryIdeaTitle(editorActor, "20", {
+      title: "  转换后的新 SI 标题  ",
+    })
+
+    expect(mockTx.storyIdea.update).toHaveBeenNthCalledWith(1, {
+      where: {
+        siId: 20n,
+      },
+      data: {
+        title: "转换后的新 SI 标题",
+      },
+    })
+    expect(mockTx.storyIdeaVersion.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        siId: 20n,
+        versionNo: 4,
+        action: "update",
+        editorId: editorActor.userId,
+        contentHash: expect.any(String),
+        snapshotJson: expect.objectContaining({
+          title: "转换后的新 SI 标题",
+          coreSynopsis: "核心梗概",
+        }),
+      }),
+    })
+    expect(mockTx.storyIdea.update).toHaveBeenNthCalledWith(2, {
+      where: {
+        siId: 20n,
+      },
+      data: {
+        currentVersionNo: 4,
+        latestVersionId: 31n,
+      },
+      select: {
+        siId: true,
+        title: true,
+        updatedAt: true,
+      },
+    })
+    expect(mockTx.operationLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: "si.title.update",
+        siId: 20n,
+        beforeJson: {
+          title: "转项目前的 SI 标题",
+        },
+        afterJson: {
+          title: "转换后的新 SI 标题",
+        },
+        metadataJson: {
+          siStatus: "converted",
+        },
+      }),
+    })
+    // SI 改名不会更新 Project，也不会更新 SiPreissue；后者在此事务中根本没有写操作。
+    expect(mockTx.project.update).not.toHaveBeenCalled()
+    expect(mockTx.siPreissue.update).not.toHaveBeenCalled()
+    expect(result).toEqual({
+      si: {
+        id: "20",
+        title: "转换后的新 SI 标题",
+        updatedAt: renamedUpdatedAt.toISOString(),
+      },
+    })
+  })
+
+  it("归档 SI 仍保持只读，不能通过标题专用接口改名", async () => {
+    mockTx.storyIdea.findUnique.mockResolvedValue({
+      ...makeConvertedStoryIdea(),
+      status: "archived",
+      archivedAt: new Date("2026-08-09T08:00:00.000Z"),
+    })
+
+    await expect(
+      updateStoryIdeaTitle(editorActor, "20", {
+        title: "归档后尝试改名",
+      }),
+    ).rejects.toMatchObject({
+      code: "SI_TITLE_ARCHIVED",
+    })
+
+    expect(mockTx.storyIdea.update).not.toHaveBeenCalled()
+    expect(mockTx.storyIdeaVersion.create).not.toHaveBeenCalled()
+    expect(mockTx.operationLog.create).not.toHaveBeenCalled()
+  })
+
+  it("作者不能修改 SI 标题", async () => {
+    await expect(
+      updateStoryIdeaTitle(authorActor, "20", {
+        title: "作者尝试改名",
+      }),
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    })
+
+    expect(mockTx.storyIdea.update).not.toHaveBeenCalled()
+    expect(mockTx.storyIdeaVersion.create).not.toHaveBeenCalled()
+  })
+
+  it("服务层拒绝超过数据库字段上限的标题", async () => {
+    await expect(
+      updateStoryIdeaTitle(editorActor, "20", {
+        title: "超".repeat(256),
+      }),
+    ).rejects.toMatchObject({
+      code: "SI_TITLE_TOO_LONG",
+    })
+
+    // 非法标题在进入事务前被拦截，避免任何业务数据被读取或写入。
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled()
+    expect(mockTx.storyIdea.update).not.toHaveBeenCalled()
   })
 })

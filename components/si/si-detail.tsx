@@ -64,6 +64,10 @@ export function SiDetail({ si }: { si: SiItem }) {
   const [convertTarget, setConvertTarget] = useState<PrereleaseRecord | null>(null)
   const [projectTitle, setProjectTitle] = useState("")
   const [convertError, setConvertError] = useState<string | null>(null)
+  const [titleDialogOpen, setTitleDialogOpen] = useState(false)
+  const [titleValue, setTitleValue] = useState("")
+  const [titleError, setTitleError] = useState<string | null>(null)
+  const [updatingTitle, setUpdatingTitle] = useState(false)
 
   const records = si.preissues
   const convertedRecord = records.find((record) => record.status === "converted")
@@ -124,6 +128,68 @@ export function SiDetail({ si }: { si: SiItem }) {
     setConvertTarget(null)
     setProjectTitle("")
     setConvertError(null)
+  }
+
+  function openTitleDialog() {
+    // 每次打开时都使用服务端最新标题初始化，避免上次取消的输入残留到下一次操作。
+    setTitleValue(si.title)
+    setTitleError(null)
+    setMessage(null)
+    setTitleDialogOpen(true)
+  }
+
+  function closeTitleDialog() {
+    if (updatingTitle) return
+
+    setTitleDialogOpen(false)
+    setTitleValue("")
+    setTitleError(null)
+  }
+
+  async function handleUpdateTitle() {
+    if (updatingTitle) return
+
+    const normalizedTitle = titleValue.trim()
+
+    if (!normalizedTitle) {
+      setTitleError("请输入 SI 标题")
+      return
+    }
+
+    if (normalizedTitle.length > 255) {
+      setTitleError("SI 标题不能超过 255 个字符")
+      return
+    }
+
+    setUpdatingTitle(true)
+    setTitleError(null)
+
+    try {
+      // 使用标题专用接口，确保已转项目的 SI 只能修改名称，不能借此改动已冻结的策划内容。
+      await fetchJson(`/api/si/${si.id}/title`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          title: normalizedTitle,
+        }),
+      })
+
+      setTitleDialogOpen(false)
+      setTitleValue("")
+      setMessage({
+        type: "success",
+        text: "SI 标题已修改，关联项目名称保持不变",
+      })
+      toast({ type: "success", title: "SI 标题已修改" })
+      // 标题同时用于页面标题和面包屑，刷新服务端组件可让两个位置一次性保持一致。
+      router.refresh()
+    } catch (error) {
+      setTitleError(error instanceof Error ? error.message : "SI 标题修改失败，请稍后重试")
+    } finally {
+      setUpdatingTitle(false)
+    }
   }
 
   async function handleConvert() {
@@ -235,6 +301,11 @@ export function SiDetail({ si }: { si: SiItem }) {
                   <Pencil className="mr-1 size-4" />
                   编辑
                 </Link>
+              </Button>
+            ) : si.status === "converted" ? (
+              <Button variant="outline" className="bg-transparent" onClick={openTitleDialog}>
+                <Pencil className="mr-1 size-4" />
+                修改 SI 标题
               </Button>
             ) : (
               <Button variant="outline" className="bg-transparent text-muted-foreground" disabled>
@@ -437,6 +508,74 @@ export function SiDetail({ si }: { si: SiItem }) {
           router.refresh()
         }}
       />
+
+      <Dialog
+        open={titleDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) closeTitleDialog()
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <form
+            className="flex flex-col gap-4"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void handleUpdateTitle()
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle>修改 SI 标题</DialogTitle>
+              <DialogDescription>
+                修改只会更新当前 SI 标题，不会同步修改关联项目
+                {convertedRecord?.projectName ? `「${convertedRecord.projectName}」` : "名称"}，也不会改写历史预发快照。
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-2 py-1">
+              <label className="text-sm font-medium text-foreground" htmlFor="si-title">
+                SI 标题
+              </label>
+              <Input
+                id="si-title"
+                value={titleValue}
+                onChange={(event) => {
+                  setTitleValue(event.target.value)
+                  setTitleError(null)
+                }}
+                maxLength={255}
+                placeholder="请输入 SI 标题"
+                disabled={updatingTitle}
+                aria-invalid={Boolean(titleError)}
+                aria-describedby={titleError ? "si-title-error" : undefined}
+                autoFocus
+              />
+              {titleError && (
+                <p id="si-title-error" className="text-sm text-red-600">
+                  {titleError}
+                </p>
+              )}
+            </div>
+
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                className="bg-transparent"
+                disabled={updatingTitle}
+                onClick={closeTitleDialog}
+              >
+                取消
+              </Button>
+              <Button
+                type="submit"
+                disabled={updatingTitle || !titleValue.trim() || titleValue.trim() === si.title}
+              >
+                {updatingTitle ? "保存中..." : "保存标题"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={Boolean(convertTarget)}
