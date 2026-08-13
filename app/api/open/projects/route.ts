@@ -1,7 +1,7 @@
 import { type NextRequest } from "next/server"
 import { z } from "zod"
 
-import { assertOpenProjectsApiToken } from "@/server/auth/open-api-token"
+import { assertOpenApiToken } from "@/server/auth/open-api-token"
 import { listOpenProjects } from "@/server/modules/open/open-project.service"
 import { fail, ok } from "@/server/shared/api-response"
 
@@ -28,7 +28,7 @@ const querySchema = z.object({
 export async function GET(request: NextRequest) {
   try {
     // 先完成 Token 校验，再解析参数，避免未认证调用方利用校验差异探测接口行为。
-    assertOpenProjectsApiToken(request)
+    assertOpenApiToken(request)
 
     const searchParams = request.nextUrl.searchParams
     const query = querySchema.parse({

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest"
 import { NextRequest } from "next/server"
 
-import { assertOpenProjectsApiToken } from "@/server/auth/open-api-token"
+import { assertOpenApiToken } from "@/server/auth/open-api-token"
 import { ApiError } from "@/server/shared/api-response"
 
 const VALID_TOKEN = "open-projects-test-token-with-more-than-32-characters"
@@ -21,7 +21,7 @@ describe("Open API Token 鉴权", () => {
   it("接受格式正确且值匹配的 Bearer Token", () => {
     process.env.OPEN_PROJECTS_API_TOKEN = VALID_TOKEN
 
-    expect(() => assertOpenProjectsApiToken(makeRequest(`Bearer ${VALID_TOKEN}`))).not.toThrow()
+    expect(() => assertOpenApiToken(makeRequest(`Bearer ${VALID_TOKEN}`))).not.toThrow()
   })
 
   it("对缺失、格式错误和不匹配的 Token 返回相同认证错误", () => {
@@ -29,7 +29,7 @@ describe("Open API Token 鉴权", () => {
 
     for (const request of [makeRequest(), makeRequest(`Basic ${VALID_TOKEN}`), makeRequest("Bearer wrong-token")]) {
       try {
-        assertOpenProjectsApiToken(request)
+        assertOpenApiToken(request)
         throw new Error("测试预期鉴权失败，但函数没有抛出错误")
       } catch (error) {
         expect(error).toBeInstanceOf(ApiError)
@@ -45,7 +45,7 @@ describe("Open API Token 鉴权", () => {
     process.env.OPEN_PROJECTS_API_TOKEN = "short-token"
 
     try {
-      assertOpenProjectsApiToken(makeRequest("Bearer short-token"))
+      assertOpenApiToken(makeRequest("Bearer short-token"))
       throw new Error("测试预期配置错误，但函数没有抛出错误")
     } catch (error) {
       expect(error).toBeInstanceOf(ApiError)

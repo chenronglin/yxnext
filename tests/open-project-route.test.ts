@@ -9,7 +9,7 @@ const { mockAssertOpenProjectsApiToken, mockListOpenProjects } = vi.hoisted(() =
 }))
 
 vi.mock("@/server/auth/open-api-token", () => ({
-  assertOpenProjectsApiToken: mockAssertOpenProjectsApiToken,
+  assertOpenApiToken: mockAssertOpenProjectsApiToken,
 }))
 
 vi.mock("@/server/modules/open/open-project.service", () => ({

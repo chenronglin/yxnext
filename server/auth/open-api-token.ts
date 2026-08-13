@@ -46,7 +46,7 @@ function bearerToken(request: NextRequest) {
 
 // 该鉴权函数只会被 /api/open 下的只读 Route 显式调用。
 // 现有管理员和业务接口不会识别这个 Token，因此它不能被用于任何新增、修改或删除操作。
-export function assertOpenProjectsApiToken(request: NextRequest) {
+export function assertOpenApiToken(request: NextRequest) {
   const expectedDigest = tokenDigest(configuredToken())
   const actualDigest = tokenDigest(bearerToken(request))
 
