@@ -1,25 +1,27 @@
 # Agent 项目只读 API 对外交接文档
 
-> 文档版本：1.1
+> 文档版本：1.2
 >
-> 更新日期：2026-08-13
+> 更新日期：2026-08-15
 >
 > 保密级别：机密（本文包含 API Token，请勿公开传播或提交到公共代码仓库）
 
 ## 1. 接口用途
 
-该组接口用于外部 Agent 或数据看板只读获取项目进度及项目操作审计日志。
+该组接口用于外部 Agent 或数据看板只读获取项目进度、项目操作审计日志，以及按需读取梗概、细纲和正文章节的纯文本内容。
 
 - 生产地址：`https://www.yxwriting.com`
 - 项目列表：`https://www.yxwriting.com/api/open/projects`
 - 操作审计日志：`https://www.yxwriting.com/api/open/audit-logs`
+- 单篇正文：`https://www.yxwriting.com/api/open/docs/{docId}/content`
+- 项目阶段正文：`https://www.yxwriting.com/api/open/projects/{projectId}/content`
 - 请求方法：`GET`
 - 数据格式：`application/json`
-- 权限范围：只读；该 Token 不能调用系统中的新增、修改或删除接口
+- 权限范围：只读；正文不会默认混入项目元数据响应，必须按需调用正文接口
 
 ## 2. 认证信息
 
-请在每次请求的 `Authorization` 请求头中携带以下 Bearer Token。
+项目列表和操作审计日志使用元数据 Token：
 
 ```text
 OPEN_PROJECTS_API_TOKEN="2b87d0092e654a7adbcf90108e9a34897c93aeb0082a766cfb1512a38ba4eb50"
@@ -32,6 +34,20 @@ Authorization: Bearer 2b87d0092e654a7adbcf90108e9a34897c93aeb0082a766cfb1512a38b
 ```
 
 Token 缺失、格式错误或不匹配时，接口返回 HTTP `401`。请妥善保存该 Token，不要放入前端网页、公开仓库、截图或普通日志中。
+
+正文属于核心 IP，两个正文接口必须改用以下独立正文 Token：
+
+```text
+OPEN_CONTENT_API_TOKEN="f9ace0c00e0cc58fe640d05018d2481a29b8d970a3ee05e3e16144f494343d2e"
+```
+
+正文请求头：
+
+```http
+Authorization: Bearer f9ace0c00e0cc58fe640d05018d2481a29b8d970a3ee05e3e16144f494343d2e
+```
+
+两个 Token 的权限严格分离：元数据 Token 不能读取正文，正文 Token 也不能替代元数据 Token。若服务端误将两个 Token 配置成相同值，正文接口会以 HTTP `503` 主动关闭。正文 Token 同样不得放入浏览器前端、公开仓库、截图或普通日志。
 
 ## 3. 快速调用示例
 
@@ -57,6 +73,22 @@ curl --request GET \
 curl --request GET \
   --url 'https://www.yxwriting.com/api/open/audit-logs?projectId=123&action=doc.return&startAt=2026-08-01T00%3A00%3A00.000Z&endAt=2026-08-10T23%3A59%3A59.999Z&page=1&pageSize=20' \
   --header 'Authorization: Bearer 2b87d0092e654a7adbcf90108e9a34897c93aeb0082a766cfb1512a38ba4eb50'
+```
+
+按 Doc ID 获取单篇正文：
+
+```bash
+curl --request GET \
+  --url 'https://www.yxwriting.com/api/open/docs/456/content' \
+  --header 'Authorization: Bearer f9ace0c00e0cc58fe640d05018d2481a29b8d970a3ee05e3e16144f494343d2e'
+```
+
+获取某项目的前 3 章正文：
+
+```bash
+curl --request GET \
+  --url 'https://www.yxwriting.com/api/open/projects/123/content?stage=chapter&order=1-3' \
+  --header 'Authorization: Bearer f9ace0c00e0cc58fe640d05018d2481a29b8d970a3ee05e3e16144f494343d2e'
 ```
 
 ## 4. 项目列表接口
@@ -324,7 +356,7 @@ GET /api/open/audit-logs
 | `time` | string | 操作发生时间，ISO 8601 格式；也是增量同步依据 |
 | `operator` | string | 操作人显示名；主体已删除时为“已删除用户”，系统日志为“系统” |
 | `operatorId` | string \| null | 操作人用户 ID；无法关联用户时为 `null` |
-| `role` | string | 操作发生时的角色快照：`admin`、`editor`、`author` 或 `system` |
+| `role` | string | 操作发生时的角色快照：`admin`、`editor`、`author`、`api` 或 `system`；正文接口调用使用 `api` |
 | `action` | string | 操作类型稳定编码，建议统计和筛选使用该字段 |
 | `actionLabel` | string | 操作类型中文名称，仅用于展示 |
 | `target` | string | 可读业务对象，例如“项目：项目甲 · Doc：第一章” |
@@ -347,6 +379,7 @@ GET /api/open/audit-logs
 | `doc.return` | 退回文档修改 | 编辑打回一轮；统计“编辑打回轮次”的推荐口径 |
 | `doc.approve` | 通过文档审核 | 编辑通过一轮审核 |
 | `doc.cancel_approval` | 取消文档定稿 | 已通过后重新打开并要求修改 |
+| `open.content.read` | 读取 Open API 正文 | 外部调用方按 Doc 或按项目阶段读取正文 |
 | `project.chapter.create` | 新建项目章节 | 正文阶段新建章节 |
 | `project.chapter.metadata.update` | 更新章节信息 | 修改章节标题或章节号 |
 | `project.chapter.reorder` | 调整章节顺序 | 正文章节重新排序 |
@@ -375,7 +408,108 @@ GET /api/open/audit-logs
 
 操作日志为追加式只读记录，不会被更新；因此该接口的 `updatedSince` 实际按日志 `time`（创建时间）进行严格增量筛选。
 
-## 8. 错误响应
+## 8. 正文读取接口
+
+### 8.1 使用范围与内容口径
+
+正文接口覆盖 `synopsis`（梗概）、`outline`（细纲）和 `chapter`（正文章节）三类 Doc，不开放 `release`（质检稿）。`docId` 与项目列表 `chapters[].id`、审计日志 `docId` 使用同一套现有 Doc ID。
+
+返回的 `content` 为纯文本。系统优先读取当前活跃草稿；Doc 已通过且没有活跃草稿时读取最终定稿版本。`wordCount` 和 `updatedAt` 始终来自与 `content` 相同的内容快照。当前版本不额外返回 Markdown 或 HTML。
+
+正文只按需返回，不会出现在 `GET /api/open/projects` 或 `GET /api/open/audit-logs` 的默认响应中。所有成功响应均带 `Cache-Control: private, no-store`，调用方也不应在共享缓存中保存正文。
+
+### 8.2 按 Doc 获取单篇正文
+
+```http
+GET /api/open/docs/{docId}/content
+```
+
+路径参数：
+
+| 参数 | 是否必填 | 说明 |
+| --- | --- | --- |
+| `docId` | 是 | 大于 0 的 Doc ID 数字字符串；可来自 `projects.chapters[].id` 或 `audit-logs.docId` |
+
+成功响应：
+
+```json
+{
+  "ok": true,
+  "docId": "456",
+  "projectId": "123",
+  "stage": "chapter",
+  "title": "第一章",
+  "order": 1,
+  "wordCount": 3200,
+  "updatedAt": "2026-08-15T08:00:00.000Z",
+  "content": "第一章的纯文本正文……"
+}
+```
+
+### 8.3 按项目和阶段批量获取正文
+
+```http
+GET /api/open/projects/{projectId}/content?stage=synopsis|outline|chapter&order=1-3
+```
+
+查询参数：
+
+| 参数 | 是否必填 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `stage` | 是 | 无 | 只接受 `synopsis`、`outline` 或 `chapter` |
+| `order` | 否 | 无 | 单个正整数或闭区间，例如 `1`、`1-3`；仅适用于 `stage=chapter` |
+| `page` | 否 | `1` | 正整数页码；使用非第 1 页时必须同时提供 `pageSize` |
+| `pageSize` | 否 | 无 | 1～100；不传时一次返回该阶段或章序范围内的全部匹配 Doc |
+
+批量结果按对外 `order` 升序排列。正文章序优先使用现有结构化章节号，历史数据没有章节号时使用显示顺序。梗概和细纲的 `order` 为 `null`。
+
+成功响应：
+
+```json
+{
+  "ok": true,
+  "items": [
+    {
+      "docId": "456",
+      "projectId": "123",
+      "stage": "chapter",
+      "title": "第一章",
+      "order": 1,
+      "wordCount": 3200,
+      "updatedAt": "2026-08-15T08:00:00.000Z",
+      "content": "第一章的纯文本正文……"
+    }
+  ],
+  "page": 1,
+  "pageSize": 1,
+  "total": 1,
+  "totalPages": 1
+}
+```
+
+不传 `pageSize` 时，`pageSize` 表示本次全部匹配结果的数量；没有匹配 Doc 时为 `1`。传入 `pageSize` 时，分页外壳与其他 Open API 保持一致。
+
+### 8.4 正文字段说明
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `docId` | string | Doc ID；请始终按字符串处理 |
+| `projectId` | string | 所属项目 ID；请始终按字符串处理 |
+| `stage` | string | `synopsis` 梗概、`outline` 细纲、`chapter` 正文章节 |
+| `title` | string | Doc 标题 |
+| `order` | number \| null | 正文章序；梗概和细纲为 `null` |
+| `wordCount` | number | 当前返回内容快照的字数 |
+| `updatedAt` | string | 当前返回内容快照的更新时间，ISO 8601 格式 |
+| `content` | string | 纯文本内容；可能为空字符串 |
+
+### 8.5 项目授权与调用审计
+
+- 正文 Token 可由接口提供方配置项目 ID 白名单；启用后只能读取获准项目，越权返回 HTTP `403 OPEN_CONTENT_PROJECT_FORBIDDEN`。未配置白名单时允许读取全部项目。
+- 每次成功读取都会先写入现有 `operation_logs` 审计表；审计写入失败时不会返回正文。
+- 审计记录包含调用方、时间、请求 ID、来源 IP、User-Agent、读取模式、所属阶段、实际返回的 Doc ID，以及批量读取时的章序和分页范围；不会复制正文内容。
+- 这类日志的稳定动作编码为 `open.content.read`，角色为 `api`，可通过元数据 Token 调用 `GET /api/open/audit-logs?action=open.content.read` 查询。
+
+## 9. 错误响应
 
 错误响应统一采用以下结构：
 
@@ -391,13 +525,16 @@ GET /api/open/audit-logs
 
 | HTTP 状态码 | 常见错误码/场景 | 处理建议 |
 | --- | --- | --- |
-| `400` | `VALIDATION_ERROR` | 检查分页、ID、时间范围、时间格式和布尔参数 |
-| `401` | `OPEN_API_UNAUTHORIZED` | 检查 Bearer Token 是否完整、是否包含多余空格 |
+| `400` | `VALIDATION_ERROR`、`OPEN_CONTENT_DOC_TYPE_UNSUPPORTED` | 检查分页、ID、阶段、章序范围、时间格式；质检 Doc 不支持正文读取 |
+| `401` | `OPEN_API_UNAUTHORIZED`、`OPEN_CONTENT_API_UNAUTHORIZED` | 检查当前接口使用的是元数据 Token 还是正文 Token |
+| `403` | `OPEN_CONTENT_PROJECT_FORBIDDEN` | 当前正文 Token 未获准读取该项目 |
+| `404` | `OPEN_CONTENT_DOC_NOT_FOUND`、`OPEN_CONTENT_PROJECT_NOT_FOUND` | 检查 Doc ID 或项目 ID；已软删除 Doc 也按不存在处理 |
+| `409` | `OPEN_CONTENT_SOURCE_MISSING` | Doc 当前没有可读取的活跃草稿或最终定稿 |
 | `405` | 请求方法错误 | 该接口只支持 GET |
 | `500` | `INTERNAL_ERROR` | 稍后重试；持续失败时联系接口提供方 |
-| `503` | `OPEN_API_TOKEN_NOT_CONFIGURED` | 联系接口提供方检查服务端 Token 配置 |
+| `503` | Token 未配置、项目授权配置错误或两个 Token 冲突 | 联系接口提供方检查服务端环境变量配置 |
 
-## 9. 契约稳定性
+## 10. 契约稳定性
 
 - 现有字段只增不删。
 - 已发布字段含义和稳定编码不随页面展示文案改变。

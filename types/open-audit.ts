@@ -2,7 +2,7 @@ import type { ProjectStage, Role } from "@/types/domain"
 
 // Open API 审计日志沿用后台审计页已有的核心字段名，并补充外部统计需要的关联 ID 与阶段。
 // system 只用于没有用户主体的系统日志，不会替代数据库中已经保存的真实用户角色快照。
-export type OpenAuditActorRole = Role | "system"
+export type OpenAuditActorRole = Role | "api" | "system"
 
 export interface OpenAuditLogItem {
   id: string

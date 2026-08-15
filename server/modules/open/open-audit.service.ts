@@ -13,7 +13,7 @@ import type {
 import type { ProjectStage } from "@/types/domain"
 
 const PROJECT_STAGES = new Set<ProjectStage>(["synopsis", "outline", "chapter", "release", "completed"])
-const ACTOR_ROLES = new Set<OpenAuditActorRole>(["admin", "editor", "author", "system"])
+const ACTOR_ROLES = new Set<OpenAuditActorRole>(["admin", "editor", "author", "api", "system"])
 
 // 对外审计日志只查询项目统计所需字段，不暴露 IP、User-Agent、请求 ID 或变更前后正文相关 JSON。
 const openAuditInclude = {
@@ -85,6 +85,7 @@ function auditStage(log: OpenAuditRecord): ProjectStage | null {
 function auditRole(log: OpenAuditRecord): OpenAuditActorRole {
   // actorRole 是写日志时保存的角色快照，比用户账号当前角色更能代表历史操作语义。
   const snapshotRole = log.actorRole
+  if (snapshotRole === "open_content_api") return "api"
   if (snapshotRole && ACTOR_ROLES.has(snapshotRole as OpenAuditActorRole)) {
     return snapshotRole as OpenAuditActorRole
   }
@@ -94,6 +95,10 @@ function auditRole(log: OpenAuditRecord): OpenAuditActorRole {
 
 function auditOperator(log: OpenAuditRecord) {
   if (log.actor) return userName(log.actor)
+  if (log.actorRole === "open_content_api") {
+    const caller = jsonRecord(log.metadataJson)?.caller
+    return typeof caller === "string" && caller.trim() ? caller : "正文 Open API"
+  }
   return log.actorRole ? "已删除用户" : "系统"
 }
 
@@ -154,12 +159,24 @@ function auditWhere(input: OpenAuditLogListInput): Prisma.OperationLogWhereInput
     ...(input.action && input.action !== "all" ? { action: input.action } : {}),
     ...(input.operator
       ? {
-          actor: {
-            OR: [
-              { displayName: { contains: input.operator } },
-              { username: { contains: input.operator } },
-            ],
-          },
+          OR: [
+            {
+              actor: {
+                OR: [
+                  { displayName: { contains: input.operator } },
+                  { username: { contains: input.operator } },
+                ],
+              },
+            },
+            {
+              // 正文 Open API 没有高权限用户账号，调用方名称保存在审计 JSON 中；操作人筛选必须同时覆盖它。
+              actorRole: "open_content_api",
+              metadataJson: {
+                path: "$.caller",
+                string_contains: input.operator,
+              },
+            },
+          ],
         }
       : {}),
     ...(createdAt ? { createdAt } : {}),

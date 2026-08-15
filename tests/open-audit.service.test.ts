@@ -146,12 +146,23 @@ describe("Open Audit Logs 查询服务", () => {
           docId: 200n,
           actorUserId: 30n,
           action: "doc.return",
-          actor: {
-            OR: [
-              { displayName: { contains: "编辑甲" } },
-              { username: { contains: "编辑甲" } },
-            ],
-          },
+          OR: [
+            {
+              actor: {
+                OR: [
+                  { displayName: { contains: "编辑甲" } },
+                  { username: { contains: "编辑甲" } },
+                ],
+              },
+            },
+            {
+              actorRole: "open_content_api",
+              metadataJson: {
+                path: "$.caller",
+                string_contains: "编辑甲",
+              },
+            },
+          ],
           createdAt: {
             gt: updatedSince,
             gte: startAt,
@@ -163,6 +174,43 @@ describe("Open Audit Logs 查询服务", () => {
         take: 50,
       }),
     )
+  })
+
+  it("把正文读取调用映射为 API 角色，并保留项目阶段与调用方名称", async () => {
+    mockTx.operationLog.findMany.mockResolvedValueOnce([
+      {
+        ...docLog,
+        logId: 504n,
+        actorUserId: null,
+        actorRole: "open_content_api",
+        action: "open.content.read",
+        entityType: "project",
+        entityId: 100n,
+        docId: null,
+        beforeJson: null,
+        afterJson: null,
+        metadataJson: {
+          caller: "agent-content-reader",
+          mode: "batch",
+          stage: "outline",
+          requestedDocIds: ["200"],
+        },
+        actor: null,
+        doc: null,
+      },
+    ])
+
+    const result = await listOpenAuditLogs(baseInput)
+
+    expect(result.logs[0]).toMatchObject({
+      operator: "agent-content-reader",
+      operatorId: null,
+      role: "api",
+      action: "open.content.read",
+      actionLabel: "读取 Open API 正文",
+      projectId: "100",
+      stage: "outline",
+    })
   })
 
   it("项目级日志优先使用历史阶段快照，不能确定时明确返回 null", async () => {
