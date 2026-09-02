@@ -5,6 +5,7 @@ __v0_jsx-dev-runtime.ts
 .snowflake/
 .v0-trash/
 .vercel/
+tmp/
 
 # Environment variables
 # 本地真实凭据文件一律不再进入版本库；
