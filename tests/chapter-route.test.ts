@@ -75,8 +75,25 @@ describe("单章节接口", () => {
     })
   })
 
-  it("拒绝零、负数或小数章节号，不进入业务服务", async () => {
-    for (const chapterNo of [0, -1, 1.5]) {
+  it("允许第 0 章，并拒绝负数或小数章节号", async () => {
+    mockUpdateProjectChapterMetadata.mockResolvedValue({ project: { id: "100" } })
+    const chapterZeroRequest = new NextRequest("https://example.test/api/projects/100/chapters/200", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "作品介绍", chapterNo: 0 }),
+    })
+
+    expect((await PATCH(chapterZeroRequest, routeContext)).status).toBe(200)
+    expect(mockUpdateProjectChapterMetadata).toHaveBeenCalledWith(
+      expect.objectContaining({ role: "author" }),
+      "100",
+      "200",
+      { title: "作品介绍", chapterNo: 0 },
+    )
+
+    mockUpdateProjectChapterMetadata.mockClear()
+
+    for (const chapterNo of [-1, 1.5]) {
       const request = new NextRequest("https://example.test/api/projects/100/chapters/200", {
         method: "PATCH",
         headers: {

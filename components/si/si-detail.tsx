@@ -344,8 +344,14 @@ export function SiDetail({ si }: { si: SiItem }) {
             <h2 className="text-sm font-semibold text-foreground">基础信息</h2>
             <div className="grid gap-5 sm:grid-cols-2">
               <Field label="主类型" value={si.mainType} />
+              <Field label="SI 类型" value={si.siType} />
+              <Field label="创作难度" value={si.creativeDifficulty} />
               <Field label="Trope" value={si.trope} />
               <Field label="适配作者" value={si.authors.join("、")} />
+            </div>
+            <div className="grid gap-5 sm:grid-cols-2">
+              <Field label="参考书籍标题" value={si.referenceBookTitle} />
+              <Field label="参考书籍链接" value={si.referenceBookUrl} />
             </div>
             <Field label="备注" value={si.remark} />
             <Separator />

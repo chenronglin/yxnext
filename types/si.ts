@@ -49,6 +49,10 @@ export interface SiVersion {
   current: boolean
   title: string
   mainType: string
+  siType: string
+  creativeDifficulty: string
+  referenceBookTitle: string
+  referenceBookUrl: string
   trope: string
   freshTwist: string
   synopsis: string
@@ -61,6 +65,10 @@ export interface PrereleaseRecord {
   siTitle: string
   title: string
   mainType: string
+  siType: string
+  creativeDifficulty: string
+  referenceBookTitle: string
+  referenceBookUrl: string
   trope: string
   remark: string
   freshTwist: string
@@ -85,6 +93,12 @@ export interface SiItem {
   title: string
   mainTypeId?: string
   mainType: string
+  siTypeId?: string
+  siType: string
+  creativeDifficultyId?: string
+  creativeDifficulty: string
+  referenceBookTitle: string
+  referenceBookUrl: string
   trope: string
   authors: string[]
   authorIds: string[]
@@ -103,4 +117,16 @@ export interface SiItem {
   latestVersionId?: string
   preissues: PrereleaseRecord[]
   versions: SiVersion[]
+}
+
+export type SiMetadataCategory = "si_type" | "creative_difficulty"
+
+export interface SiMetadataOption {
+  id: string
+  category: SiMetadataCategory
+  name: string
+  value: string
+  order: number
+  status?: "active" | "inactive"
+  createdAt?: string
 }

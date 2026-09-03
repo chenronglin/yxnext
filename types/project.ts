@@ -67,11 +67,45 @@ export const STAGE_ORDER: ProjectStage[] = ["synopsis", "outline", "chapter", "r
 export interface StagePlan {
   stage: ProjectStage
   planDays: number
+  plannedStartAt?: string | null
+  plannedEndAt?: string | null
+  lockVersion?: number
   startAt: string | null
   dueAt: string | null
   finishedAt: string | null
   status: StagePlanStatus
   timingNote: string
+  changes?: StagePlanChange[]
+}
+
+export interface StagePlanChange {
+  id: string
+  reason: string
+  changedBy: string
+  changedAt: string
+  before: {
+    plannedStartAt: string | null
+    plannedEndAt: string | null
+    planDays: number
+  }
+  after: {
+    plannedStartAt: string | null
+    plannedEndAt: string | null
+    planDays: number
+  }
+}
+
+export interface UpdateStagePlanItemInput {
+  stage: "synopsis" | "outline" | "chapter" | "release"
+  plannedStartAt?: string | null
+  plannedEndAt?: string | null
+  planDays?: number
+  lockVersion?: number
+}
+
+export interface UpdateProjectStagePlansInput {
+  reason: string
+  items: UpdateStagePlanItemInput[]
 }
 
 export interface ChapterDoc {

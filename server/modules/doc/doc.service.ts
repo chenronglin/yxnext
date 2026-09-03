@@ -12,6 +12,8 @@ import {
   translateUniqueConstraintError,
 } from "@/server/shared/invariant-keys"
 import { createNovelDocV1, deriveNovelDocProjection, isNovelDocV1 } from "@/lib/novel-doc"
+import { addWorkdays, endOfDateOnly, normalizeDateOnly } from "@/lib/workday-calendar"
+import { loadWorkdayExceptionMap } from "@/server/shared/workday-calendar"
 import type { ApiCurrentUser } from "@/server/shared/current-user"
 import type {
   DocCurrentView,
@@ -88,6 +90,9 @@ const stagePlanSelect = {
   gateStatus: true,
   timelineStatus: true,
   planDays: true,
+  plannedStartAt: true,
+  plannedEndAt: true,
+  lockVersion: true,
   unlockedAt: true,
   startedAt: true,
   dueAt: true,
@@ -208,10 +213,6 @@ function toIsoString(value: Date | null | undefined) {
 
 function userName(user: { username: string; displayName: string | null }) {
   return user.displayName ?? user.username
-}
-
-function addDays(base: Date, days: number) {
-  return new Date(base.getTime() + days * 24 * 60 * 60 * 1000)
 }
 
 function hashJson(value: Prisma.InputJsonValue) {
@@ -1186,7 +1187,13 @@ async function ensureOutlineDocForProject(tx: TxClient, doc: WorkflowDocRecord, 
   return outlineDoc.docId
 }
 
-async function completeStagePlan(tx: TxClient, projectId: bigint, stageCode: (typeof STAGE_ORDER)[number], now: Date) {
+async function completeStagePlan(
+  tx: TxClient,
+  projectId: bigint,
+  stageCode: (typeof STAGE_ORDER)[number],
+  now: Date,
+  workdayExceptions: ReadonlyMap<string, boolean>,
+) {
   const stagePlan = await tx.projectStagePlan.findFirst({
     where: {
       projectId,
@@ -1198,6 +1205,9 @@ async function completeStagePlan(tx: TxClient, projectId: bigint, stageCode: (ty
     return null
   }
 
+  const plannedStartAt = stagePlan.plannedStartAt ?? normalizeDateOnly(stagePlan.startedAt ?? now)
+  const plannedEndAt = stagePlan.plannedEndAt ?? addWorkdays(plannedStartAt, stagePlan.planDays, workdayExceptions)
+
   await tx.projectStagePlan.update({
     where: {
       stagePlanId: stagePlan.stagePlanId,
@@ -1208,14 +1218,22 @@ async function completeStagePlan(tx: TxClient, projectId: bigint, stageCode: (ty
       completedAt: now,
       startedAt: stagePlan.startedAt ?? now,
       unlockedAt: stagePlan.unlockedAt ?? now,
-      dueAt: stagePlan.dueAt ?? addDays(now, stagePlan.planDays),
+      plannedStartAt,
+      plannedEndAt,
+      dueAt: stagePlan.dueAt ?? endOfDateOnly(plannedEndAt),
     },
   })
 
   return stagePlan
 }
 
-async function unlockStagePlan(tx: TxClient, projectId: bigint, stageCode: (typeof STAGE_ORDER)[number], now: Date) {
+async function unlockStagePlan(
+  tx: TxClient,
+  projectId: bigint,
+  stageCode: (typeof STAGE_ORDER)[number],
+  now: Date,
+  workdayExceptions: ReadonlyMap<string, boolean>,
+) {
   const stagePlan = await tx.projectStagePlan.findFirst({
     where: {
       projectId,
@@ -1228,6 +1246,8 @@ async function unlockStagePlan(tx: TxClient, projectId: bigint, stageCode: (type
   }
 
   const startedAt = stagePlan.startedAt ?? now
+  const plannedStartAt = stagePlan.plannedStartAt ?? normalizeDateOnly(startedAt)
+  const plannedEndAt = stagePlan.plannedEndAt ?? addWorkdays(plannedStartAt, stagePlan.planDays, workdayExceptions)
 
   await tx.projectStagePlan.update({
     where: {
@@ -1238,7 +1258,9 @@ async function unlockStagePlan(tx: TxClient, projectId: bigint, stageCode: (type
       timelineStatus: "in_progress",
       unlockedAt: stagePlan.unlockedAt ?? now,
       startedAt,
-      dueAt: stagePlan.dueAt ?? addDays(startedAt, stagePlan.planDays),
+      plannedStartAt,
+      plannedEndAt,
+      dueAt: stagePlan.dueAt ?? endOfDateOnly(plannedEndAt),
     },
   })
 
@@ -1246,10 +1268,12 @@ async function unlockStagePlan(tx: TxClient, projectId: bigint, stageCode: (type
 }
 
 async function advanceProjectAfterApprove(tx: TxClient, doc: WorkflowDocRecord, now: Date) {
+  const workdayExceptions = await loadWorkdayExceptionMap(tx)
+
   // 阶段推进只在审核通过时触发，且当前批次只覆盖梗概/细纲/全文质检三类更新。
   if (doc.stageCode === "synopsis") {
-    await completeStagePlan(tx, doc.project.projectId, "synopsis", now)
-    await unlockStagePlan(tx, doc.project.projectId, "outline", now)
+    await completeStagePlan(tx, doc.project.projectId, "synopsis", now, workdayExceptions)
+    await unlockStagePlan(tx, doc.project.projectId, "outline", now, workdayExceptions)
     const outlineDocId = await ensureOutlineDocForProject(tx, doc, now)
 
     await tx.project.update({
@@ -1268,8 +1292,8 @@ async function advanceProjectAfterApprove(tx: TxClient, doc: WorkflowDocRecord, 
   }
 
   if (doc.stageCode === "outline") {
-    await completeStagePlan(tx, doc.project.projectId, "outline", now)
-    await unlockStagePlan(tx, doc.project.projectId, "chapter", now)
+    await completeStagePlan(tx, doc.project.projectId, "outline", now, workdayExceptions)
+    await unlockStagePlan(tx, doc.project.projectId, "chapter", now, workdayExceptions)
 
     await tx.project.update({
       where: {
@@ -1286,7 +1310,7 @@ async function advanceProjectAfterApprove(tx: TxClient, doc: WorkflowDocRecord, 
   }
 
   if (doc.stageCode === "release") {
-    await completeStagePlan(tx, doc.project.projectId, "release", now)
+    await completeStagePlan(tx, doc.project.projectId, "release", now, workdayExceptions)
 
     await tx.project.update({
       where: {

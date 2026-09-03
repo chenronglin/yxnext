@@ -158,7 +158,7 @@ export function DocVersionDetail({
               />
 
               <aside className="min-h-0 overflow-hidden">
-                <DiscussionSidebar editor={editor} className="h-full min-h-0" />
+                <DiscussionSidebar editor={editor} docId={detail.doc.docId} className="h-full min-h-0" />
               </aside>
             </div>
           )}

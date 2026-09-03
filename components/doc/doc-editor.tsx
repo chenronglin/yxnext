@@ -746,6 +746,8 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
                     <aside className="min-h-0 overflow-hidden">
                       <DiscussionSidebar
                         editor={editor}
+                        docId={view.doc.docId}
+                        canReply={user.role === "author" && view.project.lifecycleStatus === "active"}
                         onHide={() => setDiscussionSidebarVisible(false)}
                         className="h-full min-h-0"
                       />

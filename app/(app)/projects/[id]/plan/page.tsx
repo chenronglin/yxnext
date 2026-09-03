@@ -12,6 +12,7 @@ import { useRole } from "@/components/role-provider"
 import { fetchJson } from "@/lib/api"
 import { PROJECT_STAGE_LABEL_KEYS } from "@/types/domain"
 import type { ProjectDetail } from "@/types/project"
+import type { UpdateProjectStagePlansInput } from "@/types/project"
 import { useT } from "@/hooks/use-t"
 
 type ProjectDetailResponse = {
@@ -21,10 +22,11 @@ type ProjectDetailResponse = {
 export default function StagePlanPage({ params }: { params: Promise<{ id: string }> }) {
   const t = useT()
   const { id } = use(params)
-  const { role } = useRole()
+  const { role, user } = useRole()
   const [project, setProject] = useState<ProjectDetail | null>(null)
   const [loading, setLoading] = useState(true)
-  const [message, setMessage] = useState<string | null>(null)
+  const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null)
+  const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -41,7 +43,7 @@ export default function StagePlanPage({ params }: { params: Promise<{ id: string
         }
       } catch (error) {
         if (!cancelled) {
-          setMessage(error instanceof Error ? error.message : "阶段计划读取失败")
+          setMessage({ type: "error", text: error instanceof Error ? error.message : "阶段计划读取失败" })
         }
       } finally {
         if (!cancelled) {
@@ -57,6 +59,28 @@ export default function StagePlanPage({ params }: { params: Promise<{ id: string
     }
   }, [id])
 
+  async function handleSave(input: UpdateProjectStagePlansInput) {
+    setSaving(true)
+    setMessage(null)
+
+    try {
+      const response = await fetchJson<ProjectDetailResponse>(`/api/projects/${id}/stage-plans`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      })
+      setProject(response.project)
+      setMessage({ type: "success", text: "阶段计划已更新" })
+    } catch (error) {
+      setMessage({ type: "error", text: error instanceof Error ? error.message : "阶段计划保存失败" })
+      throw error
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const canEdit = Boolean(project && (role === "admin" || (role === "editor" && user.id === project.editorId)))
+
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
@@ -65,7 +89,17 @@ export default function StagePlanPage({ params }: { params: Promise<{ id: string
         description={project ? `${project.title} 的四阶段计划与进度` : "正在加载阶段计划"}
       />
 
-      {message && <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">{message}</div>}
+      {message && (
+        <div
+          className={
+            message.type === "error"
+              ? "rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600"
+              : "rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"
+          }
+        >
+          {message.text}
+        </div>
+      )}
 
       {loading ? (
         <Card className="px-4 py-10 text-center text-sm text-muted-foreground">正在加载阶段计划...</Card>
@@ -75,7 +109,7 @@ export default function StagePlanPage({ params }: { params: Promise<{ id: string
             <StageProgress project={project} />
           </Card>
 
-          <StagePlanTable project={project} editable={false} />
+          <StagePlanTable project={project} editable={canEdit} saving={saving} onSave={handleSave} />
 
           <Card className="p-5">
             <h2 className="mb-3 text-sm font-semibold text-foreground">阶段说明</h2>
@@ -93,9 +127,9 @@ export default function StagePlanPage({ params }: { params: Promise<{ id: string
                 <span className="font-medium text-foreground">{t(PROJECT_STAGE_LABEL_KEYS.release)}：</span>手动解锁后开始
               </li>
             </ul>
-            {role !== "admin" && (
+            {!canEdit && (
               <p className="mt-4 rounded-md bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
-                当前角色为只读视图，阶段计划参数如需调整，请由管理员在治理页统一维护。
+                当前角色为只读视图，阶段计划只能由项目负责编辑或管理员调整。
               </p>
             )}
             <p className="mt-3 text-xs text-muted-foreground">

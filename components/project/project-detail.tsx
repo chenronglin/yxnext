@@ -24,6 +24,7 @@ import {
   PROJECT_STAGE_TONE,
   type ProjectChapterLocator,
   type ProjectDetail as ProjectDetailView,
+  type UpdateProjectStagePlansInput,
 } from "@/types/project"
 import { Plus, Unlock, CheckCircle2, Download, Lock, FileText, History, BookOpen, ClipboardCheck, Pencil, Trash2 } from "lucide-react"
 
@@ -45,7 +46,7 @@ const CHAPTER_DIALOG_WIDTH_CLASS = "w-[50vw] max-w-[50vw] sm:max-w-[50vw]"
 
 export function ProjectDetail({ id }: { id: string }) {
   const t = useT()
-  const { role } = useRole()
+  const { role, user } = useRole()
   const [project, setProject] = useState<ProjectDetailView | null>(null)
   const [loading, setLoading] = useState(true)
   const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null)
@@ -55,18 +56,21 @@ export function ProjectDetail({ id }: { id: string }) {
   const [newChapter, setNewChapter] = useState({
     title: "",
     chapterNo: "",
+    isChapterZero: false,
   })
   const [deleteTarget, setDeleteTarget] = useState<ProjectChapterLocator | null>(null)
   const [deletingChapterId, setDeletingChapterId] = useState<string | null>(null)
   const [chapterNumberTarget, setChapterNumberTarget] = useState<ProjectChapterLocator | null>(null)
   const [chapterTitleValue, setChapterTitleValue] = useState("")
   const [chapterNumberValue, setChapterNumberValue] = useState("")
+  const [chapterIsZero, setChapterIsZero] = useState(false)
   const [chapterNumberError, setChapterNumberError] = useState<string | null>(null)
   const [updatingChapterNumber, setUpdatingChapterNumber] = useState(false)
   const [projectTitleDialogOpen, setProjectTitleDialogOpen] = useState(false)
   const [projectTitleValue, setProjectTitleValue] = useState("")
   const [projectTitleError, setProjectTitleError] = useState<string | null>(null)
   const [updatingProjectTitle, setUpdatingProjectTitle] = useState(false)
+  const [savingStagePlans, setSavingStagePlans] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -118,6 +122,11 @@ export function ProjectDetail({ id }: { id: string }) {
   // 项目名称属于编辑治理信息：当前项目编辑和管理员可修改，作者只能查看；完成或归档不影响改名权限。
   const canRenameProject = role === "editor" || role === "admin"
   const canExportProject = role === "editor" || role === "admin"
+  const canEditStagePlans = Boolean(
+    project &&
+      !readonly &&
+      (role === "admin" || (role === "editor" && user.id === project.editorId)),
+  )
   const canExportRelease = Boolean(canExportProject && project?.docDirectory.releaseDocId)
   const hasActionItems = canUnlockRelease || canComplete || canExportProject || canExportRelease
 
@@ -176,6 +185,33 @@ export function ProjectDetail({ id }: { id: string }) {
       })
     } finally {
       setWorkingAction(null)
+    }
+  }
+
+  async function handleSaveStagePlans(input: UpdateProjectStagePlansInput) {
+    if (!project || savingStagePlans) return
+
+    setSavingStagePlans(true)
+    setMessage(null)
+
+    try {
+      const response = await fetchJson<ProjectDetailResponse>(`/api/projects/${project.id}/stage-plans`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      })
+
+      setProject(response.project)
+      setMessage({ type: "success", text: "阶段计划已更新" })
+    } catch (error) {
+      setMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "阶段计划保存失败",
+      })
+      // 继续抛出错误，让计划表保持编辑状态，便于用户修正后再次提交。
+      throw error
+    } finally {
+      setSavingStagePlans(false)
     }
   }
 
@@ -250,7 +286,18 @@ export function ProjectDetail({ id }: { id: string }) {
     setNewChapter({
       title: "",
       chapterNo: "",
+      isChapterZero: false,
     })
+  }
+
+  function setNewChapterZero(checked: boolean) {
+    setNewChapter((current) => ({
+      ...current,
+      isChapterZero: checked,
+      // 第 0 章不再要求用户绕过 number 控件的 min=1 限制手工输入 0。
+      chapterNo: checked ? "0" : "",
+      title: checked ? "作品介绍" : current.title === "作品介绍" ? "" : current.title,
+    }))
   }
 
   function openChapterDialog() {
@@ -265,8 +312,8 @@ export function ProjectDetail({ id }: { id: string }) {
     }
 
     const title = newChapter.title.trim()
-    const chapterNoText = newChapter.chapterNo.trim()
-    const parsedChapterNo = chapterNoText ? Number(chapterNoText) : null
+    const chapterNoText = newChapter.isChapterZero ? "0" : newChapter.chapterNo.trim()
+    const parsedChapterNo = Number(chapterNoText)
 
     if (!title) {
       setMessage({
@@ -284,10 +331,10 @@ export function ProjectDetail({ id }: { id: string }) {
       return
     }
 
-    if (parsedChapterNo !== null && (!Number.isInteger(parsedChapterNo) || parsedChapterNo <= 0)) {
+    if (!Number.isInteger(parsedChapterNo) || (newChapter.isChapterZero ? parsedChapterNo !== 0 : parsedChapterNo < 1)) {
       setMessage({
         type: "error",
-        text: "章节号必须是正整数",
+        text: "普通章节号必须是大于等于 1 的整数",
       })
       return
     }
@@ -358,6 +405,26 @@ export function ProjectDetail({ id }: { id: string }) {
     setChapterNumberTarget(chapter)
     setChapterTitleValue(chapter.title)
     setChapterNumberValue(chapter.chapterNo?.toString() ?? "")
+    setChapterIsZero(chapter.chapterNo === 0)
+    setChapterNumberError(null)
+  }
+
+  function setEditedChapterZero(checked: boolean) {
+    setChapterIsZero(checked)
+    setChapterNumberValue(
+      checked
+        ? "0"
+        : chapterNumberTarget?.chapterNo !== undefined &&
+            chapterNumberTarget.chapterNo !== null &&
+            chapterNumberTarget.chapterNo > 0
+          ? chapterNumberTarget.chapterNo.toString()
+          : "",
+    )
+
+    if (checked) {
+      setChapterTitleValue("作品介绍")
+    }
+
     setChapterNumberError(null)
   }
 
@@ -366,7 +433,7 @@ export function ProjectDetail({ id }: { id: string }) {
       return
     }
 
-    const chapterNoText = chapterNumberValue.trim()
+    const chapterNoText = chapterIsZero ? "0" : chapterNumberValue.trim()
     const chapterTitle = chapterTitleValue.trim()
     const parsedChapterNo = Number(chapterNoText)
 
@@ -375,8 +442,8 @@ export function ProjectDetail({ id }: { id: string }) {
       return
     }
 
-    if (!chapterNoText || !Number.isInteger(parsedChapterNo) || parsedChapterNo <= 0) {
-      setChapterNumberError("章节号必须是正整数")
+    if (!chapterNoText || !Number.isInteger(parsedChapterNo) || (chapterIsZero ? parsedChapterNo !== 0 : parsedChapterNo < 1)) {
+      setChapterNumberError("普通章节号必须是大于等于 1 的整数")
       return
     }
 
@@ -402,6 +469,7 @@ export function ProjectDetail({ id }: { id: string }) {
       setChapterNumberTarget(null)
       setChapterTitleValue("")
       setChapterNumberValue("")
+      setChapterIsZero(false)
       setMessage({
         type: "success",
         text: `章节信息已更新为第 ${parsedChapterNo} 章`,
@@ -573,7 +641,12 @@ export function ProjectDetail({ id }: { id: string }) {
         onDeleteChapter={setDeleteTarget}
       />
 
-      <StagePlanTable project={project} editable={false} />
+      <StagePlanTable
+        project={project}
+        editable={canEditStagePlans}
+        saving={savingStagePlans}
+        onSave={handleSaveStagePlans}
+      />
 
       <Dialog
         open={projectTitleDialogOpen}
@@ -650,6 +723,16 @@ export function ProjectDetail({ id }: { id: string }) {
             <DialogTitle>新增章节</DialogTitle>
             <DialogDescription>填写章节号和章节标题，创建后会立即显示在正文章节列表中。</DialogDescription>
           </DialogHeader>
+          <label className="flex cursor-pointer items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-foreground">
+            <input
+              type="checkbox"
+              className="size-4 accent-primary"
+              checked={newChapter.isChapterZero}
+              disabled={creatingChapter}
+              onChange={(event) => setNewChapterZero(event.target.checked)}
+            />
+            设为第 0 章（默认标题为“作品介绍”）
+          </label>
           <div className="grid gap-3 md:grid-cols-[140px_minmax(0,1fr)]">
             <div className="grid gap-1.5">
               <label className="text-xs font-medium text-muted-foreground" htmlFor="chapter-no">
@@ -664,7 +747,7 @@ export function ProjectDetail({ id }: { id: string }) {
                 value={newChapter.chapterNo}
                 onChange={(event) => setNewChapter((current) => ({ ...current, chapterNo: event.target.value }))}
                 placeholder="例如：4"
-                disabled={creatingChapter}
+                disabled={creatingChapter || newChapter.isChapterZero}
               />
             </div>
             <div className="grid gap-1.5">
@@ -705,6 +788,7 @@ export function ProjectDetail({ id }: { id: string }) {
             setChapterNumberTarget(null)
             setChapterTitleValue("")
             setChapterNumberValue("")
+            setChapterIsZero(false)
             setChapterNumberError(null)
           }
         }}
@@ -716,6 +800,16 @@ export function ProjectDetail({ id }: { id: string }) {
               可同时纠正章节号和标题中的序号文字。全文质检将按修改后的章节号排序生成。
             </DialogDescription>
           </DialogHeader>
+          <label className="flex cursor-pointer items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-foreground">
+            <input
+              type="checkbox"
+              className="size-4 accent-primary"
+              checked={chapterIsZero}
+              disabled={updatingChapterNumber}
+              onChange={(event) => setEditedChapterZero(event.target.checked)}
+            />
+            设为第 0 章（默认标题为“作品介绍”）
+          </label>
           <div className="grid gap-3 md:grid-cols-[140px_minmax(0,1fr)]">
             <div className="grid gap-1.5">
               <label className="text-xs font-medium text-muted-foreground" htmlFor="edit-chapter-no">
@@ -732,7 +826,7 @@ export function ProjectDetail({ id }: { id: string }) {
                   setChapterNumberValue(event.target.value)
                   setChapterNumberError(null)
                 }}
-                disabled={updatingChapterNumber}
+                disabled={updatingChapterNumber || chapterIsZero}
                 autoFocus
               />
             </div>
@@ -761,6 +855,8 @@ export function ProjectDetail({ id }: { id: string }) {
               onClick={() => {
                 setChapterNumberTarget(null)
                 setChapterTitleValue("")
+                setChapterNumberValue("")
+                setChapterIsZero(false)
               }}
             >
               取消
@@ -976,7 +1072,7 @@ function ChapterEntry({
   onDeleteChapter: (chapter: ProjectChapterLocator) => void
 }) {
   const t = useT()
-  const chapterLabel = chapter.chapterNo ? `第 ${chapter.chapterNo} 章` : `排序 ${chapter.sortOrder}`
+  const chapterLabel = chapter.chapterNo !== null ? `第 ${chapter.chapterNo} 章` : `排序 ${chapter.sortOrder}`
   // “未提交”在 Doc 状态上对应草稿；退回章节已经经历过提交，不在项目详情列表里提供删除入口。
   const canDeleteChapter = canManageChapters && chapter.status === "draft"
 

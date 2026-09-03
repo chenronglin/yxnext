@@ -21,6 +21,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { fetchJson } from "@/lib/api"
 import { formatDateOnly } from "@/lib/utils"
 import type { StagePlanDefaultItem, SysParam } from "@/types/admin"
+import { WorkdayCalendarParams } from "@/components/admin/workday-calendar-params"
 
 type MainTypeResponse = {
   items: SysParam[]
@@ -254,6 +255,7 @@ export default function ParamsPage() {
         <TabsList>
           <TabsTrigger value="main-type">SI 主类型</TabsTrigger>
           <TabsTrigger value="stage-plan">阶段计划默认值</TabsTrigger>
+          <TabsTrigger value="workday">工作日日历</TabsTrigger>
           <TabsTrigger value="other">其他扩展参数</TabsTrigger>
         </TabsList>
 
@@ -414,6 +416,10 @@ export default function ParamsPage() {
               </table>
             </div>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="workday" className="mt-4">
+          <WorkdayCalendarParams />
         </TabsContent>
 
         <TabsContent value="other" className="mt-4">

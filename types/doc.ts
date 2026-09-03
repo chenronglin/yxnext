@@ -177,6 +177,21 @@ export interface DocRevisionListResponse {
   revisions: DocRevisionListItem[]
 }
 
+export interface DocCommentReplyItem {
+  id: string
+  commentId: string
+  content: string
+  authorId: string
+  authorName: string
+  createdAt: string
+}
+
+export interface DocCommentRepliesResponse {
+  commentId: string
+  commentActive: boolean
+  replies: DocCommentReplyItem[]
+}
+
 // 历史详情接口在列表项基础上补齐完整内容快照。
 export interface DocRevisionDetail extends DocContentSnapshot {
   revisionId: string

@@ -22,7 +22,12 @@ import { Textarea } from "@/components/ui/textarea"
 import { fetchJson } from "@/lib/api"
 import { cn, formatDateOnly } from "@/lib/utils"
 import { SI_STATUS_LABEL_KEYS } from "@/types/domain"
-import { DEFAULT_MAIN_TYPES, SI_STATUS_TONE, type BoundAuthor, type SiItem } from "@/types/si"
+import {
+  DEFAULT_MAIN_TYPES,
+  SI_STATUS_TONE,
+  type BoundAuthor,
+  type SiItem,
+} from "@/types/si"
 import { useT } from "@/hooks/use-t"
 import { Check, ChevronLeft, Save, SendHorizonal, X } from "lucide-react"
 
@@ -56,6 +61,10 @@ export function SiForm({ mode, initial }: SiFormProps) {
   const [savedSi, setSavedSi] = useState<SiItem | undefined>(initial)
   const [title, setTitle] = useState(initial?.title ?? "")
   const [mainType, setMainType] = useState(initial?.mainType ?? "")
+  const [siType, setSiType] = useState(initial?.siType ?? "")
+  const [creativeDifficulty, setCreativeDifficulty] = useState(initial?.creativeDifficulty ?? "")
+  const [referenceBookTitle, setReferenceBookTitle] = useState(initial?.referenceBookTitle ?? "")
+  const [referenceBookUrl, setReferenceBookUrl] = useState(initial?.referenceBookUrl ?? "")
   const [tags, setTags] = useState<string[]>(() => {
     if (!initial?.trope) return []
     return initial.trope
@@ -210,6 +219,12 @@ export function SiForm({ mode, initial }: SiFormProps) {
       const payload = {
         title,
         mainType,
+        // SI 类型和创作难度由编辑手工填写；服务端按名称匹配或创建内部记录，
+        // 页面不再依赖管理员预置字典，也不会因配置接口失败而阻断保存。
+        siType,
+        creativeDifficulty,
+        referenceBookTitle,
+        referenceBookUrl,
         trope: tags,
         remark,
         freshTwist,
@@ -399,6 +414,54 @@ export function SiForm({ mode, initial }: SiFormProps) {
                     })}
                   </div>
                 )}
+              </div>
+            </div>
+
+            <div className="grid gap-5 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="si-type">SI 类型</Label>
+                <Input
+                  id="si-type"
+                  maxLength={100}
+                  value={siType}
+                  placeholder="请输入 SI 类型"
+                  onChange={(event) => setSiType(event.target.value)}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="creative-difficulty">创作难度</Label>
+                <Input
+                  id="creative-difficulty"
+                  maxLength={100}
+                  value={creativeDifficulty}
+                  placeholder="请输入创作难度"
+                  onChange={(event) => setCreativeDifficulty(event.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="grid gap-5 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="reference-book-title">参考书籍标题</Label>
+                <Input
+                  id="reference-book-title"
+                  maxLength={255}
+                  value={referenceBookTitle}
+                  placeholder="例如：参考作品名称"
+                  onChange={(event) => setReferenceBookTitle(event.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="reference-book-url">参考书籍链接</Label>
+                <Input
+                  id="reference-book-url"
+                  type="url"
+                  maxLength={1024}
+                  value={referenceBookUrl}
+                  placeholder="https://example.com/book"
+                  onChange={(event) => setReferenceBookUrl(event.target.value)}
+                />
               </div>
             </div>
 

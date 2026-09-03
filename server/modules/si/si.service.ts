@@ -13,8 +13,10 @@ import {
 } from "@/server/shared/invariant-keys"
 import { makePaginationMeta, parsePagination } from "@/server/shared/pagination"
 import { createNovelDocV1 } from "@/lib/novel-doc"
+import { addWorkdays, endOfDateOnly, normalizeDateOnly } from "@/lib/workday-calendar"
+import { loadWorkdayExceptionMap } from "@/server/shared/workday-calendar"
 import type { ApiCurrentUser } from "@/server/shared/current-user"
-import type { PrereleaseRecord, PrereleaseStatus, SiItem, SiVersion } from "@/types/si"
+import type { PrereleaseRecord, PrereleaseStatus, SiItem, SiMetadataCategory, SiVersion } from "@/types/si"
 
 type StageCodeValue = "synopsis" | "outline" | "chapter" | "release"
 
@@ -22,6 +24,12 @@ type SiInput = {
   title?: string
   mainTypeId?: string | number | bigint | null
   mainType?: string | null
+  siType?: string | null
+  siTypeId?: string | number | bigint | null
+  creativeDifficulty?: string | null
+  creativeDifficultyId?: string | number | bigint | null
+  referenceBookTitle?: string | null
+  referenceBookUrl?: string | null
   trope?: string | string[] | null
   fitAuthorNote?: string | null
   remark?: string | null
@@ -100,8 +108,29 @@ export async function listActiveSiMainTypes(actor: ApiCurrentUser) {
   }
 }
 
+export async function listActiveSiMetadataOptions(actor: ApiCurrentUser) {
+  void actor
+
+  const items = await prisma.siMetadataOption.findMany({
+    where: { isActive: true },
+    orderBy: [{ category: "asc" }, { sortOrder: "asc" }, { createdAt: "asc" }],
+  })
+
+  return {
+    items: items.map((item) => ({
+      id: item.optionId.toString(),
+      category: item.category,
+      name: item.name,
+      value: item.code,
+      order: item.sortOrder,
+    })),
+  }
+}
+
 const storyIdeaInclude = {
   mainType: true,
+  siType: true,
+  creativeDifficulty: true,
   creatorEditor: {
     select: {
       userId: true,
@@ -170,6 +199,8 @@ const preissueInclude = {
   storyIdea: {
     include: {
       mainType: true,
+      siType: true,
+      creativeDifficulty: true,
     },
   },
   editor: {
@@ -231,6 +262,12 @@ function hashJson(value: Prisma.InputJsonValue) {
 function makeMainTypeCode(name: string) {
   // 主类型名称来自界面下拉文案；当数据库未预置时，用稳定 hash 生成不会冲突的内部 code。
   return `ui-${createHash("sha1").update(name).digest("hex").slice(0, 16)}`
+}
+
+function makeMetadataOptionCode(category: SiMetadataCategory, name: string) {
+  // 手工输入值仍复用现有关系表保存。内部编码只用于稳定关联和并发去重，
+  // 不再作为需要管理员维护或向编辑展示的业务字典值。
+  return `manual-${createHash("sha1").update(`${category}:${name}`).digest("hex")}`
 }
 
 function parseBigIntId(value: string | number | bigint, label: string) {
@@ -334,16 +371,14 @@ function serializeSiVersion(
     current: version.versionNo === currentVersionNo,
     title: snapshotString(version.snapshotJson, "title"),
     mainType: snapshotString(version.snapshotJson, "mainType"),
+    siType: snapshotString(version.snapshotJson, "siType"),
+    creativeDifficulty: snapshotString(version.snapshotJson, "creativeDifficulty"),
+    referenceBookTitle: snapshotString(version.snapshotJson, "referenceBookTitle"),
+    referenceBookUrl: snapshotString(version.snapshotJson, "referenceBookUrl"),
     trope: snapshotString(version.snapshotJson, "trope"),
     freshTwist: snapshotString(version.snapshotJson, "freshTwist"),
     synopsis: snapshotString(version.snapshotJson, "coreSynopsis"),
   }
-}
-
-function addDays(base: Date, days: number) {
-  const next = new Date(base)
-  next.setDate(next.getDate() + days)
-  return next
 }
 
 function ensureCanManageSi(actor: ApiCurrentUser, si: { creatorEditorId: bigint }) {
@@ -378,6 +413,18 @@ function serializePreissue(record: PreissueRecord): PrereleaseRecord {
     siTitle: record.storyIdea.title,
     title: snapshotString(snapshot, "title", record.storyIdea.title),
     mainType: snapshotString(snapshot, "mainType", record.storyIdea.mainType?.name ?? ""),
+    siType: snapshotString(snapshot, "siType", record.storyIdea.siType?.name ?? ""),
+    creativeDifficulty: snapshotString(
+      snapshot,
+      "creativeDifficulty",
+      record.storyIdea.creativeDifficulty?.name ?? "",
+    ),
+    referenceBookTitle: snapshotString(
+      snapshot,
+      "referenceBookTitle",
+      record.storyIdea.referenceBookTitle ?? "",
+    ),
+    referenceBookUrl: snapshotString(snapshot, "referenceBookUrl", record.storyIdea.referenceBookUrl ?? ""),
     trope: snapshotString(snapshot, "trope", record.storyIdea.trope ?? ""),
     remark: snapshotString(snapshot, "remarks", record.storyIdea.remarks ?? ""),
     freshTwist: snapshotString(snapshot, "freshTwist", record.storyIdea.freshTwist ?? ""),
@@ -413,6 +460,12 @@ function serializeStoryIdea(record: StoryIdeaRecord): SiItem {
     title: record.title,
     mainTypeId: record.mainTypeId?.toString(),
     mainType: record.mainType?.name ?? "",
+    siTypeId: record.siTypeId?.toString(),
+    siType: record.siType?.name ?? "",
+    creativeDifficultyId: record.creativeDifficultyId?.toString(),
+    creativeDifficulty: record.creativeDifficulty?.name ?? "",
+    referenceBookTitle: record.referenceBookTitle ?? "",
+    referenceBookUrl: record.referenceBookUrl ?? "",
     trope: record.trope ?? "",
     authors: record.fitAuthors.map((item) => userName(item.author)),
     authorIds: record.fitAuthors.map((item) => item.authorId.toString()),
@@ -439,6 +492,14 @@ function makeSnapshot(input: {
   title: string
   mainTypeId: bigint | null
   mainTypeName: string | null
+  siTypeId?: bigint | null
+  siTypeCode?: string | null
+  siTypeName?: string | null
+  creativeDifficultyId?: bigint | null
+  creativeDifficultyCode?: string | null
+  creativeDifficultyName?: string | null
+  referenceBookTitle?: string | null
+  referenceBookUrl?: string | null
   trope: string | null
   fitAuthorIds: bigint[]
   fitAuthorNote: string | null
@@ -451,6 +512,14 @@ function makeSnapshot(input: {
     title: input.title,
     mainTypeId: input.mainTypeId?.toString() ?? null,
     mainType: input.mainTypeName,
+    siTypeId: input.siTypeId?.toString() ?? null,
+    siTypeCode: input.siTypeCode ?? null,
+    siType: input.siTypeName ?? null,
+    creativeDifficultyId: input.creativeDifficultyId?.toString() ?? null,
+    creativeDifficultyCode: input.creativeDifficultyCode ?? null,
+    creativeDifficulty: input.creativeDifficultyName ?? null,
+    referenceBookTitle: input.referenceBookTitle ?? null,
+    referenceBookUrl: input.referenceBookUrl ?? null,
     trope: input.trope,
     fitAuthorIds: input.fitAuthorIds.map((id) => id.toString()),
     fitAuthorNote: input.fitAuthorNote,
@@ -458,6 +527,26 @@ function makeSnapshot(input: {
     freshTwist: input.freshTwist,
     coreSynopsis: input.coreSynopsis,
   } satisfies Prisma.InputJsonObject
+}
+
+function extendedSnapshotFields(record: {
+  siTypeId: bigint | null
+  siType: { code: string; name: string } | null
+  creativeDifficultyId: bigint | null
+  creativeDifficulty: { code: string; name: string } | null
+  referenceBookTitle: string | null
+  referenceBookUrl: string | null
+}) {
+  return {
+    siTypeId: record.siTypeId,
+    siTypeCode: record.siType?.code,
+    siTypeName: record.siType?.name,
+    creativeDifficultyId: record.creativeDifficultyId,
+    creativeDifficultyCode: record.creativeDifficulty?.code,
+    creativeDifficultyName: record.creativeDifficulty?.name,
+    referenceBookTitle: record.referenceBookTitle,
+    referenceBookUrl: record.referenceBookUrl,
+  }
 }
 
 function readSnapshotString(snapshot: Prisma.JsonValue, key: string, fallback: string) {
@@ -489,6 +578,16 @@ function readSnapshotBigIntArray(snapshot: Prisma.JsonValue, key: string) {
       }
     })
     .filter((item): item is bigint => item !== null)
+}
+
+function readSnapshotBigInt(snapshot: Prisma.JsonValue, key: string) {
+  const value = snapshotValue(snapshot, key)
+  return typeof value === "string" && /^\d+$/.test(value) ? parseBigIntId(value, `${key} ID`) : null
+}
+
+function readSnapshotNullableString(snapshot: Prisma.JsonValue, key: string) {
+  const value = snapshotValue(snapshot, key)
+  return typeof value === "string" ? trimToNull(value) : null
 }
 
 function makeSynopsisDocContent(input: {
@@ -572,6 +671,144 @@ async function resolveMainType(
       isActive: true,
     },
   })
+}
+
+async function resolveMetadataOption(
+  tx: TxClient,
+  category: SiMetadataCategory,
+  value: string | number | bigint | null | undefined,
+  fallbackId: bigint | null = null,
+  allowInactive = false,
+) {
+  if (value === undefined) {
+    if (!fallbackId) return null
+    return tx.siMetadataOption.findFirst({ where: { optionId: fallbackId, category } })
+  }
+
+  if (value === null || value === "") {
+    return null
+  }
+
+  const optionId = parseBigIntId(value, "SI 配置项 ID")
+  const option = await tx.siMetadataOption.findFirst({
+    where: { optionId, category },
+  })
+
+  if (!option) {
+    throw new ApiError({
+      status: 400,
+      code: "SI_METADATA_OPTION_NOT_FOUND",
+      message: category === "si_type" ? "SI 类型不存在" : "创作难度不存在",
+    })
+  }
+
+  // 停用配置只允许已有 SI 继续保留，或版本回滚按历史快照恢复；
+  // 新建 SI 和改选其它配置时不能通过伪造请求继续使用停用项。
+  if (!option.isActive && !allowInactive && option.optionId !== fallbackId) {
+    throw new ApiError({
+      status: 409,
+      code: "SI_METADATA_OPTION_INACTIVE",
+      message: category === "si_type" ? "所选 SI 类型已停用" : "所选创作难度已停用",
+    })
+  }
+
+  return option
+}
+
+async function resolveMetadataText(
+  tx: TxClient,
+  category: SiMetadataCategory,
+  value: string | null | undefined,
+) {
+  const name = trimToNull(value)
+
+  if (!name) {
+    return null
+  }
+
+  if (name.length > 100) {
+    throw new ApiError({
+      status: 400,
+      code: "SI_METADATA_TEXT_TOO_LONG",
+      message: category === "si_type" ? "SI 类型不能超过 100 个字符" : "创作难度不能超过 100 个字符",
+    })
+  }
+
+  const existing = await tx.siMetadataOption.findFirst({
+    where: { category, name },
+  })
+
+  if (existing) {
+    return existing
+  }
+
+  const code = makeMetadataOptionCode(category, name)
+
+  // 同名内容在并发保存时通过内部编码唯一约束收敛到同一条记录，
+  // 避免两个请求先后 findFirst 为空后写出重复数据。
+  return tx.siMetadataOption.upsert({
+    where: {
+      category_code: { category, code },
+    },
+    update: { name },
+    create: {
+      category,
+      code,
+      name,
+      isActive: true,
+    },
+  })
+}
+
+async function resolveMetadataInput(
+  tx: TxClient,
+  category: SiMetadataCategory,
+  textValue: string | null | undefined,
+  idValue: string | number | bigint | null | undefined,
+  fallbackId: bigint | null = null,
+) {
+  // 新版页面提交手工文本；旧客户端和历史回滚仍可沿用 ID，保证滚动升级期间兼容。
+  if (textValue !== undefined) {
+    return resolveMetadataText(tx, category, textValue)
+  }
+
+  return resolveMetadataOption(tx, category, idValue, fallbackId)
+}
+
+function normalizeReferenceBook(input: { title?: string | null; url?: string | null }) {
+  const title = trimToNull(input.title)
+  const url = trimToNull(input.url)
+
+  if (title && title.length > 255) {
+    throw new ApiError({
+      status: 400,
+      code: "REFERENCE_BOOK_TITLE_TOO_LONG",
+      message: "参考书籍标题不能超过 255 个字符",
+    })
+  }
+
+  if (url) {
+    if (url.length > 1024) {
+      throw new ApiError({
+        status: 400,
+        code: "REFERENCE_BOOK_URL_TOO_LONG",
+        message: "参考书籍链接不能超过 1024 个字符",
+      })
+    }
+
+    try {
+      const parsed = new URL(url)
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("unsupported")
+    } catch {
+      throw new ApiError({
+        status: 400,
+        code: "REFERENCE_BOOK_URL_INVALID",
+        message: "参考书籍链接只支持 http 或 https 地址",
+      })
+    }
+  }
+
+  return { title, url }
 }
 
 async function validateFitAuthors(tx: TxClient, authorIds: bigint[]) {
@@ -883,6 +1120,10 @@ export async function createStoryIdea(actor: ApiCurrentUser, input: SiInput) {
 
   const title = trimToNull(input.title)
   const coreSynopsis = trimToNull(input.coreSynopsis ?? input.synopsis ?? null)
+  const referenceBook = normalizeReferenceBook({
+    title: input.referenceBookTitle,
+    url: input.referenceBookUrl,
+  })
 
   if (!title) {
     throw new ApiError({
@@ -912,12 +1153,25 @@ export async function createStoryIdea(actor: ApiCurrentUser, input: SiInput) {
     }
 
     const fitAuthorIds = uniqueBigIntIds(input.fitAuthorIds ?? input.authorIds ?? [], "作者 ID")
-    await validateFitAuthors(tx, fitAuthorIds)
+    const [siType, creativeDifficulty] = await Promise.all([
+      resolveMetadataInput(tx, "si_type", input.siType, input.siTypeId),
+      resolveMetadataInput(
+        tx,
+        "creative_difficulty",
+        input.creativeDifficulty,
+        input.creativeDifficultyId,
+      ),
+      validateFitAuthors(tx, fitAuthorIds),
+    ])
 
     const storyIdea = await tx.storyIdea.create({
       data: {
         title,
         mainTypeId: mainType.mainTypeId,
+        siTypeId: siType?.optionId ?? null,
+        creativeDifficultyId: creativeDifficulty?.optionId ?? null,
+        referenceBookTitle: referenceBook.title,
+        referenceBookUrl: referenceBook.url,
         trope: normalizeTrope(input.trope),
         fitAuthorNote: trimToNull(input.fitAuthorNote ?? null),
         remarks: trimToNull(input.remarks ?? input.remark ?? null),
@@ -934,6 +1188,14 @@ export async function createStoryIdea(actor: ApiCurrentUser, input: SiInput) {
       title: storyIdea.title,
       mainTypeId: storyIdea.mainTypeId,
       mainTypeName: mainType.name,
+      siTypeId: storyIdea.siTypeId,
+      siTypeCode: siType?.code,
+      siTypeName: siType?.name,
+      creativeDifficultyId: storyIdea.creativeDifficultyId,
+      creativeDifficultyCode: creativeDifficulty?.code,
+      creativeDifficultyName: creativeDifficulty?.name,
+      referenceBookTitle: storyIdea.referenceBookTitle,
+      referenceBookUrl: storyIdea.referenceBookUrl,
       trope: storyIdea.trope,
       fitAuthorIds,
       fitAuthorNote: storyIdea.fitAuthorNote,
@@ -988,6 +1250,8 @@ export async function updateStoryIdea(actor: ApiCurrentUser, siIdValue: string, 
       },
       include: {
         mainType: true,
+        siType: true,
+        creativeDifficulty: true,
         fitAuthors: true,
         preissues: {
           where: {
@@ -1059,13 +1323,28 @@ export async function updateStoryIdea(actor: ApiCurrentUser, siIdValue: string, 
         ? uniqueBigIntIds(input.fitAuthorIds ?? input.authorIds ?? [], "作者 ID")
         : existing.fitAuthors.map((item) => item.authorId)
 
-    await validateFitAuthors(tx, fitAuthorIds)
+    const [siType, creativeDifficulty] = await Promise.all([
+      resolveMetadataInput(tx, "si_type", input.siType, input.siTypeId, existing.siTypeId),
+      resolveMetadataInput(
+        tx,
+        "creative_difficulty",
+        input.creativeDifficulty,
+        input.creativeDifficultyId,
+        existing.creativeDifficultyId,
+      ),
+      validateFitAuthors(tx, fitAuthorIds),
+    ])
+    const referenceBook = normalizeReferenceBook({
+      title: input.referenceBookTitle === undefined ? existing.referenceBookTitle : input.referenceBookTitle,
+      url: input.referenceBookUrl === undefined ? existing.referenceBookUrl : input.referenceBookUrl,
+    })
 
     const beforeSnapshot = makeSnapshot({
       siId: existing.siId,
       title: existing.title,
       mainTypeId: existing.mainTypeId,
       mainTypeName: existing.mainType?.name ?? null,
+      ...extendedSnapshotFields(existing),
       trope: existing.trope,
       fitAuthorIds: existing.fitAuthors.map((item) => item.authorId),
       fitAuthorNote: existing.fitAuthorNote,
@@ -1081,6 +1360,10 @@ export async function updateStoryIdea(actor: ApiCurrentUser, siIdValue: string, 
       data: {
         title: nextTitle,
         mainTypeId: mainType.mainTypeId,
+        siTypeId: siType?.optionId ?? null,
+        creativeDifficultyId: creativeDifficulty?.optionId ?? null,
+        referenceBookTitle: referenceBook.title,
+        referenceBookUrl: referenceBook.url,
         trope: input.trope === undefined ? existing.trope : normalizeTrope(input.trope),
         fitAuthorNote:
           input.fitAuthorNote === undefined ? existing.fitAuthorNote : trimToNull(input.fitAuthorNote),
@@ -1101,6 +1384,14 @@ export async function updateStoryIdea(actor: ApiCurrentUser, siIdValue: string, 
       title: updated.title,
       mainTypeId: updated.mainTypeId,
       mainTypeName: mainType.name,
+      siTypeId: updated.siTypeId,
+      siTypeCode: siType?.code,
+      siTypeName: siType?.name,
+      creativeDifficultyId: updated.creativeDifficultyId,
+      creativeDifficultyCode: creativeDifficulty?.code,
+      creativeDifficultyName: creativeDifficulty?.name,
+      referenceBookTitle: updated.referenceBookTitle,
+      referenceBookUrl: updated.referenceBookUrl,
       trope: updated.trope,
       fitAuthorIds,
       fitAuthorNote: updated.fitAuthorNote,
@@ -1178,6 +1469,8 @@ export async function updateStoryIdeaTitle(
       },
       include: {
         mainType: true,
+        siType: true,
+        creativeDifficulty: true,
         fitAuthors: true,
       },
     })
@@ -1218,6 +1511,7 @@ export async function updateStoryIdeaTitle(
       title: existing.title,
       mainTypeId: existing.mainTypeId,
       mainTypeName: existing.mainType?.name ?? null,
+      ...extendedSnapshotFields(existing),
       trope: existing.trope,
       fitAuthorIds: existing.fitAuthors.map((item) => item.authorId),
       fitAuthorNote: existing.fitAuthorNote,
@@ -1230,6 +1524,7 @@ export async function updateStoryIdeaTitle(
       title,
       mainTypeId: existing.mainTypeId,
       mainTypeName: existing.mainType?.name ?? null,
+      ...extendedSnapshotFields(existing),
       trope: existing.trope,
       fitAuthorIds: existing.fitAuthors.map((item) => item.authorId),
       fitAuthorNote: existing.fitAuthorNote,
@@ -1331,6 +1626,8 @@ export async function prepublishStoryIdea(actor: ApiCurrentUser, siIdValue: stri
         },
         include: {
           mainType: true,
+          siType: true,
+          creativeDifficulty: true,
           fitAuthors: true,
         },
       })
@@ -1381,6 +1678,7 @@ export async function prepublishStoryIdea(actor: ApiCurrentUser, siIdValue: stri
         title: si.title,
         mainTypeId: si.mainTypeId,
         mainTypeName: si.mainType?.name ?? null,
+        ...extendedSnapshotFields(si),
         trope: si.trope,
         fitAuthorIds: si.fitAuthors.map((item) => item.authorId),
         fitAuthorNote: si.fitAuthorNote,
@@ -1590,6 +1888,8 @@ export async function convertSiPreissueToProject(
           storyIdea: {
             include: {
               mainType: true,
+              siType: true,
+              creativeDifficulty: true,
             },
           },
         },
@@ -1714,19 +2014,24 @@ export async function convertSiPreissueToProject(
         },
       })
 
-      const defaultPlans = await tx.stagePlanDefault.findMany({
-        where: {
-          stageCode: {
-            in: STAGE_ORDER,
+      const [defaultPlans, workdayExceptions] = await Promise.all([
+        tx.stagePlanDefault.findMany({
+          where: {
+            stageCode: {
+              in: STAGE_ORDER,
+            },
           },
-        },
-      })
+        }),
+        loadWorkdayExceptionMap(tx),
+      ])
       const defaultPlanMap = new Map(defaultPlans.map((item) => [item.stageCode, item.defaultPlanDays]))
+      const initialPlanStart = normalizeDateOnly(now)
 
       await tx.projectStagePlan.createMany({
         data: STAGE_ORDER.map((stageCode) => {
           const planDays = defaultPlanMap.get(stageCode) ?? STAGE_FALLBACK_DAYS[stageCode]
           const isFirstStage = stageCode === "synopsis"
+          const plannedEndAt = isFirstStage ? addWorkdays(initialPlanStart, planDays, workdayExceptions) : null
 
           return {
             projectId: project.projectId,
@@ -1734,9 +2039,11 @@ export async function convertSiPreissueToProject(
             gateStatus: isFirstStage ? "unlocked" : "locked",
             timelineStatus: isFirstStage ? "in_progress" : "not_started",
             planDays,
+            plannedStartAt: isFirstStage ? initialPlanStart : null,
+            plannedEndAt,
             unlockedAt: isFirstStage ? now : null,
             startedAt: isFirstStage ? now : null,
-            dueAt: isFirstStage ? addDays(now, planDays) : null,
+            dueAt: plannedEndAt ? endOfDateOnly(plannedEndAt) : null,
           }
         }),
       })
@@ -1933,6 +2240,8 @@ export async function rollbackStoryIdeaVersion(actor: ApiCurrentUser, siIdValue:
       },
       include: {
         mainType: true,
+        siType: true,
+        creativeDifficulty: true,
         fitAuthors: true,
         preissues: {
           where: {
@@ -2030,13 +2339,28 @@ export async function rollbackStoryIdeaVersion(actor: ApiCurrentUser, siIdValue:
     }
 
     const fitAuthorIds = readSnapshotBigIntArray(snapshot, "fitAuthorIds")
-    await validateFitAuthors(tx, fitAuthorIds)
+    const [siType, creativeDifficulty] = await Promise.all([
+      resolveMetadataOption(tx, "si_type", readSnapshotBigInt(snapshot, "siTypeId"), null, true),
+      resolveMetadataOption(
+        tx,
+        "creative_difficulty",
+        readSnapshotBigInt(snapshot, "creativeDifficultyId"),
+        null,
+        true,
+      ),
+      validateFitAuthors(tx, fitAuthorIds),
+    ])
+    const referenceBook = normalizeReferenceBook({
+      title: readSnapshotNullableString(snapshot, "referenceBookTitle"),
+      url: readSnapshotNullableString(snapshot, "referenceBookUrl"),
+    })
 
     const beforeSnapshot = makeSnapshot({
       siId: existing.siId,
       title: existing.title,
       mainTypeId: existing.mainTypeId,
       mainTypeName: existing.mainType?.name ?? null,
+      ...extendedSnapshotFields(existing),
       trope: existing.trope,
       fitAuthorIds: existing.fitAuthors.map((item) => item.authorId),
       fitAuthorNote: existing.fitAuthorNote,
@@ -2052,6 +2376,10 @@ export async function rollbackStoryIdeaVersion(actor: ApiCurrentUser, siIdValue:
       data: {
         title,
         mainTypeId: mainType.mainTypeId,
+        siTypeId: siType?.optionId ?? null,
+        creativeDifficultyId: creativeDifficulty?.optionId ?? null,
+        referenceBookTitle: referenceBook.title,
+        referenceBookUrl: referenceBook.url,
         trope,
         fitAuthorNote,
         remarks,
@@ -2067,6 +2395,14 @@ export async function rollbackStoryIdeaVersion(actor: ApiCurrentUser, siIdValue:
       title: updated.title,
       mainTypeId: updated.mainTypeId,
       mainTypeName: mainType.name,
+      siTypeId: updated.siTypeId,
+      siTypeCode: siType?.code,
+      siTypeName: siType?.name,
+      creativeDifficultyId: updated.creativeDifficultyId,
+      creativeDifficultyCode: creativeDifficulty?.code,
+      creativeDifficultyName: creativeDifficulty?.name,
+      referenceBookTitle: updated.referenceBookTitle,
+      referenceBookUrl: updated.referenceBookUrl,
       trope: updated.trope,
       fitAuthorIds,
       fitAuthorNote: updated.fitAuthorNote,
@@ -2127,6 +2463,8 @@ export async function archiveStoryIdea(actor: ApiCurrentUser, siIdValue: string)
       },
       include: {
         mainType: true,
+        siType: true,
+        creativeDifficulty: true,
         fitAuthors: true,
         preissues: {
           where: {
@@ -2171,6 +2509,7 @@ export async function archiveStoryIdea(actor: ApiCurrentUser, siIdValue: string)
       title: existing.title,
       mainTypeId: existing.mainTypeId,
       mainTypeName: existing.mainType?.name ?? null,
+      ...extendedSnapshotFields(existing),
       trope: existing.trope,
       fitAuthorIds: existing.fitAuthors.map((item) => item.authorId),
       fitAuthorNote: existing.fitAuthorNote,
@@ -2220,6 +2559,8 @@ export async function deleteStoryIdea(actor: ApiCurrentUser, siIdValue: string) 
       },
       include: {
         mainType: true,
+        siType: true,
+        creativeDifficulty: true,
         fitAuthors: true,
         preissues: {
           where: {
@@ -2273,6 +2614,7 @@ export async function deleteStoryIdea(actor: ApiCurrentUser, siIdValue: string) 
       title: existing.title,
       mainTypeId: existing.mainTypeId,
       mainTypeName: existing.mainType?.name ?? null,
+      ...extendedSnapshotFields(existing),
       trope: existing.trope,
       fitAuthorIds: existing.fitAuthors.map((item) => item.authorId),
       fitAuthorNote: existing.fitAuthorNote,

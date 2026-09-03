@@ -21,6 +21,18 @@ describe("compareChaptersByChapterNo", () => {
     expect(orderedTitles).toEqual(["第一章", "第二章", "第十一章"])
   })
 
+  it("第 0 章始终排在第一章之前", () => {
+    const chapters: TestChapter[] = [
+      { title: "第一章", chapterNo: 1, sortOrder: 1 },
+      { title: "作品介绍", chapterNo: 0, sortOrder: 8 },
+    ]
+
+    expect([...chapters].sort(compareChaptersByChapterNo).map((chapter) => chapter.title)).toEqual([
+      "作品介绍",
+      "第一章",
+    ])
+  })
+
   it("历史空章节号排在已编号章节之后，并保持原有人工顺序", () => {
     const chapters: TestChapter[] = [
       { title: "未编号后章", chapterNo: null, sortOrder: 8 },

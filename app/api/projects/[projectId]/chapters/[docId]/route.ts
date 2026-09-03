@@ -10,7 +10,7 @@ export const runtime = "nodejs"
 
 const updateChapterMetadataSchema = z.object({
   title: z.string().trim().min(1, "章节标题不能为空"),
-  chapterNo: z.number().int().positive("章节号必须是正整数"),
+  chapterNo: z.number().int().nonnegative("章节号必须是大于等于 0 的整数"),
 })
 
 type ChapterRouteContext = {

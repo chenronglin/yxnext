@@ -9,8 +9,8 @@ import { requireApiCurrentUser } from "@/server/shared/current-user"
 export const runtime = "nodejs"
 
 const createChapterSchema = z.object({
-  title: z.string().trim().min(1, "章节标题不能为空"),
-  chapterNo: z.number().int().positive().nullable().optional(),
+  title: z.string().trim().optional().default(""),
+  chapterNo: z.number().int().nonnegative("章节号必须是大于等于 0 的整数").nullable().optional(),
 })
 
 type ChaptersRouteContext = {

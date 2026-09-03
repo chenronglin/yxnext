@@ -126,7 +126,13 @@ export function SiVersions({ si, versions }: { si: SiItem; versions: SiVersion[]
               <div className="grid gap-5 sm:grid-cols-2">
                 <PreviewField label="标题" value={activeVersion.title} />
                 <PreviewField label="主类型" value={activeVersion.mainType} />
+                <PreviewField label="SI 类型" value={activeVersion.siType} />
+                <PreviewField label="创作难度" value={activeVersion.creativeDifficulty} />
                 <PreviewField label="Trope" value={activeVersion.trope} />
+              </div>
+              <div className="grid gap-5 sm:grid-cols-2">
+                <PreviewField label="参考书籍标题" value={activeVersion.referenceBookTitle} />
+                <PreviewField label="参考书籍链接" value={activeVersion.referenceBookUrl} />
               </div>
               <PreviewField label="Fresh Twist" value={activeVersion.freshTwist} />
               <PreviewField label="核心故事梗概" value={activeVersion.synopsis} />

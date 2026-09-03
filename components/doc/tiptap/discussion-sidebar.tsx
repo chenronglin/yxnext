@@ -11,7 +11,9 @@ import { setActiveDiscussion, updateCommentBody } from "@/components/doc/tiptap/
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Textarea } from "@/components/ui/textarea"
+import { fetchJson } from "@/lib/api"
 import { cn } from "@/lib/utils"
+import type { DocCommentRepliesResponse, DocCommentReplyItem } from "@/types/doc"
 
 type DiscussionSource = "comment" | "revision"
 
@@ -40,6 +42,19 @@ type DiscussionItem = {
   insertedText?: string
   actorName?: string
   segments: DiscussionSegment[]
+}
+
+type CommentReplyState = {
+  loading: boolean
+  active: boolean
+  replies: DocCommentReplyItem[]
+  error: string | null
+}
+
+type CreateReplyResponse = {
+  commentId: string
+  commentActive: boolean
+  reply: DocCommentReplyItem
 }
 
 const MAX_QUOTE_LENGTH = 88
@@ -403,10 +418,14 @@ function KindIcon({ kind }: { kind: DiscussionKind }) {
 
 export function DiscussionSidebar({
   editor,
+  docId,
+  canReply = false,
   onHide,
   className,
 }: {
   editor: Editor | null
+  docId?: string
+  canReply?: boolean
   onHide?: () => void
   // 调用方负责决定侧栏是否占满工作区高度，组件内部只维护列表滚动。
   className?: string
@@ -415,6 +434,9 @@ export function DiscussionSidebar({
   const [activeKey, setActiveKey] = useState<string | null>(null)
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null)
   const [commentDraft, setCommentDraft] = useState("")
+  const [replyState, setReplyState] = useState<Record<string, CommentReplyState>>({})
+  const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({})
+  const [replyingCommentId, setReplyingCommentId] = useState<string | null>(null)
   const cardRefs = useRef(new Map<string, HTMLElement>())
   const editTextareaRef = useRef<HTMLTextAreaElement>(null)
   const updateTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -527,7 +549,98 @@ export function DiscussionSidebar({
     }),
     [items],
   )
+  const commentIds = useMemo(
+    () => items.filter((item) => item.source === "comment").map((item) => item.id),
+    [items],
+  )
+  const commentIdsKey = commentIds.join("|")
   const readOnly = !editor?.isEditable
+
+  useEffect(() => {
+    if (!docId || !commentIdsKey) {
+      setReplyState({})
+      return
+    }
+
+    let cancelled = false
+
+    // 各批注的回复互不依赖，统一并行读取，避免侧栏按条目串行产生请求瀑布。
+    void Promise.all(
+      commentIds.map(async (commentId) => {
+        try {
+          const response = await fetchJson<DocCommentRepliesResponse>(
+            `/api/docs/${docId}/comments/${encodeURIComponent(commentId)}/replies`,
+          )
+          return [
+            commentId,
+            { loading: false, active: response.commentActive, replies: response.replies, error: null },
+          ] as const
+        } catch (error) {
+          return [
+            commentId,
+            {
+              loading: false,
+              active: false,
+              replies: [],
+              error: error instanceof Error ? error.message : "回复读取失败",
+            },
+          ] as const
+        }
+      }),
+    ).then((entries) => {
+      if (!cancelled) {
+        setReplyState(Object.fromEntries(entries))
+      }
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [commentIds, commentIdsKey, docId])
+
+  async function submitReply(commentId: string) {
+    if (!docId || replyingCommentId) return
+
+    const content = replyDrafts[commentId]?.trim() ?? ""
+
+    if (!content) return
+
+    setReplyingCommentId(commentId)
+
+    try {
+      const response = await fetchJson<CreateReplyResponse>(
+        `/api/docs/${docId}/comments/${encodeURIComponent(commentId)}/replies`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content }),
+        },
+      )
+
+      setReplyState((current) => ({
+        ...current,
+        [commentId]: {
+          loading: false,
+          active: response.commentActive,
+          replies: [...(current[commentId]?.replies ?? []), response.reply],
+          error: null,
+        },
+      }))
+      setReplyDrafts((current) => ({ ...current, [commentId]: "" }))
+    } catch (error) {
+      setReplyState((current) => ({
+        ...current,
+        [commentId]: {
+          loading: false,
+          active: current[commentId]?.active ?? false,
+          replies: current[commentId]?.replies ?? [],
+          error: error instanceof Error ? error.message : "回复发送失败",
+        },
+      }))
+    } finally {
+      setReplyingCommentId(null)
+    }
+  }
 
   return (
     <Card className={cn("h-full min-h-0 gap-0 overflow-hidden p-0", className)}>
@@ -681,6 +794,47 @@ export function DiscussionSidebar({
                     </div>
                   )}
                   {item.actorName && <p className="mt-2 text-xs text-muted-foreground">由 {item.actorName} 创建</p>}
+                  {item.source === "comment" && docId && (
+                    <div
+                      className="mt-3 grid gap-2 border-t border-foreground/10 pt-3"
+                      onClick={(event) => event.stopPropagation()}
+                      onKeyDown={(event) => event.stopPropagation()}
+                    >
+                      {replyState[item.id]?.replies.map((reply) => (
+                        <div key={reply.id} className="rounded-md bg-background/80 px-3 py-2 text-xs leading-5">
+                          <div className="flex items-center justify-between gap-2 text-muted-foreground">
+                            <span>{reply.authorName}</span>
+                            <time>{new Date(reply.createdAt).toLocaleString()}</time>
+                          </div>
+                          <p className="mt-1 whitespace-pre-wrap text-foreground/90">{reply.content}</p>
+                        </div>
+                      ))}
+                      {replyState[item.id]?.loading && <p className="text-xs text-muted-foreground">正在读取回复...</p>}
+                      {replyState[item.id]?.error && <p className="text-xs text-red-600">{replyState[item.id].error}</p>}
+                      {canReply && replyState[item.id]?.active && (
+                        <div className="grid gap-2">
+                          <Textarea
+                            value={replyDrafts[item.id] ?? ""}
+                            maxLength={2000}
+                            rows={2}
+                            placeholder="回复批注"
+                            onChange={(event) =>
+                              setReplyDrafts((current) => ({ ...current, [item.id]: event.target.value }))
+                            }
+                          />
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="justify-self-end"
+                            disabled={!replyDrafts[item.id]?.trim() || replyingCommentId === item.id}
+                            onClick={() => void submitReply(item.id)}
+                          >
+                            {replyingCommentId === item.id ? "发送中..." : "回复"}
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </article>
               )
             })}

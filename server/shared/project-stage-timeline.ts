@@ -1,8 +1,8 @@
 import "server-only"
 
 import { prisma } from "@/server/db/prisma"
-
-const DAY_IN_MS = 24 * 60 * 60 * 1000
+import { normalizeDateOnly, previousWorkday } from "@/lib/workday-calendar"
+import { loadWorkdayExceptionMap } from "@/server/shared/workday-calendar"
 
 const STAGE_LABELS = {
   synopsis: "梗概",
@@ -26,6 +26,7 @@ function calculateTimelineStatus(input: {
   dueAt: Date | null
   warningDaysBeforeDue: number
   now: Date
+  workdayExceptions: ReadonlyMap<string, boolean>
 }): TimelineStatus {
   // 只要阶段已经显式完成，就必须稳定落到 completed，
   // 避免后续因为 dueAt 已过又被重新改写成 overdue。
@@ -44,17 +45,21 @@ function calculateTimelineStatus(input: {
     return input.startedAt ? "in_progress" : "not_started"
   }
 
-  const nowTime = input.now.getTime()
-  const dueTime = input.dueAt.getTime()
+  const nowTime = normalizeDateOnly(input.now).getTime()
+  const dueTime = normalizeDateOnly(input.dueAt).getTime()
 
   if (nowTime > dueTime) {
     return "overdue"
   }
 
   const warningDays = Math.max(0, input.warningDaysBeforeDue)
-  const warningStartTime = dueTime - warningDays * DAY_IN_MS
+  let warningStart = normalizeDateOnly(input.dueAt)
 
-  if (nowTime >= warningStartTime) {
+  for (let index = 0; index < warningDays; index += 1) {
+    warningStart = previousWorkday(warningStart, input.workdayExceptions)
+  }
+
+  if (nowTime >= warningStart.getTime()) {
     return "due_soon"
   }
 
@@ -232,7 +237,7 @@ export async function syncActiveProjectTimelineStatuses() {
     return { checked: 0, updated: 0, notifications: 0 }
   }
 
-  const [defaults, stagePlans] = await Promise.all([
+  const [defaults, stagePlans, workdayExceptions] = await Promise.all([
     stagePlanDefaultClient.findMany({
       select: {
         stageCode: true,
@@ -257,6 +262,7 @@ export async function syncActiveProjectTimelineStatuses() {
         },
       },
     }),
+    loadWorkdayExceptionMap(prisma),
   ])
 
   const warningDaysMap = new Map(defaults.map((item) => [item.stageCode, item.warningDaysBeforeDue]))
@@ -269,6 +275,7 @@ export async function syncActiveProjectTimelineStatuses() {
       dueAt: stagePlan.dueAt,
       warningDaysBeforeDue: warningDaysMap.get(stagePlan.stageCode) ?? 1,
       now,
+      workdayExceptions,
     })
 
     if (nextStatus === stagePlan.timelineStatus) {

@@ -48,6 +48,7 @@ import {
   RELEASE_DOC_STATUS_TONE,
   type GovernanceProjectDetail,
   type ProjectPersonOption,
+  type UpdateProjectStagePlansInput,
 } from "@/types/project"
 import { useT } from "@/hooks/use-t"
 
@@ -179,7 +180,7 @@ export default function GovernanceDetailPage({ params }: { params: Promise<{ id:
     }
   }
 
-  async function handleSaveStagePlans(items: Array<{ stage: "synopsis" | "outline" | "chapter" | "release"; planDays: number }>) {
+  async function handleSaveStagePlans(input: UpdateProjectStagePlansInput) {
     if (!project) return
 
     setSavingStagePlans(true)
@@ -191,7 +192,7 @@ export default function GovernanceDetailPage({ params }: { params: Promise<{ id:
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ items }),
+        body: JSON.stringify(input),
       })
 
       setMessage({

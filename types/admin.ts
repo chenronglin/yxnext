@@ -68,6 +68,14 @@ export interface StagePlanDefaultItem {
   updatedAt: string
 }
 
+export interface WorkdayExceptionItem {
+  id: string
+  date: string
+  isWorkday: boolean
+  name: string
+  updatedAt: string
+}
+
 export interface AuditLog {
   id: string
   time: string

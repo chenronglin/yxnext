@@ -13,6 +13,8 @@ import {
 } from "@/server/shared/invariant-keys"
 import { buildDocxBuffer } from "@/server/shared/docx-export"
 import { compareChaptersByChapterNo } from "@/lib/chapter-order"
+import { addWorkdays, countWorkdays, endOfDateOnly, normalizeDateOnly } from "@/lib/workday-calendar"
+import { loadWorkdayExceptionMap } from "@/server/shared/workday-calendar"
 import { createNovelDocV1, createNovelHeading, extractCleanNovelDocBlocks, isNovelDocV1, textToNovelParagraphs, type NovelDocJson } from "@/lib/novel-doc"
 import type { ApiCurrentUser } from "@/server/shared/current-user"
 import { makePaginationMeta, parsePagination } from "@/server/shared/pagination"
@@ -30,6 +32,7 @@ import type {
   ReorderChapterInput,
   ReleaseDocStatus,
   StagePlan,
+  UpdateProjectStagePlansInput,
   UpdateChapterMetadataInput,
   UpdateProjectTitleInput,
 } from "@/types/project"
@@ -117,6 +120,19 @@ const projectInclude = {
     select: userSummarySelect,
   },
   stagePlans: {
+    include: {
+      changes: {
+        include: {
+          actor: {
+            select: userSummarySelect,
+          },
+        },
+        orderBy: {
+          createdAt: "desc",
+        },
+        take: 20,
+      },
+    },
     orderBy: {
       stageCode: "asc",
     },
@@ -167,12 +183,20 @@ function toIsoString(value: Date | null | undefined) {
   return value ? value.toISOString() : null
 }
 
-function userName(user: { username: string; displayName: string | null }) {
-  return user.displayName ?? user.username
+function parseStagePlanDate(value: string, label: string) {
+  try {
+    return normalizeDateOnly(value)
+  } catch {
+    throw new ApiError({
+      status: 400,
+      code: "STAGE_PLAN_DATE_INVALID",
+      message: `${label}不是有效的日历日期`,
+    })
+  }
 }
 
-function addDays(base: Date, days: number) {
-  return new Date(base.getTime() + days * 24 * 60 * 60 * 1000)
+function userName(user: { username: string; displayName: string | null }) {
+  return user.displayName ?? user.username
 }
 
 function countWordsForChineseText(text: string | null | undefined) {
@@ -314,11 +338,24 @@ function toStagePlan(plan: ProjectRecord["stagePlans"][number]): StagePlan {
   return {
     stage,
     planDays: plan.planDays,
+    plannedStartAt: toIsoString(plan.plannedStartAt),
+    plannedEndAt: toIsoString(plan.plannedEndAt),
+    lockVersion: plan.lockVersion,
     startAt: toIsoString(plan.startedAt),
     dueAt: toIsoString(plan.dueAt),
     finishedAt: toIsoString(plan.completedAt),
     status: plan.timelineStatus,
     timingNote: stageTimingNote(stage),
+    // 兼容迁移前数据以及只选择阶段计划基础字段的内部调用；
+    // 正常项目详情查询会通过 projectInclude 加载完整修改历史。
+    changes: (plan.changes ?? []).map((change) => ({
+      id: change.changeId.toString(),
+      reason: change.reason,
+      changedBy: userName(change.actor),
+      changedAt: change.createdAt.toISOString(),
+      before: change.beforeJson as NonNullable<StagePlan["changes"]>[number]["before"],
+      after: change.afterJson as NonNullable<StagePlan["changes"]>[number]["after"],
+    })),
   }
 }
 
@@ -652,7 +689,13 @@ async function createProjectNotification(
   })
 }
 
-async function unlockStagePlan(tx: TxClient, projectId: bigint, stageCode: "release", now: Date) {
+async function unlockStagePlan(
+  tx: TxClient,
+  projectId: bigint,
+  stageCode: "release",
+  now: Date,
+  workdayExceptions: ReadonlyMap<string, boolean>,
+) {
   const stagePlan = await tx.projectStagePlan.findFirst({
     where: {
       projectId,
@@ -673,6 +716,8 @@ async function unlockStagePlan(tx: TxClient, projectId: bigint, stageCode: "rele
   }
 
   const startedAt = stagePlan.startedAt ?? now
+  const plannedStartAt = stagePlan.plannedStartAt ?? normalizeDateOnly(startedAt)
+  const plannedEndAt = stagePlan.plannedEndAt ?? addWorkdays(plannedStartAt, stagePlan.planDays, workdayExceptions)
 
   await tx.projectStagePlan.update({
     where: {
@@ -683,14 +728,21 @@ async function unlockStagePlan(tx: TxClient, projectId: bigint, stageCode: "rele
       timelineStatus: "in_progress",
       unlockedAt: stagePlan.unlockedAt ?? now,
       startedAt,
-      dueAt: stagePlan.dueAt ?? addDays(startedAt, stagePlan.planDays),
+      plannedStartAt,
+      plannedEndAt,
+      dueAt: stagePlan.dueAt ?? endOfDateOnly(plannedEndAt),
     },
   })
 
   return stagePlan
 }
 
-async function restartReleaseStagePlan(tx: TxClient, projectId: bigint, now: Date) {
+async function restartReleaseStagePlan(
+  tx: TxClient,
+  projectId: bigint,
+  now: Date,
+  workdayExceptions: ReadonlyMap<string, boolean>,
+) {
   const stagePlan = await tx.projectStagePlan.findFirst({
     where: {
       projectId,
@@ -708,6 +760,9 @@ async function restartReleaseStagePlan(tx: TxClient, projectId: bigint, now: Dat
 
   // 重新质检代表一次新的质检周期：即使旧周期已经审核完成，也要重新进入进行中状态，
   // 并从本次覆盖生成时间重新计算截止日期，避免页面继续显示“质检已完成”的旧状态。
+  const plannedStartAt = normalizeDateOnly(now)
+  const plannedEndAt = addWorkdays(plannedStartAt, stagePlan.planDays, workdayExceptions)
+
   await tx.projectStagePlan.update({
     where: {
       stagePlanId: stagePlan.stagePlanId,
@@ -717,7 +772,9 @@ async function restartReleaseStagePlan(tx: TxClient, projectId: bigint, now: Dat
       timelineStatus: "in_progress",
       unlockedAt: now,
       startedAt: now,
-      dueAt: addDays(now, stagePlan.planDays),
+      plannedStartAt,
+      plannedEndAt,
+      dueAt: endOfDateOnly(plannedEndAt),
       completedAt: null,
     },
   })
@@ -844,6 +901,210 @@ export async function getProjectDetail(actor: ApiCurrentUser, projectIdValue: st
   }
 }
 
+export async function updateProjectStagePlans(
+  actor: ApiCurrentUser,
+  projectIdValue: string,
+  input: UpdateProjectStagePlansInput,
+) {
+  const projectId = parseBigIntId(projectIdValue, "项目 ID")
+  const reason = trimToNull(input.reason)
+
+  if (!reason || reason.length > 500) {
+    throw new ApiError({
+      status: 400,
+      code: "STAGE_PLAN_REASON_REQUIRED",
+      message: "请填写不超过 500 个字符的计划修改原因",
+    })
+  }
+
+  if (input.items.length === 0) {
+    throw new ApiError({
+      status: 400,
+      code: "STAGE_PLAN_ITEMS_REQUIRED",
+      message: "请至少提交一个阶段计划",
+    })
+  }
+
+  if (new Set(input.items.map((item) => item.stage)).size !== input.items.length) {
+    throw new ApiError({
+      status: 400,
+      code: "STAGE_PLAN_STAGE_DUPLICATED",
+      message: "同一阶段不能重复提交",
+    })
+  }
+
+  await prisma.$transaction(async (tx) => {
+    const project = await findVisibleProjectOrThrow(tx, actor, projectId)
+    assertProjectWritable(project)
+
+    if (actor.role === "author" || (actor.role === "editor" && actor.userId !== project.editorId)) {
+      throw new ApiError({
+        status: 403,
+        code: "STAGE_PLAN_EDITOR_ONLY",
+        message: "只有项目负责编辑或管理员可以调整阶段计划",
+      })
+    }
+
+    const workdayExceptions = await loadWorkdayExceptionMap(tx)
+
+    for (const item of input.items) {
+      const stagePlan = project.stagePlans.find((plan) => plan.stageCode === item.stage)
+
+      if (!stagePlan) {
+        throw new ApiError({
+          status: 404,
+          code: "PROJECT_STAGE_PLAN_MISSING",
+          message: "阶段计划不存在",
+        })
+      }
+
+      if (stagePlan.gateStatus === "completed" || stagePlan.completedAt) {
+        throw new ApiError({
+          status: 409,
+          code: "STAGE_PLAN_COMPLETED",
+          message: "已完成阶段的计划和实际时间不能修改",
+        })
+      }
+
+      if (item.lockVersion !== undefined && item.lockVersion !== stagePlan.lockVersion) {
+        throw new ApiError({
+          status: 409,
+          code: "STAGE_PLAN_VERSION_CONFLICT",
+          message: "阶段计划已被其他人修改，请刷新后重试",
+        })
+      }
+
+      const existingStart = stagePlan.plannedStartAt ?? (stagePlan.startedAt ? normalizeDateOnly(stagePlan.startedAt) : null)
+      const plannedStartAt =
+        item.plannedStartAt === undefined
+          ? existingStart
+          : item.plannedStartAt
+            ? parseStagePlanDate(item.plannedStartAt, "计划开始日期")
+            : null
+
+      if (!plannedStartAt) {
+        throw new ApiError({
+          status: 400,
+          code: "STAGE_PLAN_START_REQUIRED",
+          message: "请先设置计划开始日期",
+        })
+      }
+
+      const requestedEnd =
+        item.plannedEndAt === undefined
+          ? stagePlan.plannedEndAt
+          : item.plannedEndAt
+            ? parseStagePlanDate(item.plannedEndAt, "计划结束日期")
+            : null
+      let planDays = item.planDays ?? stagePlan.planDays
+      let plannedEndAt: Date
+
+      if (!Number.isInteger(planDays) || planDays <= 0) {
+        throw new ApiError({
+          status: 400,
+          code: "INVALID_PLAN_DAYS",
+          message: "计划工作日数必须大于 0",
+        })
+      }
+
+      if (item.plannedEndAt !== undefined && requestedEnd && item.planDays === undefined) {
+        planDays = countWorkdays(plannedStartAt, requestedEnd, workdayExceptions)
+
+        if (planDays <= 0) {
+          throw new ApiError({
+            status: 400,
+            code: "STAGE_PLAN_NO_WORKDAY",
+            message: "计划日期范围内至少需要包含一个工作日",
+          })
+        }
+        plannedEndAt = requestedEnd
+      } else {
+        plannedEndAt = addWorkdays(plannedStartAt, planDays, workdayExceptions)
+
+        // 旧结束日仅用于“未提交任何结束日变更”时保留上下文；
+        // 只有客户端同时显式提交结束日和工作日数，才需要校验两者是否一致。
+        if (
+          item.plannedEndAt !== undefined &&
+          requestedEnd &&
+          item.planDays !== undefined &&
+          requestedEnd.getTime() !== plannedEndAt.getTime()
+        ) {
+          throw new ApiError({
+            status: 400,
+            code: "STAGE_PLAN_DATE_MISMATCH",
+            message: "计划结束日期与工作日数计算结果不一致",
+          })
+        }
+      }
+
+      const before = {
+        plannedStartAt: toIsoString(stagePlan.plannedStartAt),
+        plannedEndAt: toIsoString(stagePlan.plannedEndAt),
+        planDays: stagePlan.planDays,
+      }
+      const after = {
+        plannedStartAt: plannedStartAt.toISOString(),
+        plannedEndAt: plannedEndAt.toISOString(),
+        planDays,
+      }
+
+      const updateResult = await tx.projectStagePlan.updateMany({
+        where: {
+          stagePlanId: stagePlan.stagePlanId,
+          lockVersion: stagePlan.lockVersion,
+        },
+        data: {
+          plannedStartAt,
+          plannedEndAt,
+          planDays,
+          dueAt: endOfDateOnly(plannedEndAt),
+          lockVersion: {
+            increment: 1,
+          },
+        },
+      })
+
+      if (updateResult.count !== 1) {
+        throw new ApiError({
+          status: 409,
+          code: "STAGE_PLAN_VERSION_CONFLICT",
+          message: "阶段计划已被其他人修改，请刷新后重试",
+        })
+      }
+
+      await tx.projectStagePlanChange.create({
+        data: {
+          stagePlanId: stagePlan.stagePlanId,
+          changedBy: actor.userId,
+          reason,
+          beforeJson: before,
+          afterJson: after,
+        },
+      })
+    }
+
+    await writeOperationLog(tx, {
+      actor,
+      action: "project.stage_plans.update",
+      entityType: "project",
+      entityId: project.projectId,
+      projectId: project.projectId,
+      afterJson: {
+        reason,
+        items: input.items.map((item) => ({
+          stage: item.stage,
+          plannedStartAt: item.plannedStartAt ?? null,
+          plannedEndAt: item.plannedEndAt ?? null,
+          planDays: item.planDays ?? null,
+          lockVersion: item.lockVersion ?? null,
+        })),
+      },
+    })
+  })
+
+  return getProjectDetail(actor, projectIdValue)
+}
+
 export async function updateProjectTitle(
   actor: ApiCurrentUser,
   projectIdValue: string,
@@ -959,8 +1220,9 @@ export async function listProjectChapters(actor: ApiCurrentUser, projectIdValue:
 
 export async function createProjectChapter(actor: ApiCurrentUser, projectIdValue: string, input: CreateChapterInput) {
   const projectId = parseBigIntId(projectIdValue, "项目 ID")
-  const title = trimToNull(input.title)
   const chapterNo = input.chapterNo ?? null
+  // 第 0 章承载作品整体介绍；调用方未填写标题时使用稳定默认值，普通章节仍要求显式标题。
+  const title = trimToNull(input.title) ?? (chapterNo === 0 ? "作品介绍" : null)
   const now = new Date()
 
   if (!title) {
@@ -971,11 +1233,11 @@ export async function createProjectChapter(actor: ApiCurrentUser, projectIdValue
     })
   }
 
-  if (chapterNo !== null && (!Number.isInteger(chapterNo) || chapterNo <= 0)) {
+  if (chapterNo !== null && (!Number.isInteger(chapterNo) || chapterNo < 0)) {
     throw new ApiError({
       status: 400,
       code: "CHAPTER_NO_INVALID",
-      message: "章节号必须是正整数",
+      message: "章节号必须是大于等于 0 的整数",
     })
   }
 
@@ -987,7 +1249,9 @@ export async function createProjectChapter(actor: ApiCurrentUser, projectIdValue
       assertChapterStructureEditable(project)
 
       const chapterDocs = project.docs.filter((doc) => doc.docType === "chapter")
-      const nextSortOrder = chapterDocs.reduce((max, doc) => Math.max(max, doc.sortOrder), 0) + 1
+      // 第 0 章使用排序值 0，保证仍按 sortOrder 读取的旧路径也把作品介绍放在最前。
+      const nextSortOrder =
+        chapterNo === 0 ? 0 : chapterDocs.reduce((max, doc) => Math.max(max, doc.sortOrder), 0) + 1
 
       if (chapterNo !== null && chapterDocs.some((doc) => doc.chapterNo === chapterNo)) {
         throw new ApiError({
@@ -1135,6 +1399,16 @@ export async function reorderProjectChapters(actor: ApiCurrentUser, projectIdVal
         })
       }
 
+      const chapterZero = chapterDocs.find((doc) => doc.chapterNo === 0)
+
+      if (chapterZero && orderedDocIds[0] !== chapterZero.docId) {
+        throw new ApiError({
+          status: 400,
+          code: "CHAPTER_ZERO_MUST_BE_FIRST",
+          message: "第 0 章必须固定排在其他正文章节之前",
+        })
+      }
+
       // 重排时先整体释放旧的 chapterOrderKey，再写入新的排序和值，
       // 避免两个章节互换顺序时因为唯一键暂时碰撞而中途失败。
       await tx.doc.updateMany({
@@ -1149,13 +1423,15 @@ export async function reorderProjectChapters(actor: ApiCurrentUser, projectIdVal
       })
 
       for (const [index, docId] of orderedDocIds.entries()) {
+        const sortOrder = chapterZero?.docId === docId ? 0 : chapterZero ? index : index + 1
+
         await tx.doc.update({
           where: {
             docId,
           },
           data: {
-            sortOrder: index + 1,
-            chapterOrderKey: makeChapterOrderKey(project.projectId, index + 1),
+            sortOrder,
+            chapterOrderKey: makeChapterOrderKey(project.projectId, sortOrder),
           },
         })
       }
@@ -1205,11 +1481,11 @@ export async function updateProjectChapterMetadata(
     })
   }
 
-  if (!Number.isInteger(chapterNo) || chapterNo <= 0) {
+  if (!Number.isInteger(chapterNo) || chapterNo < 0) {
     throw new ApiError({
       status: 400,
       code: "CHAPTER_NO_INVALID",
-      message: "章节号必须是正整数",
+      message: "章节号必须是大于等于 0 的整数",
     })
   }
 
@@ -1242,6 +1518,17 @@ export async function updateProjectChapterMetadata(
         })
       }
 
+
+      // 从/改为第 0 章时同步调整结构排序；普通章节之间只改编号，不扰动人工排序。
+      const nextSortOrder =
+        chapterNo === 0
+          ? 0
+          : chapterDoc.chapterNo === 0
+            ? project.docs
+                .filter((doc) => doc.docType === "chapter" && doc.docId !== docId)
+                .reduce((max, doc) => Math.max(max, doc.sortOrder), 0) + 1
+            : chapterDoc.sortOrder
+
       await tx.doc.update({
         where: {
           docId: chapterDoc.docId,
@@ -1249,6 +1536,8 @@ export async function updateProjectChapterMetadata(
         data: {
           title,
           chapterNo,
+          sortOrder: nextSortOrder,
+          chapterOrderKey: makeChapterOrderKey(project.projectId, nextSortOrder),
           // chapterNoKey 是数据库层的并发唯一性兜底，修改章节号时必须同步更新。
           chapterNoKey: makeChapterNoKey(project.projectId, chapterNo),
         },
@@ -1633,11 +1922,13 @@ async function generateProjectQc(
       })
     }
 
+    const workdayExceptions = await loadWorkdayExceptionMap(tx)
+
     await completeStagePlan(tx, project.projectId, "chapter", now)
     if (regenerating) {
-      await restartReleaseStagePlan(tx, project.projectId, now)
+      await restartReleaseStagePlan(tx, project.projectId, now, workdayExceptions)
     } else {
-      await unlockStagePlan(tx, project.projectId, "release", now)
+      await unlockStagePlan(tx, project.projectId, "release", now, workdayExceptions)
     }
 
     await tx.project.update({

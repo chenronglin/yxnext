@@ -14,6 +14,8 @@ import { assertRole } from "@/server/shared/current-user"
 import { makePaginationMeta, parsePagination } from "@/server/shared/pagination"
 import { formatAuditAction, formatAuditChange, formatAuditNote } from "@/lib/audit-log"
 import { createNovelDocV1, isNovelDocV1, textToNovelParagraphs } from "@/lib/novel-doc"
+import { formatDateOnlyKey, normalizeDateOnly } from "@/lib/workday-calendar"
+import { updateProjectStagePlans as updateProjectStagePlansForProject } from "@/server/modules/project/project.service"
 import type { ApiCurrentUser } from "@/server/shared/current-user"
 import type {
   AdminReportStats,
@@ -24,6 +26,7 @@ import type {
   ManagedUser,
   StagePlanDefaultItem,
   SysParam,
+  WorkdayExceptionItem,
 } from "@/types/admin"
 import type { BadgeTone, ProjectLifecycle, ProjectStage, Role, UserStatus } from "@/types/domain"
 import type {
@@ -65,11 +68,28 @@ type SiMainTypeInput = {
   status?: "active" | "inactive"
 }
 
+type SiMetadataOptionInput = {
+  category?: "si_type" | "creative_difficulty"
+  name?: string
+  value?: string
+  order?: number
+  status?: "active" | "inactive"
+}
+
 type StagePlanDefaultsInput = {
   items: Array<{
     stage: "synopsis" | "outline" | "chapter" | "release"
     days: number
     warningDaysBeforeDue?: number
+  }>
+}
+
+type WorkdayExceptionsInput = {
+  year: number
+  items: Array<{
+    date: string
+    isWorkday: boolean
+    name: string
   }>
 }
 
@@ -80,9 +100,13 @@ type ProjectAssignmentInput = {
 }
 
 type ProjectStagePlansInput = {
+  reason: string
   items: Array<{
     stage: "synopsis" | "outline" | "chapter" | "release"
-    planDays: number
+    plannedStartAt?: string | null
+    plannedEndAt?: string | null
+    planDays?: number
+    lockVersion?: number
   }>
 }
 
@@ -161,6 +185,23 @@ const projectInclude = {
     },
   },
   stagePlans: {
+    include: {
+      changes: {
+        include: {
+          actor: {
+            select: {
+              userId: true,
+              username: true,
+              displayName: true,
+            },
+          },
+        },
+        orderBy: {
+          createdAt: "desc",
+        },
+        take: 20,
+      },
+    },
     orderBy: {
       stageCode: "asc",
     },
@@ -777,11 +818,22 @@ function toStagePlan(plan: ProjectRecord["stagePlans"][number]): StagePlan {
   return {
     stage,
     planDays: plan.planDays,
+    plannedStartAt: formatDateTime(plan.plannedStartAt),
+    plannedEndAt: formatDateTime(plan.plannedEndAt),
+    lockVersion: plan.lockVersion,
     startAt: formatDateTime(plan.startedAt),
     dueAt: formatDateTime(plan.dueAt),
     finishedAt: formatDateTime(plan.completedAt),
     status: plan.timelineStatus,
     timingNote: stageTimingNote(stage),
+    changes: (plan.changes ?? []).map((change) => ({
+      id: change.changeId.toString(),
+      reason: change.reason,
+      changedBy: userName(change.actor),
+      changedAt: change.createdAt.toISOString(),
+      before: change.beforeJson as NonNullable<StagePlan["changes"]>[number]["before"],
+      after: change.afterJson as NonNullable<StagePlan["changes"]>[number]["after"],
+    })),
   }
 }
 
@@ -2316,6 +2368,144 @@ export async function updateSiMainTypeParam(actor: ApiCurrentUser, mainTypeIdVal
   }
 }
 
+function toSiMetadataParam(item: {
+  optionId: bigint
+  category: "si_type" | "creative_difficulty"
+  name: string
+  code: string
+  sortOrder: number
+  isActive: boolean
+  createdAt: Date
+}) {
+  return {
+    id: item.optionId.toString(),
+    category: item.category,
+    name: item.name,
+    value: item.code,
+    order: item.sortOrder,
+    status: item.isActive ? ("active" as const) : ("inactive" as const),
+    createdAt: item.createdAt.toISOString(),
+  }
+}
+
+export async function listSiMetadataOptionParams(actor: ApiCurrentUser) {
+  ensureAdmin(actor)
+  const items = await prisma.siMetadataOption.findMany({
+    orderBy: [{ category: "asc" }, { sortOrder: "asc" }, { createdAt: "asc" }],
+  })
+  return { items: items.map(toSiMetadataParam) }
+}
+
+export async function createSiMetadataOptionParam(actor: ApiCurrentUser, input: SiMetadataOptionInput) {
+  ensureAdmin(actor)
+  const category = input.category
+  const name = trimToNull(input.name)
+  const value = trimToNull(input.value)
+
+  if (!category || !name || !value) {
+    throw new ApiError({ status: 400, code: "INVALID_INPUT", message: "请完整填写配置类别、名称和值" })
+  }
+
+  const item = await prisma.$transaction(async (tx) => {
+    const collision = await tx.siMetadataOption.findFirst({
+      where: { category, OR: [{ name }, { code: value }] },
+      select: { optionId: true },
+    })
+
+    if (collision) {
+      throw new ApiError({ status: 409, code: "PARAM_EXISTS", message: "同类别下的名称或参数值已存在" })
+    }
+
+    const created = await tx.siMetadataOption.create({
+      data: {
+        category,
+        name,
+        code: value,
+        sortOrder: input.order ?? 0,
+        isActive: input.status !== "inactive",
+      },
+    })
+
+    await writeOperationLog(tx, {
+      actor,
+      action: "admin.param.si_metadata.create",
+      entityType: "si_metadata_option",
+      entityId: created.optionId,
+      afterJson: { category, name, code: value, isActive: created.isActive },
+    })
+    return created
+  })
+
+  return { item: toSiMetadataParam(item) }
+}
+
+export async function updateSiMetadataOptionParam(
+  actor: ApiCurrentUser,
+  optionIdValue: string,
+  input: SiMetadataOptionInput,
+) {
+  ensureAdmin(actor)
+  const optionId = parseBigIntId(optionIdValue, "SI 配置项 ID")
+  const existing = await prisma.siMetadataOption.findUnique({ where: { optionId } })
+
+  if (!existing) {
+    throw new ApiError({ status: 404, code: "PARAM_NOT_FOUND", message: "SI 配置项不存在" })
+  }
+
+  if (input.category && input.category !== existing.category) {
+    throw new ApiError({
+      status: 409,
+      code: "SI_METADATA_CATEGORY_IMMUTABLE",
+      message: "已创建配置项不能更改类别，请新建对应类别的配置项",
+    })
+  }
+
+  const category = existing.category
+  const name = trimToNull(input.name) ?? existing.name
+  const value = trimToNull(input.value) ?? existing.code
+  const collision = await prisma.siMetadataOption.findFirst({
+    where: {
+      optionId: { not: optionId },
+      category,
+      OR: [{ name }, { code: value }],
+    },
+    select: { optionId: true },
+  })
+
+  if (collision) {
+    throw new ApiError({ status: 409, code: "PARAM_EXISTS", message: "同类别下的名称或参数值已存在" })
+  }
+
+  const item = await prisma.$transaction(async (tx) => {
+    const updated = await tx.siMetadataOption.update({
+      where: { optionId },
+      data: {
+        category,
+        name,
+        code: value,
+        sortOrder: input.order ?? existing.sortOrder,
+        isActive: input.status ? input.status === "active" : existing.isActive,
+      },
+    })
+    await writeOperationLog(tx, {
+      actor,
+      action: "admin.param.si_metadata.update",
+      entityType: "si_metadata_option",
+      entityId: optionId,
+      beforeJson: {
+        category: existing.category,
+        name: existing.name,
+        code: existing.code,
+        isActive: existing.isActive,
+      },
+      afterJson: { category, name, code: value, isActive: updated.isActive },
+    })
+    return updated
+  })
+
+  return { item: toSiMetadataParam(item) }
+}
+
 export async function listStagePlanDefaults(actor: ApiCurrentUser) {
   ensureAdmin(actor)
 
@@ -2387,6 +2577,147 @@ export async function updateStagePlanDefaults(actor: ApiCurrentUser, input: Stag
   })
 
   return listStagePlanDefaults(actor)
+}
+
+function assertWorkdayYear(year: number) {
+  if (!Number.isInteger(year) || year < 2000 || year > 2100) {
+    throw new ApiError({
+      status: 400,
+      code: "INVALID_WORKDAY_YEAR",
+      message: "日历年份必须在 2000 到 2100 之间",
+    })
+  }
+}
+
+function parseWorkdayExceptionDate(value: string) {
+  try {
+    return normalizeDateOnly(value)
+  } catch {
+    throw new ApiError({
+      status: 400,
+      code: "WORKDAY_DATE_INVALID",
+      message: "例外日期不是有效的日历日期",
+    })
+  }
+}
+
+export async function listWorkdayExceptions(actor: ApiCurrentUser, year: number) {
+  ensureAdmin(actor)
+  assertWorkdayYear(year)
+
+  const start = new Date(Date.UTC(year, 0, 1))
+  const end = new Date(Date.UTC(year + 1, 0, 1))
+  const records = await prisma.workdayException.findMany({
+    where: {
+      date: {
+        gte: start,
+        lt: end,
+      },
+    },
+    orderBy: {
+      date: "asc",
+    },
+  })
+
+  const items: WorkdayExceptionItem[] = records.map((item) => ({
+    id: item.exceptionId.toString(),
+    date: formatDateOnlyKey(item.date),
+    isWorkday: item.isWorkday,
+    name: item.name,
+    updatedAt: item.updatedAt.toISOString(),
+  }))
+
+  return { year, items }
+}
+
+export async function replaceWorkdayExceptions(actor: ApiCurrentUser, input: WorkdayExceptionsInput) {
+  ensureAdmin(actor)
+  assertWorkdayYear(input.year)
+
+  const normalizedItems = input.items.map((item) => {
+    const date = parseWorkdayExceptionDate(item.date)
+    const name = trimToNull(item.name)
+
+    if (date.getUTCFullYear() !== input.year) {
+      throw new ApiError({
+        status: 400,
+        code: "WORKDAY_DATE_YEAR_MISMATCH",
+        message: "例外日期必须属于当前维护年份",
+      })
+    }
+
+    if (!name) {
+      throw new ApiError({
+        status: 400,
+        code: "WORKDAY_NAME_REQUIRED",
+        message: "请填写节假日或调休说明",
+      })
+    }
+
+    return {
+      date,
+      dateKey: formatDateOnlyKey(date),
+      isWorkday: item.isWorkday,
+      name,
+    }
+  })
+
+  if (new Set(normalizedItems.map((item) => item.dateKey)).size !== normalizedItems.length) {
+    throw new ApiError({
+      status: 400,
+      code: "WORKDAY_DATE_DUPLICATED",
+      message: "同一日期不能重复配置",
+    })
+  }
+
+  const start = new Date(Date.UTC(input.year, 0, 1))
+  const end = new Date(Date.UTC(input.year + 1, 0, 1))
+
+  await prisma.$transaction(async (tx) => {
+    await tx.workdayException.deleteMany({
+      where: {
+        date: {
+          gte: start,
+          lt: end,
+          ...(normalizedItems.length > 0 ? { notIn: normalizedItems.map((item) => item.date) } : {}),
+        },
+      },
+    })
+
+    for (const item of normalizedItems) {
+      await tx.workdayException.upsert({
+        where: { date: item.date },
+        update: {
+          isWorkday: item.isWorkday,
+          name: item.name,
+          maintainedBy: actor.userId,
+        },
+        create: {
+          date: item.date,
+          isWorkday: item.isWorkday,
+          name: item.name,
+          maintainedBy: actor.userId,
+        },
+      })
+    }
+
+    await writeOperationLog(tx, {
+      actor,
+      action: "admin.param.workday_exceptions.replace",
+      entityType: "workday_calendar",
+      entityId: BigInt(input.year),
+      afterJson: {
+        year: input.year,
+        items: normalizedItems.map((item) => ({
+          date: item.dateKey,
+          isWorkday: item.isWorkday,
+          name: item.name,
+        })),
+      },
+    })
+  })
+
+  return listWorkdayExceptions(actor, input.year)
 }
 
 export async function listAuditLogs(actor: ApiCurrentUser, filters: AuditFilters = {}) {
@@ -2809,71 +3140,9 @@ export async function updateGovernanceProjectStagePlans(
 ) {
   ensureAdmin(actor)
 
-  const projectId = parseBigIntId(projectIdValue, "项目 ID")
-  const project = await prisma.project.findUnique({
-    where: {
-      projectId,
-    },
-    select: {
-      projectId: true,
-    },
-  })
+  await updateProjectStagePlansForProject(actor, projectIdValue, input)
 
-  if (!project) {
-    throw new ApiError({
-      status: 404,
-      code: "PROJECT_NOT_FOUND",
-      message: "项目不存在",
-    })
-  }
-
-  await prisma.$transaction(async (tx) => {
-    for (const item of input.items) {
-      if (item.planDays <= 0) {
-        throw new ApiError({
-          status: 400,
-          code: "INVALID_PLAN_DAYS",
-          message: "计划天数必须大于 0",
-        })
-      }
-
-      const stagePlan = await tx.projectStagePlan.findFirst({
-        where: {
-          projectId,
-          stageCode: uiStageToStageCode[item.stage],
-        },
-      })
-
-      if (!stagePlan) {
-        continue
-      }
-
-      await tx.projectStagePlan.update({
-        where: {
-          stagePlanId: stagePlan.stagePlanId,
-        },
-        data: {
-          planDays: item.planDays,
-          dueAt: stagePlan.startedAt
-            ? new Date(stagePlan.startedAt.getTime() + item.planDays * 24 * 60 * 60 * 1000)
-            : stagePlan.dueAt,
-        },
-      })
-    }
-
-    await writeOperationLog(tx, {
-      actor,
-      action: "admin.project.stage_plans.update",
-      entityType: "project",
-      entityId: projectId,
-      projectId,
-      afterJson: {
-        items: input.items,
-      },
-    })
-  })
-
-  return getGovernanceProjectDetail(actor, projectId.toString())
+  return getGovernanceProjectDetail(actor, projectIdValue)
 }
 
 export async function transitionGovernanceProject(
