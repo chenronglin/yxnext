@@ -49,6 +49,8 @@ vi.mock("@/server/db/prisma", () => ({
 }))
 
 import { regenerateProjectQc } from "@/server/modules/project/project.service"
+import { deriveNovelDocProjection } from "@/lib/novel-doc"
+import { makeTableDoc } from "./support/table-fixtures"
 
 const NOW = new Date("2026-07-13T10:00:00.000Z")
 
@@ -209,6 +211,20 @@ const editorActor = {
 }
 
 describe("regenerateProjectQc", () => {
+  it("重新质检从章节 JSON 复制完整表格，保持章节顺序与源快照", async () => {
+    const project = makeProject()
+    const chapter = project.docs.find((doc) => doc.docId === 1n)!
+    const document = makeTableDoc()
+    Object.assign(chapter.finalRevision!, deriveNovelDocProjection(document))
+    mockTx.project.findFirst.mockResolvedValue(project)
+    mockPrisma.project.findFirst.mockResolvedValue(project)
+    await regenerateProjectQc(editorActor, "100")
+    const data = mockTx.docCurrentDraft.create.mock.calls[0][0].data
+    expect(data.contentJson.content[0].content[0].text).toBe("第一章")
+    expect(data.contentJson.content[1]).toEqual(document.content[0])
+    expect(data.plainText).toContain("姓名\t数量\n甲\t3")
+    expect(mockTx.releaseSourceRevision.createMany).toHaveBeenCalled()
+  })
   beforeEach(() => {
     vi.clearAllMocks()
     const project = makeProject()

@@ -12,6 +12,7 @@ import {
   translateUniqueConstraintError,
 } from "@/server/shared/invariant-keys"
 import { createNovelDocV1, deriveNovelDocProjection, isNovelDocV1 } from "@/lib/novel-doc"
+import { validateNovelTables } from "@/lib/novel-table"
 import { addWorkdays, endOfDateOnly, normalizeDateOnly } from "@/lib/workday-calendar"
 import { loadWorkdayExceptionMap } from "@/server/shared/workday-calendar"
 import type { ApiCurrentUser } from "@/server/shared/current-user"
@@ -484,6 +485,10 @@ function normalizeSavePayload(input: SaveDocInput) {
     })
   }
 
+  const tableError = validateNovelTables(input.contentJson)
+  if (tableError) {
+    throw new ApiError({ status: 400, code: "DOC_TABLE_INVALID", message: tableError })
+  }
   const projection = deriveNovelDocProjection(input.contentJson)
 
   return {
@@ -499,29 +504,6 @@ function normalizeSavePayload(input: SaveDocInput) {
     suggestionCount: projection.suggestionCount,
     revisionMarkCount: projection.revisionMarkCount,
   }
-}
-
-function assertCleanTextConsistency(input: {
-  plainText: string
-  cleanText: string | null
-  commentCount: number
-  suggestionCount: number
-  revisionMarkCount: number
-}) {
-  const plainText = input.plainText.trim()
-  const cleanText = input.cleanText?.trim() ?? ""
-  const hasCollaborationMarks = input.commentCount > 0 || input.suggestionCount > 0 || input.revisionMarkCount > 0
-
-  // Clean 正文是“移除协作标记后的正文视图”，不是把 plainText 原样再传一份。
-  // 当稿件里已经存在批注、建议或修订标记时，前端必须显式提交清洗后的正文结果。
-  if (hasCollaborationMarks && plainText && !cleanText) {
-    throw new ApiError({
-      status: 400,
-      code: "DOC_CLEAN_TEXT_REQUIRED",
-      message: "当前稿件包含协作标记，提交时必须同时提供 Clean 正文",
-    })
-  }
-
 }
 
 function toDocMeta(doc: WorkflowDocRecord): DocMeta {
@@ -1425,13 +1407,8 @@ export async function saveDocDraft(
   const payload = normalizeSavePayload(input)
   const now = new Date()
 
-  assertCleanTextConsistency({
-    plainText: payload.plainText,
-    cleanText: payload.cleanText,
-    commentCount: payload.commentCount,
-    suggestionCount: payload.suggestionCount,
-    revisionMarkCount: payload.revisionMarkCount,
-  })
+  // normalizeSavePayload 已由服务端从 JSON 推导清稿；全部文字被标删或被空表格替换时，
+  // 清稿为空是合法结果，不能再用旧的“客户端必须传非空清稿”规则阻止自动保存。
 
   await prisma.$transaction(async (tx) => {
     const doc = await findVisibleDocOrThrow(tx, actor, docId)

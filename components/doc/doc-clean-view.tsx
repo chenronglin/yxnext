@@ -11,6 +11,8 @@ import { fetchJson } from "@/lib/api"
 import type { DocCurrentView, DocRevisionDetail } from "@/types/doc"
 import { docTypeLabel } from "@/components/doc/doc-client-shared"
 import { BookOpen, Download, History, PenLine } from "lucide-react"
+import { isNovelDocV1 } from "@/lib/novel-doc"
+import { CleanTableContent } from "./clean-table-content"
 
 export function DocCleanView({
   projectId,
@@ -73,6 +75,8 @@ export function DocCleanView({
       ? "chapters"
       : (revision?.doc.docType ?? currentView?.doc.docType ?? "project")
   const cleanText = revision?.cleanText ?? currentView?.source.cleanText ?? revision?.plainText ?? currentView?.source.plainText ?? ""
+  const sourceJson = revision?.contentJson ?? currentView?.source.contentJson
+  const tableDocument = isNovelDocV1(sourceJson) && sourceJson.content.some((block) => block.type === "table") ? sourceJson : null
   const title = revision?.doc.title ?? currentView?.doc.title ?? "Clean 阅读"
   const projectTitle = revision?.project.title ?? currentView?.project.title ?? "项目"
   const typeLabel = revision ? docTypeLabel(revision.doc.docType) : currentView ? docTypeLabel(currentView.doc.docType) : "Doc"
@@ -141,7 +145,7 @@ export function DocCleanView({
           <Card className="p-6 sm:p-10">
             <article className="mx-auto flex max-w-2xl flex-col gap-5">
               <h2 className="text-xl font-semibold text-foreground">{title}</h2>
-              {cleanText
+              {tableDocument ? <CleanTableContent document={tableDocument} /> : cleanText
                 .split(/\n{2,}/)
                 .map((paragraph) => paragraph.trim())
                 .filter(Boolean)
@@ -150,7 +154,7 @@ export function DocCleanView({
                     {paragraph}
                   </p>
                 ))}
-              {!cleanText.trim() && (
+              {!tableDocument && !cleanText.trim() && (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <BookOpen className="size-4" />
                   当前没有可展示的 Clean 正文内容。

@@ -13,6 +13,7 @@ import { TextStyle } from "@tiptap/extension-text-style"
 import StarterKit from "@tiptap/starter-kit"
 import { Fragment, Slice, type Mark as ProseMirrorMark, type Node as ProseMirrorNode } from "@tiptap/pm/model"
 import { Plugin, PluginKey, Selection as ProseMirrorSelection, TextSelection } from "@tiptap/pm/state"
+import { CellSelection } from "@tiptap/pm/tables"
 import type { EditorState, Selection, Transaction } from "@tiptap/pm/state"
 import { dropPoint, Mapping } from "@tiptap/pm/transform"
 import { Decoration, DecorationSet, type EditorView } from "@tiptap/pm/view"
@@ -31,6 +32,7 @@ import {
   type NovelSuggestionPosition,
 } from "@/lib/novel-doc"
 import { cn } from "@/lib/utils"
+import { novelTableExtensions, selectionTouchesTable } from "./table-extensions"
 
 type RevisionPluginState = {
   // 连续删除只允许复用上一笔“由本插件明确生成”的删除修订。
@@ -787,9 +789,9 @@ export function applyInsertedSlice(
   slice: Slice,
   range: TextRange,
   options: RevisionTrackingOptions,
-  inputOptions: { uiEvent?: "paste" | "drop" } = {},
+  inputOptions: { uiEvent?: "paste" | "drop"; allowEmptyTable?: boolean } = {},
 ) {
-  if (!options.enabled || !sliceContainsText(slice)) {
+  if (!options.enabled || (!sliceContainsText(slice) && !inputOptions.allowEmptyTable)) {
     return false
   }
 
@@ -2066,6 +2068,7 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
         },
         props: {
           handleTextInput: (view, from, to, text) => {
+            if (view.state.selection instanceof CellSelection) return false
             if (composition.isComposing() || view.composing) {
               return false
             }
@@ -2093,6 +2096,15 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
             // 粘贴也可能发生在 IME 补标计时器之前；这里先收口上一段输入，避免粘贴内容和上一段无标记文本混在一起。
             composition.flushPendingFinalize(view)
 
+            // 矩形粘贴必须交给官方 tableEditing 按单元格分配；线性修订替换会破坏二维选区。
+            // 只有表格内部的二维覆盖交给表格插件。表格替换普通正文时仍须保留原文和批注锚点，
+            // 否则复制一个表格就能绕过正文修订；空表格也必须走同样的原文保护路径。
+            let containsTable = false
+            slice.content.descendants((node) => {
+              if (["table", "tableRow", "tableCell", "tableHeader"].includes(node.type.name)) containsTable = true
+            })
+            if (view.state.selection instanceof CellSelection || (containsTable && selectionTouchesTable(view.state.selection))) return false
+
             if (!this.options.enabled) {
               // 非修订模式完全交还 ProseMirror 默认 paste，让 HTML、段落和普通格式按原生 Slice 规则保留。
               return false
@@ -2103,6 +2115,7 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
               slice,
               rangeFromSelection(view.state, view.state.selection),
               this.options,
+              { allowEmptyTable: containsTable },
             )
           },
           handleDrop: (view, event, slice, moved) => {
@@ -2147,6 +2160,7 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
             return true
           },
           handleKeyDown: (view, event) => {
+            if (view.state.selection instanceof CellSelection) return false
             if (!this.options.enabled || (event.key !== "Backspace" && event.key !== "Delete")) {
               return false
             }
@@ -2186,6 +2200,7 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
             compositionstart: (view) => composition.handleCompositionStart(view),
             compositionend: (view) => composition.handleCompositionEnd(view),
             beforeinput: (view, domEvent) => {
+              if (view.state.selection instanceof CellSelection) return false
               const event = domEvent as InputEvent
 
               if (
@@ -2256,6 +2271,7 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
               return applied
             },
             cut: (view, domEvent) => {
+              if (view.state.selection instanceof CellSelection) return false
               const event = domEvent as ClipboardEvent
 
               if (!this.options.enabled || composition.isComposing() || view.composing || view.state.selection.empty) {
@@ -2686,7 +2702,7 @@ export function createNovelEditorExtensions(input: {
   createdBy: NovelCreatedBy
 }): Extensions {
   return [
-    NovelDocument,
+    NovelDocument.extend({ content: "(block | novelTable)+" }),
     NovelParagraph,
     NovelHeading.configure({ levels: [1, 2, 3] }),
     StarterKit.configure({
@@ -2700,6 +2716,7 @@ export function createNovelEditorExtensions(input: {
     Color,
     HighlightExtension,
     TextAlignExtension,
+    ...novelTableExtensions,
     CharacterCount,
     PlaceholderExtension,
     BlockId,

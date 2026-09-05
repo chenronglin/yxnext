@@ -3,6 +3,7 @@
 import { EditorContent, useEditor, useEditorState } from "@tiptap/react"
 import { BubbleMenu } from "@tiptap/react/menus"
 import type { Editor } from "@tiptap/core"
+import { CellSelection } from "@tiptap/pm/tables"
 import { AlignCenter, Bold, ChevronDown, Eraser, Heading1, Heading2, Heading3, Italic, MessageSquarePlus, Palette, Pilcrow, Quote, Save, Strikethrough, Trash2, UnderlineIcon } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
 
@@ -21,6 +22,7 @@ import {
   type NovelDocJson,
 } from "@/lib/novel-doc"
 import { cn } from "@/lib/utils"
+import { TableToolbar } from "./table-toolbar"
 
 export type SaveState = "idle" | "dirty" | "saving" | "saved" | "error" | "conflict" | "readonly"
 
@@ -82,7 +84,7 @@ function stringifyContent(value: NovelDocJson) {
 
 function shouldShowSelectionBubble({ editor, state }: { editor: Editor; state: Editor["state"] }) {
   // 该判断函数必须保持稳定引用；菜单是否显示仍完全由实时 EditorState 决定。
-  return editor.isEditable && !state.selection.empty
+  return editor.isEditable && !state.selection.empty && !(state.selection instanceof CellSelection)
 }
 
 function selectSelectionBubbleState({ editor }: { editor: Editor }) {
@@ -584,15 +586,16 @@ export function NovelTiptapEditor({
         className,
       )}
     >
-      <div className="absolute right-4 top-4 z-10 flex flex-wrap justify-end gap-2">
-        <span className={cn("inline-flex h-7 items-center gap-1 rounded-md border px-2 text-xs font-medium", statusTone(saveState))}>
-          <Save className="size-3.5" />
-          {statusLabel(saveState, readonlyLabel)}
-        </span>
-        <CharacterCountBadge editor={editor} fallback={fallbackCharacters} />
-      </div>
+      {editor && editable && <TableToolbar editor={editor} />}
+      <div className={cn("relative min-h-0 flex-1 overflow-hidden rounded-xl border border-border bg-card shadow-sm", !editable && "bg-muted/20")}>
+        <div className="absolute right-4 top-4 z-10 flex flex-wrap justify-end gap-2">
+          <span className={cn("inline-flex h-7 items-center gap-1 rounded-md border px-2 text-xs font-medium", statusTone(saveState))}>
+            <Save className="size-3.5" />
+            {statusLabel(saveState, readonlyLabel)}
+          </span>
+          <CharacterCountBadge editor={editor} fallback={fallbackCharacters} />
+        </div>
 
-      <div className={cn("min-h-0 flex-1 overflow-hidden rounded-xl border border-border bg-card shadow-sm", !editable && "bg-muted/20")}>
         {/* 这个滚动层是批注/修订跳转的定位基准；右侧卡片只滚动这里，不再推动整个页面。 */}
         <EditorContent editor={editor} className="h-full overflow-y-auto" data-doc-editor-scroll="true" />
       </div>

@@ -60,6 +60,7 @@ import type { ApiCurrentUser } from "@/server/shared/current-user"
 import type { DocCurrentSource } from "@/types/doc"
 import { getCurrentDocView, saveDocDraft, submitDoc, returnDocToAuthor, approveDoc, cancelDocApproval } from "@/server/modules/doc/doc.service"
 import { createNovelDocV1, createNovelParagraph, type NovelDocJson } from "@/lib/novel-doc"
+import { makeTable } from "./support/table-fixtures"
 
 const FIXED_TIME = new Date("2026-06-09T10:00:00.000Z")
 
@@ -372,7 +373,7 @@ function makeDocRecord(
 beforeEach(() => {
   vi.useFakeTimers()
   vi.setSystemTime(FIXED_TIME)
-  vi.clearAllMocks()
+  vi.resetAllMocks()
 
   mockPrisma.$transaction.mockImplementation(async (callback: (tx: typeof mockTx) => unknown) => callback(mockTx))
 
@@ -427,6 +428,36 @@ describe("getCurrentDocView", () => {
 })
 
 describe("saveDocDraft", () => {
+  it("空表格与全部删除态正文可以保存，服务端计算出的空清稿是合法结果", async () => {
+    const doc = makeDocRecord({ status: "draft", holderRole: "author", activeDraft: makeDraft({ ownerRole: "author", ownerUserId: authorActor.userId, lockVersion: 3 }) })
+    mockTx.doc.findFirst.mockResolvedValueOnce(doc)
+    mockPrisma.doc.findFirst.mockResolvedValueOnce(doc)
+    await saveDocDraft(authorActor, "1", {
+      lockVersion: 3,
+      contentJson: makeNovelContent([makeTable([[""]]), { type: "paragraph", content: [{ type: "text", text: "删除态原文", marks: [{ type: "revision", attrs: { id: "r1", role: "original" } }] }] }]),
+      wordCount: 0,
+      plainText: "",
+    })
+    expect(mockTx.docCurrentDraft.updateMany.mock.calls[0][0].data.cleanText.trim()).toBe("")
+  })
+  it("保存表格时服务端重算 TSV 投影，完整行列写入草稿且不生成版本", async () => {
+    const doc = makeDocRecord({ status: "draft", holderRole: "author", activeDraft: makeDraft({ ownerRole: "author", ownerUserId: authorActor.userId, lockVersion: 3 }) })
+    mockTx.doc.findFirst.mockResolvedValueOnce(doc)
+    mockPrisma.doc.findFirst.mockResolvedValueOnce(doc)
+    await saveDocDraft(authorActor, "1", { lockVersion: 3, contentJson: makeNovelContent([makeTable()]), wordCount: 0, plainText: "客户端错误投影" })
+    const data = mockTx.docCurrentDraft.updateMany.mock.calls[0][0].data
+    expect(data.plainText).toBe("姓名\t数量\n甲\t3")
+    expect(data.cleanText).toBe("姓名\t数量\n甲\t3")
+    expect(data.contentJson.content[0]).toEqual(makeTable())
+    expect(mockTx.docRevision.create).not.toHaveBeenCalled()
+  })
+
+  it("异常表格在写库前被拒绝", async () => {
+    await expect(saveDocDraft(authorActor, "1", {
+      lockVersion: 3, contentJson: makeNovelContent([makeTable([["甲", "乙"], ["丙"]])]), wordCount: 0, plainText: "",
+    })).rejects.toMatchObject({ code: "DOC_TABLE_INVALID", status: 400 })
+    expect(mockTx.docCurrentDraft.updateMany).not.toHaveBeenCalled()
+  })
   it("作者保存成功时只更新 CurrentDraft 并递增 lockVersion，不生成 Revision", async () => {
     const beforeDoc = makeDocRecord({
       status: "draft",
@@ -616,6 +647,15 @@ describe("saveDocDraft", () => {
 })
 
 describe("submitDoc", () => {
+  it("表格完整进入提交版本快照和交接草稿", async () => {
+    const contentJson = makeNovelContent([makeTable()])
+    const doc = makeDocRecord({ status: "draft", holderRole: "author", activeDraft: makeDraft({ ownerRole: "author", ownerUserId: authorActor.userId, lockVersion: 3, contentJson }) })
+    mockTx.doc.findFirst.mockResolvedValueOnce(doc)
+    mockPrisma.doc.findFirst.mockResolvedValueOnce(doc)
+    await submitDoc(authorActor, "1", { lockVersion: 3 })
+    expect(mockTx.docRevision.create.mock.calls[0][0].data.contentJson).toEqual(contentJson)
+    expect(mockTx.docCurrentDraft.create.mock.calls[0][0].data.contentJson).toEqual(contentJson)
+  })
   it("作者提交成功时生成 author_submit Revision，切换 holder 给编辑，并创建待审待办", async () => {
     const beforeDoc = makeDocRecord({
       status: "draft",
@@ -1097,7 +1137,7 @@ describe("approveDoc", () => {
 })
 
 describe("cancelDocApproval", () => {
-  it("编辑取消定稿后只恢复稿件为作者待改，不回退项目阶段", async () => {
+  it.each([false, true])("编辑取消定稿后完整恢复正文（包含表格：%s），不回退项目阶段", async (withTable) => {
     const finalRevision = makeRevision({
       revisionId: 905n,
       revisionNo: 6,
@@ -1105,6 +1145,7 @@ describe("cancelDocApproval", () => {
         createNovelParagraph({
           text: "已经定稿的正文",
         }),
+        ...(withTable ? [makeTable()] : []),
       ]),
       wordCount: 1800,
       plainText: "已经定稿的正文",

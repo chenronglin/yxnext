@@ -4,5 +4,8 @@ allowBuilds:
   msw: true
   prisma: true
   sharp: true
+# 适配器固定依赖的 3.4.5 存在 TLS 凭据泄露问题；与项目现有驱动统一到安全版本。
+overrides:
+  "@prisma/adapter-mariadb>mariadb": "3.5.3"
 minimumReleaseAgeExclude:
   - eslint@10.5.0

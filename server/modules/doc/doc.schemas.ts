@@ -1,6 +1,6 @@
 import { z } from "zod"
 
-// Doc 内容真相源固定是完整文档 JSON 根对象；后端不解析节点，只做结构级兜底。
+// Doc 内容真相源固定是完整文档 JSON 根对象；这里校验请求形状，service 再校验 V1 根属性和基础表格结构。
 function isJsonRootObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }

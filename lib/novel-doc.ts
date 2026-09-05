@@ -293,6 +293,8 @@ function cleanInlineContentForExport(content: NovelContentNode[] | undefined): N
 
     const node = child as NovelContentNode
 
+    if (node.type === "editSuggestion") continue
+
     if (isNovelTextNode(node)) {
       const marks = (Array.isArray(child.marks) ? child.marks : []).filter(
         (mark): mark is NovelMarkJson => isRecord(mark) && typeof mark.type === "string",
@@ -362,7 +364,7 @@ export function stampNovelDocUpdatedAt(doc: NovelDocJson, updatedAt: string | Da
   }
 }
 
-function textFromInlineContent(content: NovelContentNode[] | undefined, mode: "plain" | "clean", counter: ProjectionCounter) {
+function textFromInlineContent(content: NovelContentNode[] | undefined, mode: "plain" | "clean", counter: ProjectionCounter, preserveBreaks = false) {
   let result = ""
 
   for (const child of content ?? []) {
@@ -387,13 +389,28 @@ function textFromInlineContent(content: NovelContentNode[] | undefined, mode: "p
       continue
     }
 
-    result += textFromInlineContent(Array.isArray(child.content) ? child.content : [], mode, counter)
+    if (child.type === "hardBreak") {
+      if (preserveBreaks) result += "\n"
+      continue
+    }
+
+    result += textFromInlineContent(Array.isArray(child.content) ? child.content : [], mode, counter, preserveBreaks)
   }
 
   return result
 }
 
 function blockText(block: NovelBlockNode, mode: "plain" | "clean", counter: ProjectionCounter) {
+  if (block.type === "table") {
+    // TSV 投影保留二维边界与空单元格；JSON 始终保留完整结构，纯文本仅用于摘要、计数和文本导出。
+    return (block.content ?? []).map((row) =>
+      (isNovelTextNode(row) ? [] : row.content ?? []).map((cell) =>
+        (isNovelTextNode(cell) ? [] : cell.content ?? []).map((paragraph) =>
+          isNovelTextNode(paragraph) ? paragraph.text : textFromInlineContent(paragraph.content, mode, counter, true),
+        ).join("\n"),
+      ).join("\t"),
+    ).join("\n")
+  }
   if (block.type === "editSuggestion") {
     const id = isRecord(block.attrs) && typeof block.attrs.id === "string" ? block.attrs.id : createPrefixedId("suggestion")
 

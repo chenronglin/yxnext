@@ -1,6 +1,6 @@
 import "server-only"
 
-import { AlignmentType, Document, HeadingLevel, Packer, Paragraph, ShadingType, TextRun } from "docx"
+import { AlignmentType, Document, HeadingLevel, Packer, Paragraph, ShadingType, Table, TableCell, TableRow, TextRun, WidthType } from "docx"
 
 import { extractCleanNovelDocBlocks, isNovelTextNode, type NovelBlockNode, type NovelContentNode, type NovelDocJson, type NovelMarkJson } from "@/lib/novel-doc"
 
@@ -138,14 +138,29 @@ function blockToParagraph(block: NovelBlockNode) {
 function novelDocToParagraphs(doc: NovelDocJson) {
   // Word 导出优先使用编辑器 JSON，而不是 exportText 纯文本；这样可以保留作者原始分段、标题和基础文字格式。
   // extractCleanNovelDocBlocks 会去掉批注/修订协作语义，只留下适合交付的清稿正文块。
-  return extractCleanNovelDocBlocks(doc).map(blockToParagraph)
+  return extractCleanNovelDocBlocks(doc).map((block) => {
+    if (block.type !== "table") return blockToParagraph(block)
+    // 每个编辑器行列对应真正的 Word 行列，空单元格也保留；只支持基础表格，不生成合并或公式域。
+    return new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      rows: (block.content ?? []).filter((row): row is NovelBlockNode => !isNovelTextNode(row)).map((row) => new TableRow({
+        tableHeader: Boolean(row.content?.length && row.content.every((cell) => cell.type === "tableHeader")),
+        children: (row.content ?? []).filter((cell): cell is NovelBlockNode => !isNovelTextNode(cell)).map((cell) => new TableCell({
+          children: cell.content?.length
+            ? cell.content.filter((paragraph): paragraph is NovelBlockNode => !isNovelTextNode(paragraph)).map(blockToParagraph)
+            : [new Paragraph("")],
+          shading: cell.type === "tableHeader" ? { fill: "F1F5F9", type: ShadingType.CLEAR } : undefined,
+        })),
+      })),
+    })
+  })
 }
 
 export async function buildDocxBuffer(input: {
   title: string
   sections: DocxSectionInput[]
 }) {
-  const children: Paragraph[] = [
+  const children: Array<Paragraph | Table> = [
     new Paragraph({
       text: input.title,
       heading: HeadingLevel.TITLE,

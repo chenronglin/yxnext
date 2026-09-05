@@ -24,6 +24,7 @@
     "@tiptap/extension-highlight": "^3.26.1",
     "@tiptap/extension-paragraph": "^3.26.1",
     "@tiptap/extension-placeholder": "^3.26.1",
+    "@tiptap/extension-table": "3.26.1",
     "@tiptap/extension-text-align": "3.26.1",
     "@tiptap/extension-text-style": "^3.26.1",
     "@tiptap/extension-underline": "^3.26.1",
@@ -35,8 +36,8 @@
     "clsx": "^2.1.1",
     "docx": "^9.7.1",
     "lucide-react": "^1.16.0",
-    "mariadb": "^3.5.2",
-    "next": "16.2.6",
+    "mariadb": "3.5.3",
+    "next": "16.2.11",
     "react": "^19",
     "react-dom": "^19",
     "server-only": "^0.0.1",
@@ -46,6 +47,11 @@
     "use-debounce": "10.0.6",
     "zod": "^4.4.3"
   },
+  "overrides": {
+    "@prisma/adapter-mariadb": {
+      "mariadb": "3.5.3"
+    }
+  },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.2.0",
     "@types/bcryptjs": "^3.0.0",
@@ -54,6 +60,8 @@
     "@types/react-dom": "^19",
     "eslint": "^10.5.0",
     "globals": "^17.6.0",
+    "jsdom": "^26.1.0",
+    "jszip": "^3.10.1",
     "postcss": "^8.5",
     "prisma": "^7.8.0",
     "tailwindcss": "^4.2.0",
