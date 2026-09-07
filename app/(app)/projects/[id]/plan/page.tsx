@@ -71,6 +71,7 @@ export default function StagePlanPage({ params }: { params: Promise<{ id: string
       })
       setProject(response.project)
       setMessage({ type: "success", text: "阶段计划已更新" })
+      return response.project
     } catch (error) {
       setMessage({ type: "error", text: error instanceof Error ? error.message : "阶段计划保存失败" })
       throw error

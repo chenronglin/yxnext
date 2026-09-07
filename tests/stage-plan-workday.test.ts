@@ -228,6 +228,40 @@ describe("updateProjectStagePlans", () => {
     expect(mockTx.operationLog.create).not.toHaveBeenCalled()
   })
 
+  it("同一编辑使用保存后返回的新锁版本可以连续多次修正计划", async () => {
+    mockTx.project.findFirst
+      .mockResolvedValueOnce(makeProject({ lockVersion: 3 }))
+      .mockResolvedValueOnce(makeProject({ lockVersion: 4 }))
+    mockPrisma.project.findFirst
+      .mockResolvedValueOnce(makeProject({ lockVersion: 4 }))
+      .mockResolvedValueOnce(makeProject({ lockVersion: 5 }))
+
+    await updateProjectStagePlans(editorActor, "10", {
+      reason: "第一次调整",
+      items: [{ stage: "synopsis", planDays: 3, lockVersion: 3 }],
+    })
+    await updateProjectStagePlans(editorActor, "10", {
+      reason: "发现日期有误后再次修正",
+      items: [{ stage: "synopsis", planDays: 4, lockVersion: 4 }],
+    })
+
+    expect(mockTx.projectStagePlan.updateMany).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        where: { stagePlanId: 30n, lockVersion: 3 },
+        data: expect.objectContaining({ lockVersion: { increment: 1 } }),
+      }),
+    )
+    expect(mockTx.projectStagePlan.updateMany).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        where: { stagePlanId: 30n, lockVersion: 4 },
+        data: expect.objectContaining({ lockVersion: { increment: 1 } }),
+      }),
+    )
+    expect(mockTx.projectStagePlanChange.create).toHaveBeenCalledTimes(2)
+  })
+
   it("把格式正确但实际不存在的日历日期转换为稳定业务错误", async () => {
     await expect(
       updateProjectStagePlans(editorActor, "10", {

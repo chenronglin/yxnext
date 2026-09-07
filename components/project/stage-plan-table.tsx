@@ -21,7 +21,7 @@ import {
 interface StagePlanTableProps {
   project: ProjectItem
   editable?: boolean
-  onSave?: (input: UpdateProjectStagePlansInput) => Promise<void> | void
+  onSave?: (input: UpdateProjectStagePlansInput) => Promise<ProjectItem | void> | ProjectItem | void
   saving?: boolean
 }
 
@@ -54,33 +54,37 @@ function makeDraft(plans: StagePlan[]) {
 export function StagePlanTable({ project, editable = false, onSave, saving = false }: StagePlanTableProps) {
   const t = useT()
   const [editing, setEditing] = useState(false)
+  // 单独保存最近一次成功提交后的计划基线。父页面 setState 与子组件重新渲染之间存在调度窗口，
+  // 若仍从旧 props 读取 lockVersion，用户紧接着第二次修改时会被误判为并发冲突。
+  const [baselinePlans, setBaselinePlans] = useState<StagePlan[]>(project.stagePlans)
   const [draft, setDraft] = useState<Record<string, StageDraft>>(() => makeDraft(project.stagePlans))
   const [reason, setReason] = useState("")
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    setBaselinePlans(project.stagePlans)
     setDraft(makeDraft(project.stagePlans))
   }, [project.stagePlans])
 
   const editablePlans = useMemo(
     () =>
-      project.stagePlans.filter(
+      baselinePlans.filter(
         (plan): plan is typeof plan & { stage: "synopsis" | "outline" | "chapter" | "release" } =>
           plan.stage !== "completed" && plan.status !== "completed",
       ),
-    [project.stagePlans],
+    [baselinePlans],
   )
   const recentChanges = useMemo(
     () =>
-      project.stagePlans
+      baselinePlans
         .flatMap((plan) => (plan.changes ?? []).map((change) => ({ ...change, stage: plan.stage })))
         .sort((left, right) => right.changedAt.localeCompare(left.changedAt))
         .slice(0, 10),
-    [project.stagePlans],
+    [baselinePlans],
   )
 
   function cancelEditing() {
-    setDraft(makeDraft(project.stagePlans))
+    setDraft(makeDraft(baselinePlans))
     setReason("")
     setError(null)
     setEditing(false)
@@ -130,7 +134,7 @@ export function StagePlanTable({ project, editable = false, onSave, saving = fal
     }
 
     setError(null)
-    await onSave({
+    const updatedProject = await onSave({
       reason: normalizedReason,
       items: changedPlans.map((plan) => {
         const item = draft[plan.stage]
@@ -145,6 +149,14 @@ export function StagePlanTable({ project, editable = false, onSave, saving = fal
           : { ...base, planDays: Number(item.days) }
       }),
     })
+
+    if (updatedProject) {
+      // 使用接口返回的新 lockVersion 和服务端工作日计算结果立即更新本地基线，
+      // 不必等待父页面完成下一轮渲染即可再次进入编辑并继续保存。
+      setBaselinePlans(updatedProject.stagePlans)
+      setDraft(makeDraft(updatedProject.stagePlans))
+    }
+
     setReason("")
     setEditing(false)
   }
@@ -200,7 +212,7 @@ export function StagePlanTable({ project, editable = false, onSave, saving = fal
             </tr>
           </thead>
           <tbody>
-            {project.stagePlans.map((plan) => {
+            {baselinePlans.map((plan) => {
               const canEditPlan = editing && plan.stage !== "completed" && plan.status !== "completed"
               const item = draft[plan.stage]
 

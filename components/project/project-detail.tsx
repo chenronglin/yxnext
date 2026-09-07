@@ -203,6 +203,7 @@ export function ProjectDetail({ id }: { id: string }) {
 
       setProject(response.project)
       setMessage({ type: "success", text: "阶段计划已更新" })
+      return response.project
     } catch (error) {
       setMessage({
         type: "error",

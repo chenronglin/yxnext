@@ -187,7 +187,7 @@ export default function GovernanceDetailPage({ params }: { params: Promise<{ id:
     setMessage(null)
 
     try {
-      await fetchJson<GovernanceDetailResponse>(`/api/admin/projects/${project.id}/stage-plans`, {
+      const response = await fetchJson<GovernanceDetailResponse>(`/api/admin/projects/${project.id}/stage-plans`, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
@@ -199,7 +199,10 @@ export default function GovernanceDetailPage({ params }: { params: Promise<{ id:
         type: "success",
         text: "阶段计划已更新",
       })
-      await loadProject()
+      setProject(response.project)
+      setEditors(response.editors)
+      setAuthors(response.authors)
+      return response.project
     } catch (error) {
       setMessage({
         type: "error",
