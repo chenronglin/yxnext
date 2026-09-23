@@ -115,8 +115,12 @@ type EditSuggestionAttrs = {
 }
 
 declare module "@tiptap/core" {
+  interface Storage {
+    revision: RevisionTrackingOptions
+  }
   interface Commands<ReturnType> {
     novelRevision: {
+      setRevisionTracking: (options: RevisionTrackingOptions) => ReturnType
       markSelectionAsDeletedRevision: () => ReturnType
     }
   }
@@ -1942,7 +1946,7 @@ export function updateCommentBody(editor: Editor, commentId: string, nextBody: s
   return true
 }
 
-export const RevisionMark = Mark.create<RevisionTrackingOptions>({
+export const RevisionMark = Mark.create<RevisionTrackingOptions, RevisionTrackingOptions>({
   name: "revision",
   inclusive: false,
   excludes: "revision",
@@ -1952,6 +1956,12 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
       enabled: false,
       createdBy: fallbackActor(),
     }
+  },
+
+  // options 只负责初始化；审核权限会在同一个 Editor 实例里变化，实时配置必须按实例保存在 storage。
+  // Tiptap 的 setOptions({ extensions }) 不会重建现有插件，不能依赖 React 重算 extensions 切换修订。
+  addStorage() {
+    return { ...this.options }
   },
 
   addAttributes() {
@@ -2007,15 +2017,26 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
 
   addCommands() {
     return {
+      setRevisionTracking:
+        (options) =>
+        ({ tr, dispatch }) => {
+          if (dispatch) {
+            this.storage.enabled = options.enabled
+            this.storage.createdBy = options.createdBy
+            // 只刷新插件/工具栏状态，不改正文、不生成修订，也不触发自动保存。
+            tr.setMeta("revisionTrackingChanged", true)
+          }
+          return true
+        },
       markSelectionAsDeletedRevision:
         () =>
         ({ state, dispatch }) =>
-          markDeletedRange(state, rangeFromSelection(state, state.selection), this.options, dispatch),
+          markDeletedRange(state, rangeFromSelection(state, state.selection), this.storage, dispatch),
     }
   },
 
   addProseMirrorPlugins() {
-    const composition = createRevisionCompositionController(() => this.options)
+    const composition = createRevisionCompositionController(() => this.storage)
 
     return [
       new Plugin<RevisionPluginState>({
@@ -2057,7 +2078,7 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
               }
             }
 
-            if (meta?.id || transaction.docChanged || transaction.selectionSet) {
+            if (meta?.id || transaction.docChanged || transaction.selectionSet || transaction.getMeta("revisionTrackingChanged")) {
               // 输入、粘贴、undo/redo、setContent 和未知外部事务都必须中止连续删除。
               // 只有上面的显式 delete meta 可以延续 identity，避免 undo 后“复活”已经撤销的 revision id。
               return { lastDeleteAttrs: null, continuationBoundary: null, deleteDirection: null }
@@ -2082,11 +2103,11 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
               : inputRangeBeforeFinalize
             const inputRange = normalizeRange(view.state, mappedInputRange.from, mappedInputRange.to)
 
-            if (!this.options.enabled) {
+            if (!this.storage.enabled) {
               return applyPlainTextWithoutRevision(view, text, inputRange)
             }
 
-            return applyInsertedText(view, text, inputRange, this.options)
+            return applyInsertedText(view, text, inputRange, this.storage)
           },
           handlePaste: (view, _event, slice) => {
             if (composition.isComposing() || view.composing) {
@@ -2105,7 +2126,7 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
             })
             if (view.state.selection instanceof CellSelection || (containsTable && selectionTouchesTable(view.state.selection))) return false
 
-            if (!this.options.enabled) {
+            if (!this.storage.enabled) {
               // 非修订模式完全交还 ProseMirror 默认 paste，让 HTML、段落和普通格式按原生 Slice 规则保留。
               return false
             }
@@ -2114,7 +2135,7 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
               view,
               slice,
               rangeFromSelection(view.state, view.state.selection),
-              this.options,
+              this.storage,
               { allowEmptyTable: containsTable },
             )
           },
@@ -2125,7 +2146,7 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
 
             composition.flushPendingFinalize(view)
 
-            if (!this.options.enabled) {
+            if (!this.storage.enabled) {
               return false
             }
 
@@ -2152,7 +2173,7 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
               view,
               slice,
               { from: insertPosition, to: insertPosition },
-              this.options,
+              this.storage,
               { uiEvent: "drop" },
             )
 
@@ -2161,7 +2182,7 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
           },
           handleKeyDown: (view, event) => {
             if (view.state.selection instanceof CellSelection) return false
-            if (!this.options.enabled || (event.key !== "Backspace" && event.key !== "Delete")) {
+            if (!this.storage.enabled || (event.key !== "Backspace" && event.key !== "Delete")) {
               return false
             }
 
@@ -2194,7 +2215,7 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
               return true
             }
 
-            return markDeletedRange(state, targetRange, this.options, view.dispatch, event.key === "Delete" ? "end" : "start")
+            return markDeletedRange(state, targetRange, this.storage, view.dispatch, event.key === "Delete" ? "end" : "start")
           },
           handleDOMEvents: {
             compositionstart: (view) => composition.handleCompositionStart(view),
@@ -2204,7 +2225,7 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
               const event = domEvent as InputEvent
 
               if (
-                !this.options.enabled ||
+                !this.storage.enabled ||
                 !event.cancelable ||
                 event.isComposing ||
                 composition.isComposing() ||
@@ -2230,7 +2251,7 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
               let targetRange = normalizeRange(view.state, mappedRange.from, mappedRange.to)
 
               if (isRevisionInsert && typeof event.data === "string" && event.data.length > 0) {
-                const applied = applyInsertedText(view, event.data, targetRange, this.options)
+                const applied = applyInsertedText(view, event.data, targetRange, this.storage)
 
                 if (applied) {
                   event.preventDefault()
@@ -2259,7 +2280,7 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
               const applied = markDeletedRange(
                 view.state,
                 targetRange,
-                this.options,
+                this.storage,
                 view.dispatch,
                 direction === "forward" ? "end" : "start",
               )
@@ -2274,7 +2295,7 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
               if (view.state.selection instanceof CellSelection) return false
               const event = domEvent as ClipboardEvent
 
-              if (!this.options.enabled || composition.isComposing() || view.composing || view.state.selection.empty) {
+              if (!this.storage.enabled || composition.isComposing() || view.composing || view.state.selection.empty) {
                 return false
               }
 
@@ -2297,7 +2318,7 @@ export const RevisionMark = Mark.create<RevisionTrackingOptions>({
               event.clipboardData.clearData()
               event.clipboardData.setData("text/html", dom.innerHTML)
               event.clipboardData.setData("text/plain", text)
-              return markDeletedRange(state, range, this.options, view.dispatch)
+              return markDeletedRange(state, range, this.storage, view.dispatch)
             },
           },
         },
@@ -2732,7 +2753,7 @@ export function createNovelEditorExtensions(input: {
 }
 
 export function isRevisionTrackingEnabled(editor: Editor | null) {
-  return Boolean(editor?.extensionManager.extensions.find((extension) => extension.name === "revision")?.options.enabled)
+  return Boolean(editor?.storage.revision?.enabled)
 }
 
 export function discussionButtonClass(active: boolean) {

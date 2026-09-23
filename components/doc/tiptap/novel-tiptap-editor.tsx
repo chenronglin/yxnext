@@ -397,7 +397,8 @@ export function NovelTiptapEditor({
   onChange,
   onReady,
 }: NovelTiptapEditorProps) {
-  const extensions = useMemo(() => createNovelEditorExtensions({ trackChanges, createdBy }), [createdBy, trackChanges])
+  // 扩展和 Editor 保持同一实例；后续权限变化通过命令同步，保留当前正文、选区及撤销历史。
+  const [extensions] = useState(() => createNovelEditorExtensions({ trackChanges, createdBy }))
   const initialValue = useRef<NovelDocJson | null>(null)
 
   if (!initialValue.current) {
@@ -482,14 +483,34 @@ export function NovelTiptapEditor({
   }, [editor, onReady])
 
   useEffect(() => {
-    if (!editor || editor.isEditable === editable) {
+    if (!editor || editor.isDestroyed) {
       return
     }
+    const currentEditor = editor
+    let retryTimer: ReturnType<typeof setTimeout> | undefined
 
-    // setEditable 的第二个参数默认会主动 emit update；权限切换不属于正文修改，必须禁止伪更新，
-    // 否则首次挂载或转只读时会被父层误判为 dirty，并安排一次没有实际内容变化的自动保存。
-    editor.setEditable(editable, false)
-  }, [editable, editor])
+    function syncEditingMode() {
+      if (currentEditor.isDestroyed) return
+      const tracking = currentEditor.storage.revision
+      const changed = tracking.enabled !== trackChanges ||
+        tracking.createdBy.userId !== createdBy.userId || tracking.createdBy.role !== createdBy.role ||
+        tracking.createdBy.nameSnapshot !== createdBy.nameSnapshot
+
+      // 收回权限立即只读；修订模式改变时，必须先完成配置同步，再允许新的正文输入。
+      // emitUpdate=false 避免单纯权限切换被当成正文修改并触发自动保存。
+      if ((!editable || changed) && currentEditor.isEditable) currentEditor.setEditable(false, false)
+      if (changed && isRevisionCompositionBusy(currentEditor)) {
+        // 不在中文输入法收口前关闭修订，否则尚未补标的最终文本会失去修订身份。
+        retryTimer = setTimeout(syncEditingMode, COMPOSITION_SETTLE_RETRY_MS)
+        return
+      }
+      if (changed) currentEditor.commands.setRevisionTracking({ enabled: trackChanges, createdBy })
+      if (currentEditor.isEditable !== editable) currentEditor.setEditable(editable, false)
+    }
+
+    syncEditingMode()
+    return () => { if (retryTimer) clearTimeout(retryTimer) }
+  }, [createdBy, editable, editor, trackChanges])
 
   useEffect(() => {
     if (!editor || editor.isDestroyed) {
