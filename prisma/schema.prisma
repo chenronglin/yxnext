@@ -112,6 +112,8 @@ enum DocAction {
   editor_save
   editor_reject
   editor_approve
+  author_withdraw
+  editor_start_review
 }
 
 enum DraftStatus {
@@ -129,6 +131,7 @@ enum RevisionAction {
   author_submit
   editor_reject
   editor_approve
+  author_withdraw
 }
 
 enum ActorRole {
@@ -639,6 +642,8 @@ model DocCurrentDraft {
   status               DraftStatus @default(active) @map("status")
   lockVersion          Int         @default(0) @map("lock_version") @db.UnsignedInt
   saveCount            Int         @default(0) @map("save_count") @db.UnsignedInt
+  // 审核开始标记跟随本轮草稿，重新提交生成新草稿时自然重置；不设置任何撤回时限。
+  reviewStartedAt      DateTime?   @map("review_started_at") @db.DateTime(3)
   createdAt            DateTime    @default(now()) @map("created_at") @db.DateTime(3)
   updatedAt            DateTime    @default(now()) @updatedAt @map("updated_at") @db.DateTime(3)
   sealedAt             DateTime?   @map("sealed_at") @db.DateTime(3)

@@ -22,6 +22,7 @@ const TYPE_LABEL_KEYS: Record<NotificationCategory, `notifications.category.${No
   si_prerelease: "notifications.category.si_prerelease",
   si_convert: "notifications.category.si_convert",
   doc_submit: "notifications.category.doc_submit",
+  doc_withdraw: "notifications.category.doc_withdraw",
   doc_approve: "notifications.category.doc_approve",
   doc_return: "notifications.category.doc_return",
   stage_unlock: "notifications.category.stage_unlock",
@@ -38,6 +39,7 @@ const TYPE_LABEL_KEYS: Record<NotificationCategory, `notifications.category.${No
 const FILTERS: { key: NotificationCategory | "all"; labelKey: string }[] = [
   { key: "all", labelKey: "common.all" },
   { key: "doc_submit", labelKey: TYPE_LABEL_KEYS.doc_submit },
+  { key: "doc_withdraw", labelKey: TYPE_LABEL_KEYS.doc_withdraw },
   { key: "doc_return", labelKey: TYPE_LABEL_KEYS.doc_return },
   { key: "doc_approve", labelKey: TYPE_LABEL_KEYS.doc_approve },
   { key: "approval_request", labelKey: TYPE_LABEL_KEYS.approval_request },

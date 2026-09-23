@@ -2,6 +2,31 @@ import type { ZhCNMessages } from "@/lib/i18n/locales/zh-CN"
 
 // 英文字典使用 satisfies 约束，确保任何中文 key 缺少英文翻译时都会类型报错。
 export const enUSMessages = {
+  "doc.withdraw.review_started": "The editor has started review. This submission cannot be withdrawn.",
+  "doc.loadFailedHint": "The document could not be loaded. Please refresh the page and try again.",
+  "doc.review.start": "Start review",
+  "doc.review.starting": "Starting review...",
+  "doc.review.startSuccess": "Review started. The author can no longer withdraw this submission.",
+  "doc.review.beforeStart": "Preview only. Start review to edit, comment, approve or return. The author will then be unable to withdraw.",
+  "api.DOC_WITHDRAW_REVIEW_STARTED": "The editor has started review. This submission cannot be withdrawn.",
+  "api.DOC_REVIEW_NOT_STARTED": "Start review before editing, commenting, approving or returning this document.",
+
+  "notifications.category.doc_withdraw": "Submission Withdrawn",
+  "notifications.docWithdraw.title": "Author withdrew the submission",
+  "notifications.docWithdraw.body": "The author withdrew {docTitle} in “{projectTitle}”. Please wait for resubmission.",
+  "doc.withdraw.title": "Withdraw submission",
+  "doc.withdraw.pendingReview": "Submitted, awaiting the editor to start review",
+  "doc.withdraw.description": "Restore this submission to a draft to edit and resubmit. The review task will be cancelled and submission history preserved.",
+  "doc.withdraw.confirm": "Confirm withdrawal",
+  "doc.withdraw.busy": "Withdrawing...",
+  "doc.withdraw.success": "Submission withdrawn. You can continue editing.",
+  "doc.withdraw.available": "You may withdraw, edit and resubmit any time before the editor starts review. There is no time limit or limit on withdrawals.",
+  "doc.withdraw.unavailable": "This submission cannot be withdrawn.",
+  "doc.workflow.changed": "This draft was withdrawn or handed off. Editing is paused. Unsaved content remains on this page; copy it before refreshing.",
+  "api.DOC_DRAFT_CHANGED": "This draft was withdrawn or handed off. Refresh before continuing.",
+  "api.DOC_WITHDRAW_FORBIDDEN": "Only the project author can withdraw a submission.",
+  "api.DOC_WITHDRAW_UNAVAILABLE": "This submission cannot be withdrawn.",
+
   "metadata.title": "阅享 · Novel collaboration and review platform",
   "metadata.description": "阅享 is a collaboration and review platform for novels from story ideas to final delivery.",
   "brand.name": "阅享",

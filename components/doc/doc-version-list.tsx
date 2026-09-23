@@ -9,19 +9,21 @@ import { PageHeader } from "@/components/page-header"
 import { StatusBadge } from "@/components/status-badge"
 import { fetchJson } from "@/lib/api"
 import { formatDateOnly } from "@/lib/utils"
-import type { DocRevisionListResponse } from "@/types/doc"
+import type { ApiRevisionAction, DocRevisionListResponse } from "@/types/doc"
 import { ROLE_LABEL_KEYS } from "@/types/domain"
 import { docTypeLabel } from "@/components/doc/doc-client-shared"
 import { useT } from "@/hooks/use-t"
 import { ArrowLeft, Eye, FileText } from "lucide-react"
 
-function revisionActionLabel(action: "author_submit" | "editor_return" | "editor_approve") {
+function revisionActionLabel(action: ApiRevisionAction) {
+  if (action === "author_withdraw") return "作者撤回"
   if (action === "author_submit") return "作者提交"
   if (action === "editor_return") return "编辑退回"
   return "编辑通过"
 }
 
-function revisionActionTone(action: "author_submit" | "editor_return" | "editor_approve") {
+function revisionActionTone(action: ApiRevisionAction) {
+  if (action === "author_withdraw") return "neutral" as const
   if (action === "author_submit") return "info" as const
   if (action === "editor_return") return "warning" as const
   return "success" as const
@@ -71,7 +73,7 @@ export function DocVersionList({ projectId, docRef }: { projectId: string; docRe
       <PageHeader
         breadcrumb={[response?.project.title ?? "Doc", response ? docTypeLabel(response.doc.docType) : "历史版本", "历史版本"]}
         title="历史版本"
-        description={response ? `${response.doc.title} 的提交、退回与通过记录` : "正在加载历史版本"}
+        description={response ? `${response.doc.title} 的提交、撤回、退回与通过记录` : "正在加载历史版本"}
         actions={
           <Button asChild variant="outline" className="bg-transparent">
             <Link href={base}>

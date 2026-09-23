@@ -63,6 +63,19 @@ describe("workbench.service", () => {
     })
   })
 
+  it("作者撤回通知独立分类，正确翻译并跳转原稿件", async () => {
+    mockPrisma.notification.findMany.mockResolvedValueOnce([{
+      notificationId: 99n, type: "doc_submission_withdrawn", messageKey: "notifications.docWithdraw",
+      messageParams: { projectTitle: "测试项目", docTitle: "第一章" }, title: "作者已撤回提交", body: "旧文案",
+      projectId: 99n, docId: 88n, siId: null, preissueId: null, createdAt: new Date(), isRead: false,
+    }])
+    const result = await listNotifications(actor, "en-US")
+    expect(result.items[0]).toMatchObject({
+      category: "doc_withdraw", title: "Author withdrew the submission",
+      detail: "The author withdrew 第一章 in “测试项目”. Please wait for resubmission.", href: "/projects/99/docs/88",
+    })
+  })
+
   it("待办列表返回独立的 read/readAt 字段，不再拼接临时任务", async () => {
     mockPrisma.todoItem.findMany.mockResolvedValueOnce([
       {

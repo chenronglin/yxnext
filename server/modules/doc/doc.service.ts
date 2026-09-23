@@ -24,11 +24,14 @@ import type {
   DocRevisionDetail,
   DocRevisionListItem,
   DocRevisionListResponse,
+  DocWithdrawalState,
+  DocWorkflowState,
 } from "@/types/doc"
 
 type TxClient = Prisma.TransactionClient
 
 type SaveDocInput = {
+  draftId?: string
   lockVersion: number
   contentJson: Record<string, unknown>
   wordCount: number
@@ -43,16 +46,19 @@ type SaveDocInput = {
 }
 
 type SubmitDocInput = {
+  draftId?: string
   lockVersion: number
   submitNote?: string | null
 }
 
 type ReturnDocInput = {
+  draftId?: string
   lockVersion: number
   returnNote: string
 }
 
 type ApproveDocInput = {
+  draftId?: string
   lockVersion: number
   approveNote?: string | null
 }
@@ -119,6 +125,7 @@ const activeDraftSelect = {
   status: true,
   lockVersion: true,
   saveCount: true,
+  reviewStartedAt: true,
   createdAt: true,
   updatedAt: true,
   sealedAt: true,
@@ -188,6 +195,51 @@ const workflowDocInclude = {
 type WorkflowDocRecord = Prisma.DocGetPayload<{ include: typeof workflowDocInclude }>
 
 type RevisionRecord = Prisma.DocRevisionGetPayload<{ select: typeof revisionSelect }>
+
+// 轮询只读取交接状态，不加载正文 JSON；完整稿件接口与轮询共用同一套撤回条件。
+const workflowStateSelect = {
+  docId: true, status: true, holderRole: true, activeDraftId: true,
+  latestRevisionId: true,
+  project: { select: { authorId: true, editorId: true, lifecycleStatus: true } },
+  activeDraft: { select: {
+    status: true, ownerRole: true, ownerUserId: true, baseRevisionId: true,
+    reviewStartedAt: true,
+  } },
+  latestRevision: { select: { action: true, actorUserId: true } },
+} satisfies Prisma.DocSelect
+
+function withdrawalState(
+  actor: ApiCurrentUser,
+  doc: Prisma.DocGetPayload<{ select: typeof workflowStateSelect }>,
+): DocWithdrawalState {
+  const draft = doc.activeDraft
+  let blockedReason: DocWithdrawalState["blockedReason"] = null
+
+  // 只认本轮作者提交产生的编辑草稿；历史 reviewedAt 可能来自上轮退回，不能作为本轮判断依据。
+  if (
+    actor.role !== "author" || actor.userId !== doc.project.authorId ||
+    doc.project.lifecycleStatus !== "active" || doc.status !== "submitted" ||
+    doc.holderRole !== "editor" || !doc.activeDraftId || !draft || draft.status !== "active" ||
+    draft.ownerRole !== "editor" || draft.ownerUserId !== doc.project.editorId ||
+    !doc.latestRevisionId || draft.baseRevisionId !== doc.latestRevisionId ||
+    doc.latestRevision?.action !== "author_submit" || doc.latestRevision.actorUserId !== actor.userId
+  ) {
+    blockedReason = "unavailable"
+  } else if (draft.reviewStartedAt) {
+    blockedReason = "review_started"
+  }
+
+  return { canWithdraw: blockedReason === null, blockedReason }
+}
+
+function assertDraftIdentity(activeDraft: { draftId: bigint }, draftId?: string) {
+  if (draftId !== undefined && draftId !== activeDraft.draftId.toString()) {
+    throw new ApiError({
+      status: 409, code: "DOC_DRAFT_CHANGED",
+      message: "稿件已撤回或发生交接，当前页面已失效，请刷新后继续",
+    })
+  }
+}
 
 function trimToNull(value: string | null | undefined) {
   const trimmed = value?.trim()
@@ -405,6 +457,15 @@ function assertReviewableState(doc: WorkflowDocRecord) {
   return activeDraft
 }
 
+function assertReviewStarted(activeDraft: { reviewStartedAt: Date | null }) {
+  if (!activeDraft.reviewStartedAt) {
+    throw new ApiError({
+      status: 409, code: "DOC_REVIEW_NOT_STARTED",
+      message: "请先点击开始审核，再修改、批注、通过或退回稿件",
+    })
+  }
+}
+
 function assertCancelableApprovalState(doc: WorkflowDocRecord) {
   if (doc.status !== "approved" || doc.holderRole !== "none") {
     throw new ApiError({
@@ -582,11 +643,13 @@ function toPermissions(actor: ApiCurrentUser, doc: WorkflowDocRecord): DocPermis
     doc.stageCode === "release"
       ? doc.project.releaseStatus !== "locked"
       : stagePlan?.gateStatus !== "locked"
+  const editingAllowed = actor.role === "author" || !!activeDraft?.reviewStartedAt
+  const reviewStarted = !!activeDraft?.reviewStartedAt
 
   return {
     canView: true,
-    canEditContent: projectWritable && releaseUnlocked && isOwner,
-    canSave: projectWritable && releaseUnlocked && isOwner,
+    canEditContent: projectWritable && releaseUnlocked && isOwner && editingAllowed,
+    canSave: projectWritable && releaseUnlocked && isOwner && editingAllowed,
     canSubmit:
       projectWritable &&
       releaseUnlocked &&
@@ -594,8 +657,9 @@ function toPermissions(actor: ApiCurrentUser, doc: WorkflowDocRecord): DocPermis
       actor.role === "author" &&
       doc.holderRole === "author" &&
       canSubmitStage,
-    canReturn: projectWritable && reviewable,
-    canApprove: projectWritable && reviewable,
+    canStartReview: projectWritable && reviewable && !reviewStarted,
+    canReturn: projectWritable && reviewable && reviewStarted,
+    canApprove: projectWritable && reviewable && reviewStarted,
     canCancelApproval: projectWritable && cancelableApproval,
     canReadHistory: true,
   }
@@ -634,6 +698,7 @@ function toCurrentView(actor: ApiCurrentUser, doc: WorkflowDocRecord): DocCurren
       doc: docMeta,
       permissions,
       project,
+      withdrawal: withdrawalState(actor, doc),
       source: {
         kind: "draft",
         draftId: doc.activeDraft.draftId.toString(),
@@ -643,6 +708,7 @@ function toCurrentView(actor: ApiCurrentUser, doc: WorkflowDocRecord): DocCurren
         baseRevisionId: doc.activeDraft.baseRevisionId?.toString() ?? null,
         lockVersion: doc.activeDraft.lockVersion,
         saveCount: doc.activeDraft.saveCount,
+        reviewStartedAt: toIsoString(doc.activeDraft.reviewStartedAt),
         createdAt: doc.activeDraft.createdAt.toISOString(),
         updatedAt: doc.activeDraft.updatedAt.toISOString(),
         contentSchemaVersion: doc.activeDraft.contentSchemaVersion,
@@ -664,6 +730,7 @@ function toCurrentView(actor: ApiCurrentUser, doc: WorkflowDocRecord): DocCurren
       doc: docMeta,
       permissions,
       project,
+      withdrawal: withdrawalState(actor, doc),
       source: {
         kind: "final_revision",
         revisionId: doc.finalRevision.revisionId.toString(),
@@ -1020,7 +1087,7 @@ async function createRevisionFromDraft(
     doc: WorkflowDocRecord
     activeDraft: NonNullable<WorkflowDocRecord["activeDraft"]>
     actor: ApiCurrentUser
-    action: "author_submit" | "editor_reject" | "editor_approve"
+    action: "author_submit" | "author_withdraw" | "editor_reject" | "editor_approve"
     handoffNote?: string | null
   },
 ) {
@@ -1322,6 +1389,26 @@ export async function getCurrentDocView(actor: ApiCurrentUser, docIdValue: strin
   return toCurrentView(actor, doc)
 }
 
+export async function getDocWorkflowState(actor: ApiCurrentUser, docIdValue: string): Promise<DocWorkflowState> {
+  const docId = parseBigIntId(docIdValue, "Doc ID")
+  const doc = await prisma.doc.findFirst({
+    where: {
+      docId, isDeleted: false,
+      ...(actor.role === "admin" ? {} : {
+        project: actor.role === "author" ? { authorId: actor.userId } : { editorId: actor.userId },
+      }),
+    },
+    select: workflowStateSelect,
+  })
+  if (!doc) {
+    throw new ApiError({ status: 404, code: "DOC_NOT_FOUND", message: "Doc 不存在或无权访问" })
+  }
+  return {
+    docId: doc.docId.toString(), activeDraftId: doc.activeDraftId?.toString() ?? null,
+    reviewStartedAt: toIsoString(doc.activeDraft?.reviewStartedAt), withdrawal: withdrawalState(actor, doc),
+  }
+}
+
 export async function listDocRevisions(actor: ApiCurrentUser, docIdValue: string): Promise<DocRevisionListResponse> {
   const docId = parseBigIntId(docIdValue, "Doc ID")
   const doc = await findVisibleDocOrThrow(prisma, actor, docId)
@@ -1415,6 +1502,10 @@ export async function saveDocDraft(
     assertProjectWritable(doc)
     assertSaveGate(doc)
     const activeDraft = assertEditableByOwner(doc, actor)
+    assertDraftIdentity(activeDraft, input.draftId)
+
+    // 正文与文内批注共用保存接口；编辑必须显式开始审核，不能通过直接调用保存绕过。
+    if (actor.role === "editor") assertReviewStarted(activeDraft)
 
     const updatedCount = await tx.docCurrentDraft.updateMany({
       where: {
@@ -1511,6 +1602,7 @@ export async function submitDoc(
       assertSaveGate(doc)
       assertSubmitGate(doc)
       const activeDraft = assertEditableByOwner(doc, actor)
+      assertDraftIdentity(activeDraft, input.draftId)
 
       if (actor.role !== "author" || doc.holderRole !== "author") {
         throw new ApiError({
@@ -1645,6 +1737,118 @@ export async function submitDoc(
   return getCurrentDocView(actor, docIdValue)
 }
 
+export async function startDocReview(
+  actor: ApiCurrentUser,
+  docIdValue: string,
+  input: { draftId: string; lockVersion: number },
+): Promise<DocCurrentView> {
+  const docId = parseBigIntId(docIdValue, "Doc ID")
+  await prisma.$transaction(async (tx) => {
+    const doc = await findVisibleDocOrThrow(tx, actor, docId)
+    assertProjectWritable(doc)
+    assertReviewer(actor, doc)
+    const activeDraft = assertReviewableState(doc)
+    assertDraftIdentity(activeDraft, input.draftId)
+
+    // 相同草稿上的重复点击幂等返回，不重复记录开始时间、审计或递增版本。
+    if (activeDraft.reviewStartedAt) return
+    const now = new Date()
+    const started = await tx.docCurrentDraft.updateMany({
+      where: { draftId: activeDraft.draftId, status: "active", reviewStartedAt: null, lockVersion: input.lockVersion },
+      data: { reviewStartedAt: now, lockVersion: { increment: 1 } },
+    })
+    if (started.count !== 1) {
+      throw new ApiError({
+        status: 409, code: "DOC_LOCK_VERSION_CONFLICT",
+        message: "稿件已撤回或在其他窗口被更新，请刷新后重试",
+      })
+    }
+    await tx.doc.update({
+      where: { docId },
+      data: { lastAction: "editor_start_review", lastActorId: actor.userId, lastActionAt: now },
+    })
+    await writeOperationLog(tx, {
+      actor, action: "doc.start_review", entityType: "doc", entityId: docId, projectId: doc.projectId, docId,
+      beforeJson: { draftId: activeDraft.draftId.toString(), reviewStartedAt: null },
+      afterJson: { draftId: activeDraft.draftId.toString(), reviewStartedAt: now.toISOString() },
+    })
+    // 开始审核不封存正文、不推进阶段，原审核待办继续保留到通过/退回。
+  })
+  return getCurrentDocView(actor, docIdValue)
+}
+
+export async function withdrawDoc(
+  actor: ApiCurrentUser,
+  docIdValue: string,
+  input: { draftId: string; lockVersion: number },
+): Promise<DocCurrentView> {
+  const docId = parseBigIntId(docIdValue, "Doc ID")
+
+  await prisma.$transaction(async (tx) => {
+    const doc = await findVisibleDocOrThrow(tx, actor, docId)
+    assertProjectWritable(doc)
+    if (actor.role !== "author" || actor.userId !== doc.project.authorId) {
+      throw new ApiError({ status: 403, code: "DOC_WITHDRAW_FORBIDDEN", message: "只有项目作者本人可以撤回提交" })
+    }
+    const activeDraft = assertReviewableState(doc)
+    assertDraftIdentity(activeDraft, input.draftId)
+    const now = new Date()
+    const state = withdrawalState(actor, doc)
+    if (!state.canWithdraw) {
+      const code = state.blockedReason === "review_started" ? "DOC_WITHDRAW_REVIEW_STARTED" : "DOC_WITHDRAW_UNAVAILABLE"
+      const message = state.blockedReason === "review_started" ? "编辑已开始审核，无法撤回本次提交" : "当前稿件不能撤回提交"
+      throw new ApiError({ status: 409, code, message })
+    }
+
+    // 撤回与开始审核竞争同一条草稿；审核标记、版本和状态必须原子匹配，不能只做读后判断。
+    const sealed = await tx.docCurrentDraft.updateMany({
+      where: { draftId: activeDraft.draftId, status: "active", lockVersion: input.lockVersion, reviewStartedAt: null },
+      data: { status: "sealed", sealedAt: now, activeDocKey: null },
+    })
+    if (sealed.count !== 1) {
+      throw new ApiError({ status: 409, code: "DOC_LOCK_VERSION_CONFLICT", message: "稿件已在其他窗口被更新，请刷新后重试" })
+    }
+
+    // 独立记录作者撤回，不删除提交快照，也不伪装成编辑退回；正文及历史批注保持完整。
+    const revision = await createRevisionFromDraft(tx, { doc, activeDraft, actor, action: "author_withdraw" })
+    const nextDraft = await createActiveDraft(tx, {
+      docId, ownerRole: "author", ownerUserId: actor.userId, baseRevisionId: revision.revisionId,
+      contentSchemaVersion: activeDraft.contentSchemaVersion, contentJson: asInputJson(activeDraft.contentJson),
+      wordCount: activeDraft.wordCount, plainText: activeDraft.plainText, cleanText: activeDraft.cleanText,
+      exportText: activeDraft.exportText, summary: activeDraft.summary, commentCount: activeDraft.commentCount,
+      suggestionCount: activeDraft.suggestionCount, revisionMarkCount: activeDraft.revisionMarkCount,
+    })
+    await tx.doc.update({
+      where: { docId },
+      data: {
+        status: "draft", holderRole: "author", activeDraftId: nextDraft.draftId,
+        latestRevisionId: revision.revisionId, lastAction: "author_withdraw", lastActorId: actor.userId,
+        lastActionAt: now, lastHandoffNote: null, submittedAt: null,
+      },
+    })
+    await tx.todoItem.updateMany({
+      where: { openDedupeKey: makeReviewTodoKey(docId), status: "open" },
+      data: { status: "cancelled", cancelledAt: now, openDedupeKey: null },
+    })
+    await createNotification(tx, {
+      recipientUserId: doc.project.editorId, type: "doc_submission_withdrawn",
+      messageKey: "notifications.docWithdraw",
+      messageParams: { projectTitle: doc.project.title, docTitle: doc.title },
+      title: "作者已撤回提交", body: `作者已撤回《${doc.project.title}》的 ${doc.title}，请等待重新提交。`,
+      projectId: doc.projectId, docId, entityId: docId,
+    })
+    await writeOperationLog(tx, {
+      actor, action: "doc.withdraw", entityType: "doc", entityId: docId, projectId: doc.projectId, docId,
+      beforeJson: { status: doc.status, holderRole: doc.holderRole, activeDraftId: activeDraft.draftId.toString() },
+      afterJson: { status: "draft", holderRole: "author", activeDraftId: nextDraft.draftId.toString(), latestRevisionId: revision.revisionId.toString() },
+      metadataJson: { sealedDraftId: activeDraft.draftId.toString(), revisionId: revision.revisionId.toString(), withdrawnSubmissionId: doc.latestRevisionId!.toString() },
+    })
+    // 撤回不推进/回滚阶段，不重置交稿期限；后续提交走原有完整校验。
+  })
+
+  return getCurrentDocView(actor, docIdValue)
+}
+
 export async function returnDocToAuthor(
   actor: ApiCurrentUser,
   docIdValue: string,
@@ -1668,6 +1872,9 @@ export async function returnDocToAuthor(
       assertProjectWritable(doc)
       assertReviewer(actor, doc)
       const activeDraft = assertReviewableState(doc)
+      assertDraftIdentity(activeDraft, input.draftId)
+
+      assertReviewStarted(activeDraft)
 
       await sealDraftWithOptimisticLock(tx, activeDraft.draftId, input.lockVersion, now)
 
@@ -1792,6 +1999,9 @@ export async function approveDoc(
       assertProjectWritable(doc)
       assertReviewer(actor, doc)
       const activeDraft = assertReviewableState(doc)
+      assertDraftIdentity(activeDraft, input.draftId)
+
+      assertReviewStarted(activeDraft)
 
       await sealDraftWithOptimisticLock(tx, activeDraft.draftId, input.lockVersion, now)
 

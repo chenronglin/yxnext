@@ -10,6 +10,7 @@ import { ChapterDirectory, ChapterNavigationActions } from "@/components/doc/cha
 import { DiscussionSidebar } from "@/components/doc/tiptap/discussion-sidebar"
 import { NovelTiptapEditor, type SaveState } from "@/components/doc/tiptap/novel-tiptap-editor"
 import { useRole } from "@/components/role-provider"
+import { useT } from "@/hooks/use-t"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -25,7 +26,7 @@ import {
   type NovelDocJson,
 } from "@/lib/novel-doc"
 import { cn } from "@/lib/utils"
-import type { DocCurrentView } from "@/types/doc"
+import type { DocCurrentView, DocWorkflowState } from "@/types/doc"
 import type { ProjectChapterLocator, ProjectDocDirectory } from "@/types/project"
 import { BookOpen, CheckCircle2, History, Info, PanelRightOpen, RotateCcw, Send, Undo2 } from "lucide-react"
 import { docTypeLabel, snapshotText } from "@/components/doc/doc-client-shared"
@@ -41,7 +42,7 @@ type DraftPayload = {
   contentJson: NovelDocJson
 }
 
-type WorkflowDialogAction = "submit" | "return" | "approve" | "cancelApproval"
+type WorkflowDialogAction = "submit" | "withdraw" | "startReview" | "return" | "approve" | "cancelApproval"
 
 type ProjectDocDirectoryResponse = {
   projectId: string
@@ -51,6 +52,13 @@ type ProjectDocDirectoryResponse = {
 
 // 目录偏好只保存一个布尔值，并使用版本化 key；以后调整默认行为时不会误读旧结构。
 const CHAPTER_DIRECTORY_OPEN_STORAGE_KEY = "doc-chapter-directory-open:v1"
+
+function isWorkflowConflict(error: unknown) {
+  return error instanceof ApiRequestError && [
+    "DOC_LOCK_VERSION_CONFLICT", "DOC_DRAFT_CHANGED", "DOC_NOT_HOLDER",
+    "DOC_NOT_SUBMITTED", "DOC_ACTIVE_DRAFT_MISSING", "DOC_REVIEW_NOT_STARTED",
+  ].includes(error.code ?? "")
+}
 
 function contentSignature(value: NovelDocJson) {
   // 自动保存用字符串签名判断“保存的是不是当前最新稿”，避免旧请求回包覆盖新编辑状态。
@@ -73,6 +81,7 @@ function currentUserToNovelActor(user: ReturnType<typeof useRole>["user"]): Nove
 
 export function DocEditor({ projectId, docRef }: { projectId: string; docRef: string }) {
   const router = useRouter()
+  const t = useT()
   const { user } = useRole()
   const createdBy = useMemo(() => currentUserToNovelActor(user), [user])
   const [view, setView] = useState<DocCurrentView | null>(null)
@@ -96,6 +105,7 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
   const dirtyRef = useRef(false)
   const pausedByConflictRef = useRef(false)
   const lockVersionRef = useRef(0)
+  const workflowBusyRef = useRef(false)
   const saveFailureCountRef = useRef(0)
   const saveInFlightRef = useRef<Promise<boolean> | null>(null)
   const runLatestSaveRef = useRef<() => Promise<boolean>>(async () => false)
@@ -131,6 +141,8 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
   const projectDetailHref = `/projects/${projectId}`
   const canEdit = Boolean(view?.permissions.canEditContent && content && !editingPaused)
   const canUseWorkflow = Boolean(content && view?.source.kind === "draft" && !editingPaused)
+  const canWithdraw = Boolean(view?.withdrawal.canWithdraw && !editingPaused)
+  const withdrawError = canWithdraw ? undefined : t(`doc.withdraw.${view?.withdrawal.blockedReason ?? "unavailable"}`)
   const canUseCancelApproval = Boolean(
     view?.permissions.canCancelApproval && view.source.kind === "final_revision" && !editingPaused,
   )
@@ -161,6 +173,8 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
       return saveInFlightRef.current
     }
 
+    // 在异步保存闭包外固定草稿批次，同时保留 TypeScript 对 draft 分支的收窄。
+    const draftId = currentView.source.draftId
     const savingSignature = contentSignature(payload.contentJson)
     const stampedContent = stampNovelDocUpdatedAt(payload.contentJson)
     const stampedProjection = deriveNovelDocProjection(stampedContent)
@@ -175,6 +189,7 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
+            draftId,
             lockVersion: lockVersionRef.current,
             contentSchemaVersion: 1,
             contentJson: stampedProjection.contentJson,
@@ -206,13 +221,13 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
 
         return true
       } catch (error) {
-        if (error instanceof ApiRequestError && error.code === "DOC_LOCK_VERSION_CONFLICT") {
+        if (isWorkflowConflict(error)) {
           pausedByConflictRef.current = true
           setEditingPaused(true)
           setSaveState("conflict")
           setMessage({
             type: "error",
-            text: "稿件已在其他窗口更新，自动保存已暂停，编辑器已切换为只读。请刷新页面后继续编辑。",
+            text: t("doc.workflow.changed"),
           })
           return false
         }
@@ -241,7 +256,7 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
 
     saveInFlightRef.current = savePromise
     return savePromise
-  }, [debouncedSave, docRef])
+  }, [debouncedSave, docRef, t])
 
   useEffect(() => {
     runLatestSaveRef.current = runLatestSave
@@ -250,6 +265,7 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
   const applyLoadedView = useCallback((response: DocCurrentView, successText?: string) => {
     const sourceContent = response.source.contentJson
 
+    viewRef.current = response
     setView(response)
     setWorkflowNote("")
     setWorkflowDialogAction(null)
@@ -344,6 +360,47 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
       debouncedSave.cancel()
     }
   }, [debouncedSave, loadDoc])
+
+  const submittedDraftId = view?.doc.status === "submitted" && view.source.kind === "draft" ? view.source.draftId : null
+  const reviewStartedAt = view?.source.kind === "draft" ? view.source.reviewStartedAt : null
+  useEffect(() => {
+    if (!submittedDraftId || reviewStartedAt) return
+    let cancelled = false
+    let checking = false
+    async function checkWorkflow() {
+      // 仅在可撤回的待审阶段轮询小响应，隐藏标签页暂停；自身正在保存/交接时避免误报。
+      if (document.hidden || checking || workflowBusyRef.current || saveInFlightRef.current || pausedByConflictRef.current) return
+      checking = true
+      try {
+        const state = await fetchJson<DocWorkflowState>(`/api/docs/${docRef}/withdraw`)
+        if (cancelled || workflowBusyRef.current || saveInFlightRef.current) return
+        if (state.activeDraftId !== submittedDraftId) {
+          pausedByConflictRef.current = true
+          debouncedSave.cancel()
+          setEditingPaused(true)
+          setSaveState("conflict")
+          setMessage({ type: "warning", text: t("doc.workflow.changed") })
+          setWorkflowDialogAction(null)
+        } else if (state.reviewStartedAt) {
+          // 另一窗口已开始审核：本页此前只读，可安全重载权限及递增后的锁版本。
+          await loadDoc()
+        } else {
+          setView((current) => current ? { ...current, withdrawal: state.withdrawal } : current)
+        }
+      } catch {
+        // 状态轮询失败不打断阅读；保存、审核和撤回接口仍会重新核验权限及草稿批次。
+      } finally {
+        checking = false
+      }
+    }
+    const timer = window.setInterval(() => void checkWorkflow(), 5_000)
+    document.addEventListener("visibilitychange", checkWorkflow)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+      document.removeEventListener("visibilitychange", checkWorkflow)
+    }
+  }, [debouncedSave, docRef, loadDoc, submittedDraftId, reviewStartedAt, t])
 
   useEffect(() => {
     function warnBeforeUnload(event: BeforeUnloadEvent) {
@@ -467,6 +524,8 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
     }
 
     const isCancelApproval = action === "cancelApproval"
+    const isWithdraw = action === "withdraw"
+    const isStartReview = action === "startReview"
     const normalizedNote = note.trim()
 
     if (isCancelApproval) {
@@ -476,25 +535,29 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
     } else if (currentView.source.kind !== "draft" || !canUseWorkflow) {
       return
     }
+    if (workflowBusyRef.current || (isWithdraw && !canWithdraw) || (isStartReview && !currentView.permissions.canStartReview)) return
 
     if ((action === "return" || isCancelApproval) && !normalizedNote) {
       setMessage({ type: "error", text: isCancelApproval ? "取消定稿说明不能为空" : "退回说明不能为空" })
       return
     }
 
+    workflowBusyRef.current = true
     setWorkflowAction(action)
     setMessage(null)
 
     try {
-      const flushed = isCancelApproval ? true : await flushAutoSave()
+      const flushed = isCancelApproval || isWithdraw || isStartReview ? true : await flushAutoSave()
 
       if (!flushed) {
         return
       }
 
-      const endpoint = action === "submit" ? "submit" : action === "return" ? "return" : action === "approve" ? "approve" : "cancel-approval"
+      const endpoint = isStartReview ? "start-review" : isWithdraw ? "withdraw" : action === "submit" ? "submit" : action === "return" ? "return" : action === "approve" ? "approve" : "cancel-approval"
       const body =
-        action === "submit"
+        isWithdraw || isStartReview
+          ? { lockVersion: lockVersionRef.current }
+          : action === "submit"
           ? {
               lockVersion: lockVersionRef.current,
               submitNote: normalizedNote || null,
@@ -518,11 +581,15 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ ...body, ...(currentView.source.kind === "draft" ? { draftId: currentView.source.draftId } : {}) }),
       })
 
       const successText =
-        action === "submit"
+        isStartReview
+          ? t("doc.review.startSuccess")
+          : isWithdraw
+          ? t("doc.withdraw.success")
+          : action === "submit"
           ? "稿件已提交审核"
           : action === "return"
             ? "稿件已退回作者"
@@ -558,11 +625,21 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
       setWorkflowDialogAction(null)
       setWorkflowNote("")
     } catch (error) {
+      if (action === "withdraw") {
+        // 资格可能在弹窗打开后失效；重新加载作者只读视图，更新按钮及不可撤回原因。
+        await loadDoc()
+      } else if (isWorkflowConflict(error)) {
+        pausedByConflictRef.current = true
+        debouncedSave.cancel()
+        setEditingPaused(true)
+        setSaveState("conflict")
+      }
       setMessage({
         type: "error",
         text: error instanceof Error ? error.message : "流程操作失败",
       })
     } finally {
+      workflowBusyRef.current = false
       setWorkflowAction(null)
     }
   }
@@ -633,6 +710,18 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
                       {workflowAction === "submit" ? "提交中..." : "提交审核"}
                     </Button>
                   )}
+                  {canWithdraw && (
+                    <Button variant="outline" disabled={workflowAction !== null || !canUseWorkflow} onClick={() => openWorkflowDialog("withdraw")}>
+                      <Undo2 className="mr-1.5 size-4" />
+                      {workflowAction === "withdraw" ? t("doc.withdraw.busy") : t("doc.withdraw.title")}
+                    </Button>
+                  )}
+                  {view.permissions.canStartReview && (
+                    <Button disabled={workflowAction !== null || !canUseWorkflow} onClick={() => void handleWorkflow("startReview")}>
+                      <CheckCircle2 className="mr-1.5 size-4" />
+                      {workflowAction === "startReview" ? t("doc.review.starting") : t("doc.review.start")}
+                    </Button>
+                  )}
                   {view.permissions.canReturn && (
                     <Button
                       variant="outline"
@@ -669,6 +758,12 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
               }
             />
           </div>
+
+          {user.role === "author" && view.doc.status === "submitted" && !reviewStartedAt && (
+            <div className="shrink-0 rounded-md border bg-muted/30 px-4 py-2 text-sm text-muted-foreground">
+              {canWithdraw ? t("doc.withdraw.available") : withdrawError}
+            </div>
+          )}
 
           {unsupportedLegacyDoc && (
             <Card className="shrink-0 flex-row items-start gap-3 border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
@@ -735,7 +830,8 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
                       editable={canEdit}
                       trackChanges={trackChanges}
                       createdBy={createdBy}
-                      saveState={canEdit ? saveState : "readonly"}
+                      saveState={editingPaused ? "conflict" : canEdit ? saveState : "readonly"}
+                      readonlyLabel={view.permissions.canStartReview ? t("doc.review.beforeStart") : user.role === "author" && view.doc.status === "submitted" ? t(reviewStartedAt ? "doc.withdraw.review_started" : "doc.withdraw.pendingReview") : undefined}
                       onChange={handleEditorChange}
                       onReady={setEditor}
                       className="min-h-0 flex-1"
@@ -761,11 +857,13 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
           )}
         </>
       ) : (
-        <Card className="px-4 py-10 text-center text-sm text-muted-foreground">稿件不存在，或你无权访问当前 Doc。</Card>
+        // 加载失败也可能来自网络或服务器异常；具体原因由上方错误提示说明，不能据此判定稿件不存在或权限不足。
+        <Card className="px-4 py-10 text-center text-sm text-muted-foreground">{t("doc.loadFailedHint")}</Card>
       )}
 
       <WorkflowNoteDialog
         action={workflowDialogAction}
+        withdrawError={withdrawError}
         note={workflowNote}
         busy={workflowAction !== null}
         onNoteChange={setWorkflowNote}
@@ -789,6 +887,7 @@ export function DocEditor({ projectId, docRef }: { projectId: string; docRef: st
 
 function WorkflowNoteDialog({
   action,
+  withdrawError,
   note,
   busy,
   onNoteChange,
@@ -796,17 +895,20 @@ function WorkflowNoteDialog({
   onConfirm,
 }: {
   action: WorkflowDialogAction | null
+  withdrawError?: string
   note: string
   busy: boolean
   onNoteChange: (value: string) => void
   onOpenChange: (open: boolean) => void
   onConfirm: () => void
 }) {
+  const t = useT()
+  const isWithdraw = action === "withdraw"
   const isReturn = action === "return"
   const isApprove = action === "approve"
   const isCancelApproval = action === "cancelApproval"
-  const title = isReturn ? "退回作者" : isApprove ? "审稿通过" : isCancelApproval ? "取消定稿" : "提交审核"
-  const description = isReturn
+  const title = isWithdraw ? t("doc.withdraw.title") : isReturn ? "退回作者" : isApprove ? "审稿通过" : isCancelApproval ? "取消定稿" : "提交审核"
+  const description = isWithdraw ? withdrawError ?? t("doc.withdraw.description") : isReturn
     ? "请填写退回原因，作者会在流程记录中看到这段内容。"
     : isApprove
       ? "可填写本次审稿备注，作者会在通知与流程记录中看到这段内容。"
@@ -820,8 +922,8 @@ function WorkflowNoteDialog({
       : isCancelApproval
         ? "请输入取消定稿原因，必填"
         : "请输入提交说明，可选"
-  const busyText = isReturn ? "退回中..." : isApprove ? "通过中..." : isCancelApproval ? "取消中..." : "提交中..."
-  const confirmText = isReturn ? "退回作者" : isApprove ? "审稿通过" : isCancelApproval ? "取消定稿" : "确认提交"
+  const busyText = isWithdraw ? t("doc.withdraw.busy") : isReturn ? "退回中..." : isApprove ? "通过中..." : isCancelApproval ? "取消中..." : "提交中..."
+  const confirmText = isWithdraw ? t("doc.withdraw.confirm") : isReturn ? "退回作者" : isApprove ? "审稿通过" : isCancelApproval ? "取消定稿" : "确认提交"
 
   return (
     <Dialog open={Boolean(action)} onOpenChange={onOpenChange}>
@@ -835,22 +937,24 @@ function WorkflowNoteDialog({
           通用 Textarea 默认会随内容增高；退回建议很长时会把底部确认按钮顶出视口。
           这里把流程说明区限制在弹窗剩余高度内，并让文本框自身滚动，保证页头与操作区始终可见。
         */}
-        <div className="min-h-0 flex-1 overflow-hidden">
-          <Textarea
-            rows={7}
-            className="field-sizing-fixed h-44 max-h-full min-h-24 resize-none overflow-y-auto"
-            value={note}
-            onChange={(event) => onNoteChange(event.target.value)}
-            disabled={busy}
-            placeholder={placeholder}
-          />
-        </div>
+        {!isWithdraw && (
+          <div className="min-h-0 flex-1 overflow-hidden">
+            <Textarea
+              rows={7}
+              className="field-sizing-fixed h-44 max-h-full min-h-24 resize-none overflow-y-auto"
+              value={note}
+              onChange={(event) => onNoteChange(event.target.value)}
+              disabled={busy}
+              placeholder={placeholder}
+            />
+          </div>
+        )}
 
         <DialogFooter className="shrink-0">
           <Button type="button" variant="outline" className="bg-transparent" disabled={busy} onClick={() => onOpenChange(false)}>
             取消
           </Button>
-          <Button type="button" disabled={busy || ((isReturn || isCancelApproval) && !note.trim())} onClick={onConfirm}>
+          <Button type="button" disabled={busy || (isWithdraw && !!withdrawError) || ((isReturn || isCancelApproval) && !note.trim())} onClick={onConfirm}>
             {busy ? busyText : confirmText}
           </Button>
         </DialogFooter>

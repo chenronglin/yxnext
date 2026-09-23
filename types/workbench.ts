@@ -48,6 +48,7 @@ export type NotificationCategory =
   | "si_prerelease"
   | "si_convert"
   | "doc_submit"
+  | "doc_withdraw"
   | "doc_approve"
   | "doc_return"
   | "stage_unlock"

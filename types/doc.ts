@@ -15,11 +15,13 @@ export type ApiDocAction =
   | "author_save"
   | "editor_save"
   | "author_submit"
+  | "author_withdraw"
+  | "editor_start_review"
   | "editor_return"
   | "editor_approve"
 
 // Revision 历史动作与 Doc 动作类似，继续保持“退回”语义。
-export type ApiRevisionAction = "author_submit" | "editor_return" | "editor_approve"
+export type ApiRevisionAction = "author_submit" | "author_withdraw" | "editor_return" | "editor_approve"
 
 // 当前内容来源只有两种：活跃草稿或已通过后的最终 Revision。
 export type DocSourceKind = "draft" | "final_revision"
@@ -48,6 +50,7 @@ export interface DraftDocSource extends DocContentSnapshot {
   baseRevisionId: string | null
   lockVersion: number
   saveCount: number
+  reviewStartedAt: string | null
   createdAt: string
   updatedAt: string
 }
@@ -77,6 +80,7 @@ export interface DocPermissions {
   canEditContent: boolean
   canSave: boolean
   canSubmit: boolean
+  canStartReview: boolean
   canReturn: boolean
   canApprove: boolean
   // 已定稿稿件允许编辑或管理员取消定稿，并重新生成作者可修改的活跃草稿。
@@ -146,6 +150,20 @@ export interface DocCurrentView {
   source: DocCurrentSource
   permissions: DocPermissions
   project: DocProjectSummary
+  withdrawal: DocWithdrawalState
+}
+
+// 撤回状态也用于轻量轮询，避免为了检测稿件交接而反复下载整篇正文。
+export interface DocWithdrawalState {
+  canWithdraw: boolean
+  blockedReason: "unavailable" | "review_started" | null
+}
+
+export interface DocWorkflowState {
+  docId: string
+  activeDraftId: string | null
+  reviewStartedAt: string | null
+  withdrawal: DocWithdrawalState
 }
 
 // Revision 列表项既保留链路信息，也给前端足够的时间轴展示字段。

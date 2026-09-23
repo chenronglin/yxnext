@@ -7,6 +7,8 @@ function isJsonRootObject(value: unknown): value is Record<string, unknown> {
 
 // 保存草稿需要完整内容投影与乐观锁版本号，计数字段先由前端或调用方直接给出。
 export const docSaveSchema = z.object({
+  // 草稿 ID 必填以区分不同交接轮次；发布前打开的旧页面需刷新，不能绕过批次保护。
+  draftId: z.string().regex(/^\d+$/),
   lockVersion: z.number().int().min(0),
   contentJson: z.custom<Record<string, unknown>>(isJsonRootObject, {
     message: "contentJson 必须是 JSON 对象",
@@ -22,20 +24,23 @@ export const docSaveSchema = z.object({
   revisionMarkCount: z.number().int().min(0).optional(),
 })
 
-// 提交审核只需要乐观锁版本和可选提交说明。
+// 提交审核绑定草稿批次、乐观锁版本和可选提交说明。
 export const docSubmitSchema = z.object({
+  draftId: z.string().regex(/^\d+$/),
   lockVersion: z.number().int().min(0),
   submitNote: z.string().optional().nullable(),
 })
 
 // 退回说明在业务上必填，但仍交给 service 做 trim 后的最终断言，保证错误码稳定。
 export const docReturnSchema = z.object({
+  draftId: z.string().regex(/^\d+$/),
   lockVersion: z.number().int().min(0),
   returnNote: z.string(),
 })
 
 // 审核通过允许附加说明，后端统一写入 last_handoff_note 与 Revision.handoff_note。
 export const docApproveSchema = z.object({
+  draftId: z.string().regex(/^\d+$/),
   lockVersion: z.number().int().min(0),
   approveNote: z.string().optional().nullable(),
 })
@@ -44,6 +49,15 @@ export const docApproveSchema = z.object({
 export const docCancelApprovalSchema = z.object({
   cancelNote: z.string(),
 })
+
+// 撤回必须绑定当前编辑草稿，旧请求不能撤回作者后来重新提交的另一轮稿件。
+export const docWithdrawSchema = z.object({
+  draftId: z.string().regex(/^\d+$/),
+  lockVersion: z.number().int().min(0),
+})
+
+// 开始审核也必须绑定本轮草稿，避免旧页面锁住作者重新提交的新一轮内容。
+export const docStartReviewSchema = docWithdrawSchema
 
 export type DocSaveSchemaInput = z.infer<typeof docSaveSchema>
 export type DocSubmitSchemaInput = z.infer<typeof docSubmitSchema>

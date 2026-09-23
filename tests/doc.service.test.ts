@@ -58,7 +58,7 @@ vi.mock("@/server/db/prisma", () => ({
 
 import type { ApiCurrentUser } from "@/server/shared/current-user"
 import type { DocCurrentSource } from "@/types/doc"
-import { getCurrentDocView, saveDocDraft, submitDoc, returnDocToAuthor, approveDoc, cancelDocApproval } from "@/server/modules/doc/doc.service"
+import { getCurrentDocView, saveDocDraft, submitDoc, returnDocToAuthor, approveDoc, cancelDocApproval, withdrawDoc, getDocWorkflowState, startDocReview } from "@/server/modules/doc/doc.service"
 import { createNovelDocV1, createNovelParagraph, type NovelDocJson } from "@/lib/novel-doc"
 import { makeTable } from "./support/table-fixtures"
 
@@ -185,6 +185,7 @@ function makeDraft(
     status: "active" | "sealed" | "archived"
     lockVersion: number
     saveCount: number
+    reviewStartedAt: Date | null
     createdAt: Date
     updatedAt: Date
     sealedAt: Date | null
@@ -209,6 +210,7 @@ function makeDraft(
     status: overrides.status ?? "active",
     lockVersion: overrides.lockVersion ?? 3,
     saveCount: overrides.saveCount ?? 2,
+    reviewStartedAt: Object.hasOwn(overrides, "reviewStartedAt") ? overrides.reviewStartedAt ?? null : overrides.ownerRole === "editor" ? FIXED_TIME : null,
     createdAt: overrides.createdAt ?? FIXED_TIME,
     updatedAt: overrides.updatedAt ?? FIXED_TIME,
     sealedAt: overrides.sealedAt ?? null,
@@ -233,7 +235,7 @@ function makeRevision(
     commentCount: number
     suggestionCount: number
     revisionMarkCount: number
-    action: "author_submit" | "editor_reject" | "editor_approve"
+    action: "author_submit" | "author_withdraw" | "editor_reject" | "editor_approve"
     actorRole: "author" | "editor" | "admin"
     actorUserId: bigint
     actor: { userId: bigint; username: string; displayName: string | null }
@@ -287,7 +289,7 @@ function makeDocRecord(
     currentPlainText: string | null
     currentCleanText: string | null
     summary: string | null
-    lastAction: "author_save" | "editor_save" | "author_submit" | "editor_reject" | "editor_approve" | null
+    lastAction: "author_save" | "editor_save" | "author_submit" | "author_withdraw" | "editor_reject" | "editor_approve" | null
     lastActorId: bigint | null
     lastActionAt: Date | null
     lastHandoffNote: string | null
@@ -391,6 +393,214 @@ beforeEach(() => {
   mockTx.projectStagePlan.update.mockResolvedValue(undefined)
   mockTx.project.update.mockResolvedValue(undefined)
   mockPrisma.docRevision.findMany.mockResolvedValue([])
+})
+
+// 每轮提交创建全新编辑草稿：即使含有上轮批注，只要本轮未开始审核仍可撤回。
+function makeWithdrawableDoc(overrides: Parameters<typeof makeDocRecord>[0] = {}) {
+  const revision = makeRevision({ action: "author_submit", actorRole: "author", actorUserId: authorActor.userId })
+  return makeDocRecord({
+    status: "submitted", holderRole: "editor", submittedAt: FIXED_TIME,
+    latestRevision: revision, latestRevisionId: revision.revisionId,
+    activeDraftId: 502n,
+    activeDraft: makeDraft({
+      draftId: 502n, ownerRole: "editor", ownerUserId: editorActor.userId,
+      baseRevisionId: revision.revisionId, saveCount: 0, lockVersion: 0, reviewStartedAt: null,
+    }),
+    ...overrides,
+  })
+}
+
+describe("作者在开始审核前自由撤回", () => {
+  const input = { draftId: "502", lockVersion: 0 }
+
+  it.each(["synopsis", "outline", "chapter", "release"] as const)("%s 撤回恢复作者草稿、保留正文与提交历史、取消待办并通知编辑", async (docType) => {
+    const doc = makeWithdrawableDoc({ docType, stageCode: docType })
+    mockTx.doc.findFirst.mockResolvedValue(doc)
+    mockPrisma.doc.findFirst.mockResolvedValue(makeDocRecord())
+    await withdrawDoc(authorActor, "1", input)
+
+    expect(mockTx.docRevision.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ action: "author_withdraw", actorUserId: authorActor.userId, baseRevisionId: doc.latestRevisionId, contentJson: doc.activeDraft!.contentJson }),
+    }))
+    expect(mockTx.docCurrentDraft.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ ownerRole: "author", ownerUserId: authorActor.userId, contentJson: doc.activeDraft!.contentJson, commentCount: doc.activeDraft!.commentCount }),
+    }))
+    expect(mockTx.doc.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: "draft", holderRole: "author", lastAction: "author_withdraw", submittedAt: null, lastHandoffNote: null }),
+    }))
+    expect(mockTx.todoItem.updateMany).toHaveBeenCalledWith({
+      where: { openDedupeKey: "doc_review:1", status: "open" },
+      data: { status: "cancelled", cancelledAt: FIXED_TIME, openDedupeKey: null },
+    })
+    expect(mockTx.notification.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ type: "doc_submission_withdrawn", recipientUserId: editorActor.userId, messageKey: "notifications.docWithdraw" }),
+    }))
+    expect(mockTx.operationLog.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ action: "doc.withdraw", metadataJson: expect.objectContaining({ withdrawnSubmissionId: "801" }) }),
+    }))
+    expect(mockTx.projectStagePlan.update).not.toHaveBeenCalled()
+    expect(mockTx.project.update).not.toHaveBeenCalled()
+  })
+
+  it.each([600_000, 86_400_000, 365 * 86_400_000])("提交后经过 %i 毫秒，只要未开始审核仍可撤回", async (elapsed) => {
+    mockTx.doc.findFirst.mockResolvedValue(makeWithdrawableDoc())
+    mockPrisma.doc.findFirst.mockResolvedValue(makeDocRecord())
+    vi.setSystemTime(new Date(FIXED_TIME.getTime() + elapsed))
+    await withdrawDoc(authorActor, "1", input)
+    expect(mockTx.doc.update).toHaveBeenCalled()
+  })
+
+  it.each([editorActor, adminActor, { ...authorActor, userId: 201n }])("禁止其他角色或作者撤回：$role/$userId", async (actor) => {
+    mockTx.doc.findFirst.mockResolvedValue(makeWithdrawableDoc())
+    await expect(withdrawDoc(actor, "1", input)).rejects.toMatchObject({ code: "DOC_WITHDRAW_FORBIDDEN" })
+    expect(mockTx.docCurrentDraft.updateMany).not.toHaveBeenCalled()
+  })
+
+  it.each(["draft", "rejected", "approved"] as const)("已撤回/退回/通过的状态 %s 不能再次撤回", async (status) => {
+    mockTx.doc.findFirst.mockResolvedValue(makeWithdrawableDoc({ status }))
+    await expect(withdrawDoc(authorActor, "1", input)).rejects.toMatchObject({ code: "DOC_NOT_SUBMITTED" })
+    expect(mockTx.docCurrentDraft.updateMany).not.toHaveBeenCalled()
+  })
+
+  it.each(["completed", "archived", "cancelled"] as const)("项目 %s 时不能撤回", async (lifecycleStatus) => {
+    const doc = makeWithdrawableDoc()
+    mockTx.doc.findFirst.mockResolvedValue({ ...doc, project: { ...doc.project, lifecycleStatus } })
+    await expect(withdrawDoc(authorActor, "1", input)).rejects.toMatchObject({ code: "PROJECT_READ_ONLY" })
+  })
+
+  it("编辑开始审核后，即使从未保存修改，也不能撤回", async () => {
+    const doc = makeWithdrawableDoc()
+    mockTx.doc.findFirst.mockResolvedValue({ ...doc, activeDraft: { ...doc.activeDraft, reviewStartedAt: FIXED_TIME } })
+    await expect(withdrawDoc(authorActor, "1", input)).rejects.toMatchObject({ code: "DOC_WITHDRAW_REVIEW_STARTED" })
+    expect(mockTx.docCurrentDraft.updateMany).not.toHaveBeenCalled()
+  })
+
+  it("上轮退回时间和历史批注不阻止本轮撤回", async () => {
+    mockPrisma.doc.findFirst.mockResolvedValue(makeWithdrawableDoc({ reviewedAt: new Date(FIXED_TIME.getTime() - 60_000) }))
+    const view = await getCurrentDocView(authorActor, "1")
+    expect(view.withdrawal).toMatchObject({ canWithdraw: true, blockedReason: null })
+  })
+
+  it("新一轮提交恢复撤回资格，旧轮次请求即使版本号相同也不能撤回", async () => {
+    vi.setSystemTime(new Date(FIXED_TIME.getTime() + 3_600_000))
+    const doc = makeWithdrawableDoc({ submittedAt: new Date() })
+    mockTx.doc.findFirst.mockResolvedValue(doc)
+    mockPrisma.doc.findFirst.mockResolvedValue(doc)
+    expect((await getCurrentDocView(authorActor, "1")).withdrawal.canWithdraw).toBe(true)
+    await expect(withdrawDoc(authorActor, "1", { ...input, draftId: "501" })).rejects.toMatchObject({ code: "DOC_DRAFT_CHANGED" })
+  })
+
+  it("编辑先开始审核或另一撤回先完成时，原子封存失败且不产生后续交接", async () => {
+    mockTx.doc.findFirst.mockResolvedValue(makeWithdrawableDoc())
+    mockTx.docCurrentDraft.updateMany.mockResolvedValue({ count: 0 })
+    await expect(withdrawDoc(authorActor, "1", input)).rejects.toMatchObject({ code: "DOC_LOCK_VERSION_CONFLICT" })
+    expect(mockTx.docCurrentDraft.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { draftId: 502n, status: "active", lockVersion: 0, reviewStartedAt: null },
+    }))
+    expect(mockTx.docRevision.create).not.toHaveBeenCalled()
+    expect(mockTx.doc.update).not.toHaveBeenCalled()
+    expect(mockTx.notification.create).not.toHaveBeenCalled()
+  })
+
+  it.each([returnDocToAuthor, approveDoc])("旧编辑页面不能审核撤回后重新提交的草稿", async (review) => {
+    mockTx.doc.findFirst.mockResolvedValue(makeWithdrawableDoc())
+    await expect(review(editorActor, "1", { draftId: "501", lockVersion: 0, returnNote: "修改意见" })).rejects.toMatchObject({ code: "DOC_DRAFT_CHANGED" })
+    expect(mockTx.docCurrentDraft.updateMany).not.toHaveBeenCalled()
+  })
+
+  it("旧编辑页面不能保存到另一轮草稿", async () => {
+    mockTx.doc.findFirst.mockResolvedValue(makeWithdrawableDoc())
+    await expect(saveDocDraft(editorActor, "1", { draftId: "501", lockVersion: 0, contentJson: makeNovelContent(), plainText: "", wordCount: 0 })).rejects.toMatchObject({ code: "DOC_DRAFT_CHANGED" })
+    expect(mockTx.docCurrentDraft.updateMany).not.toHaveBeenCalled()
+  })
+
+  it("轻量状态查询校验归属且不读取正文", async () => {
+    mockPrisma.doc.findFirst.mockResolvedValue(makeWithdrawableDoc())
+    const result = await getDocWorkflowState(authorActor, "1")
+    expect(result).toMatchObject({ activeDraftId: "502", withdrawal: { canWithdraw: true } })
+    const query = mockPrisma.doc.findFirst.mock.calls[0][0]
+    expect(query.where).toEqual({ docId: 1n, isDeleted: false, project: { authorId: authorActor.userId } })
+    expect(JSON.stringify(query.select)).not.toContain("contentJson")
+  })
+})
+
+describe("显式开始审核", () => {
+  const input = { draftId: "502", lockVersion: 0 }
+
+  it("只打开稿件保持只读和作者撤回资格，不产生任何写入", async () => {
+    mockPrisma.doc.findFirst.mockResolvedValue(makeWithdrawableDoc())
+    const view = await getCurrentDocView(editorActor, "1")
+    expect(view.permissions).toMatchObject({ canStartReview: true, canSave: false, canEditContent: false, canReturn: false, canApprove: false })
+    expect((await getCurrentDocView(authorActor, "1")).withdrawal.canWithdraw).toBe(true)
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled()
+  })
+
+  it.each([editorActor, adminActor])("$role 开始审核后解锁审核，作者立即失去撤回资格", async (actor) => {
+    const doc = makeWithdrawableDoc()
+    mockTx.doc.findFirst.mockResolvedValue(doc)
+    mockPrisma.doc.findFirst.mockResolvedValue({ ...doc, activeDraft: { ...doc.activeDraft, reviewStartedAt: FIXED_TIME, lockVersion: 1 } })
+    const result = await startDocReview(actor, "1", input)
+    expect(result.permissions).toMatchObject({ canStartReview: false, canReturn: true, canApprove: true, canSave: actor.role === "editor" })
+    expect(expectDraftSource(result.source).reviewStartedAt).toBe(FIXED_TIME.toISOString())
+    expect(mockTx.docCurrentDraft.updateMany).toHaveBeenCalledWith({
+      where: { draftId: 502n, status: "active", reviewStartedAt: null, lockVersion: 0 },
+      data: { reviewStartedAt: FIXED_TIME, lockVersion: { increment: 1 } },
+    })
+    expect(mockTx.operationLog.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ action: "doc.start_review" }) }))
+    expect(mockTx.docRevision.create).not.toHaveBeenCalled()
+    expect(mockTx.todoItem.updateMany).not.toHaveBeenCalled()
+    expect(mockTx.projectStagePlan.update).not.toHaveBeenCalled()
+    expect((await getCurrentDocView(authorActor, "1")).withdrawal).toEqual({ canWithdraw: false, blockedReason: "review_started" })
+  })
+
+  it.each([authorActor, { ...editorActor, userId: 101n }])("$role/$userId 无权开始别人的稿件审核", async (actor) => {
+    mockTx.doc.findFirst.mockResolvedValue(makeWithdrawableDoc())
+    await expect(startDocReview(actor, "1", input)).rejects.toMatchObject({ code: "DOC_REVIEW_FORBIDDEN" })
+    expect(mockTx.docCurrentDraft.updateMany).not.toHaveBeenCalled()
+  })
+
+  it.each(["draft", "rejected", "approved"] as const)("不能对 %s 状态开始审核", async (status) => {
+    mockTx.doc.findFirst.mockResolvedValue(makeWithdrawableDoc({ status }))
+    await expect(startDocReview(editorActor, "1", input)).rejects.toMatchObject({ code: "DOC_NOT_SUBMITTED" })
+    expect(mockTx.docCurrentDraft.updateMany).not.toHaveBeenCalled()
+  })
+
+  it("重复开始审核不改变原开始时间、不重复写日志", async () => {
+    const doc = makeWithdrawableDoc()
+    const started = { ...doc, activeDraft: { ...doc.activeDraft, reviewStartedAt: FIXED_TIME, lockVersion: 1 } }
+    mockTx.doc.findFirst.mockResolvedValue(started)
+    mockPrisma.doc.findFirst.mockResolvedValue(started)
+    await startDocReview(editorActor, "1", input)
+    expect(mockTx.docCurrentDraft.updateMany).not.toHaveBeenCalled()
+    expect(mockTx.operationLog.create).not.toHaveBeenCalled()
+  })
+
+  it("撤回先成功时开始审核失败，不产生审核标记或日志", async () => {
+    mockTx.doc.findFirst.mockResolvedValue(makeWithdrawableDoc())
+    mockTx.docCurrentDraft.updateMany.mockResolvedValue({ count: 0 })
+    await expect(startDocReview(editorActor, "1", input)).rejects.toMatchObject({ code: "DOC_LOCK_VERSION_CONFLICT" })
+    expect(mockTx.doc.update).not.toHaveBeenCalled()
+    expect(mockTx.operationLog.create).not.toHaveBeenCalled()
+  })
+
+  it("旧页面不能开始新一轮稿件审核", async () => {
+    mockTx.doc.findFirst.mockResolvedValue(makeWithdrawableDoc())
+    await expect(startDocReview(editorActor, "1", { ...input, draftId: "501" })).rejects.toMatchObject({ code: "DOC_DRAFT_CHANGED" })
+    expect(mockTx.docCurrentDraft.updateMany).not.toHaveBeenCalled()
+  })
+
+  it.each([editorActor, adminActor])("$role 未开始审核不能直接通过或退回", async (actor) => {
+    mockTx.doc.findFirst.mockResolvedValue(makeWithdrawableDoc())
+    await expect(approveDoc(actor, "1", input)).rejects.toMatchObject({ code: "DOC_REVIEW_NOT_STARTED" })
+    await expect(returnDocToAuthor(actor, "1", { ...input, returnNote: "请修改" })).rejects.toMatchObject({ code: "DOC_REVIEW_NOT_STARTED" })
+    expect(mockTx.docCurrentDraft.updateMany).not.toHaveBeenCalled()
+  })
+
+  it("未开始审核不能直接保存正文或文内批注", async () => {
+    mockTx.doc.findFirst.mockResolvedValue(makeWithdrawableDoc())
+    await expect(saveDocDraft(editorActor, "1", { ...input, contentJson: makeNovelContent(), wordCount: 0, plainText: "" })).rejects.toMatchObject({ code: "DOC_REVIEW_NOT_STARTED" })
+    expect(mockTx.docCurrentDraft.updateMany).not.toHaveBeenCalled()
+  })
 })
 
 describe("getCurrentDocView", () => {

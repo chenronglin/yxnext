@@ -108,6 +108,7 @@ function notificationCategory(rawType: string): NotificationCategory {
   if (rawType === "si_preissued") return "si_prerelease"
   if (rawType === "project_created_from_si") return "si_convert"
   if (rawType === "doc_submitted_for_review") return "doc_submit"
+  if (rawType === "doc_submission_withdrawn") return "doc_withdraw"
   if (rawType === "doc_approved") return "doc_approve"
   if (rawType === "doc_approval_cancelled") return "doc_return"
   if (rawType === "doc_returned") return "doc_return"
@@ -154,14 +155,14 @@ function notificationHref(input: {
   }
 
   if (
-    (input.category === "doc_submit" || input.category === "doc_return" || input.category === "doc_approve") &&
+    (input.category === "doc_submit" || input.category === "doc_withdraw" || input.category === "doc_return" || input.category === "doc_approve") &&
     input.projectId &&
     input.docId
   ) {
     return docEditorHref(input.projectId, input.docId)
   }
 
-  if ((input.category === "doc_submit" || input.category === "doc_return" || input.category === "doc_approve") && input.projectId) {
+  if ((input.category === "doc_submit" || input.category === "doc_withdraw" || input.category === "doc_return" || input.category === "doc_approve") && input.projectId) {
     return `/projects/${input.projectId.toString()}`
   }
 
