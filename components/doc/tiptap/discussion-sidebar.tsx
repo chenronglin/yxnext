@@ -431,6 +431,7 @@ export function DiscussionSidebar({
   className?: string
 }) {
   const [items, setItems] = useState<DiscussionItem[]>([])
+  const [sourceFilter, setSourceFilter] = useState<DiscussionSource | null>(null)
   const [activeKey, setActiveKey] = useState<string | null>(null)
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null)
   const [commentDraft, setCommentDraft] = useState("")
@@ -549,6 +550,11 @@ export function DiscussionSidebar({
     }),
     [items],
   )
+  // 筛选仅作用于侧栏展示；完整条目继续管理正文高亮、批注草稿和回复，避免切换筛选触发保存或丢稿。
+  const visibleItems = useMemo(
+    () => sourceFilter ? items.filter((item) => item.source === sourceFilter) : items,
+    [items, sourceFilter],
+  )
   const commentIds = useMemo(
     () => items.filter((item) => item.source === "comment").map((item) => item.id),
     [items],
@@ -647,9 +653,31 @@ export function DiscussionSidebar({
       <div className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
         <div className="min-w-0">
           <h2 className="text-sm font-semibold text-foreground">批注修订</h2>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {summary.comments} 条批注 · {summary.revisions} 条修订
-          </p>
+          <div role="group" aria-label="筛选批注与修订" className="mt-1.5 flex flex-wrap gap-1">
+            {([
+              { source: "comment", label: "批注", count: summary.comments, Icon: MessageSquareText },
+              { source: "revision", label: "修订", count: summary.revisions, Icon: PencilLine },
+            ] as const).map(({ source, label, count, Icon }) => (
+              <button
+                key={source}
+                type="button"
+                aria-label={`筛选${label}`}
+                aria-pressed={sourceFilter === source}
+                title={sourceFilter === source ? "取消筛选，显示全部" : `只看${label}`}
+                onClick={() => setSourceFilter((current) => current === source ? null : source)}
+                className={cn(
+                  "inline-flex h-7 items-center gap-1.5 rounded-md border px-2 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  sourceFilter === source
+                    ? "border-primary/40 bg-primary/10 text-primary"
+                    : "border-border text-muted-foreground hover:bg-muted hover:text-foreground",
+                )}
+              >
+                <Icon className="size-3.5 shrink-0" aria-hidden="true" />
+                {label}
+                <span className="tabular-nums">{count}</span>
+              </button>
+            ))}
+          </div>
         </div>
         {/* 右栏只负责发出隐藏请求，真正的布局扩展由父级 DocEditor 统一控制。 */}
         {onHide && (
@@ -668,13 +696,13 @@ export function DiscussionSidebar({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
-        {items.length === 0 ? (
+        {visibleItems.length === 0 ? (
           <div className="rounded-lg border border-dashed border-border p-5 text-center text-sm leading-6 text-muted-foreground">
-            暂无批注或修订。
+            {sourceFilter === "comment" ? "暂无批注。" : sourceFilter === "revision" ? "暂无修订。" : "暂无批注或修订。"}
           </div>
         ) : (
           <div className="grid gap-2.5">
-            {items.map((item) => {
+            {visibleItems.map((item) => {
               const active = item.key === activeKey
               const editing = item.source === "comment" && item.id === editingCommentId
               const normalizedDraft = commentDraft.trim()
